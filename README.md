@@ -84,7 +84,7 @@ If you print one, **post a picture of your build on MakerWorld**, and if the mod
 
 ## 4. Flashing the board
 
-This guide assumes you have never used VS Code or PlatformIO. It is written for **Windows**, with notes for **macOS** and **Linux** where they differ. It takes about 20 minutes the first time, most of which is software downloading in the background.
+This guide assumes you have never used VS Code or pioarduino. It is written for **Windows**, with notes for **macOS** and **Linux** where they differ. It takes about 20 minutes the first time, most of which is software downloading in the background.
 
 The board is a **Waveshare ESP32-C6-Touch-LCD-1.47**. The ESP32-C6 is new enough that it needs the **pioarduino** build platform, a community fork of the standard ESP32 tooling. The steps below install everything.
 
@@ -109,7 +109,7 @@ Launch VS Code when it finishes.
 1. Click the **Extensions** icon in the left sidebar (the four-squares icon), or press `Ctrl+Shift+X`.
 2. Search for **`pioarduino`**.
 3. Install the **pioarduino IDE** extension.
-4. Wait for it to finish setting up. It downloads a Python environment and its core tooling in the background, which can take a few minutes. A "PlatformIO" bar appears along the bottom of the window when it is ready.
+4. Wait for it to finish setting up. It downloads a Python environment and its core tooling in the background, which can take a few minutes. A **pioarduino** bar appears along the bottom of the window when it is ready.
 
 > **Already have the official PlatformIO extension?** It also works with this project, because the pioarduino platform is pulled in by URL from `platformio.ini`. If you are starting fresh, use the pioarduino extension. It tracks new Espressif chips more closely.
 
@@ -136,9 +136,9 @@ git clone https://github.com/IdefixRC/Monitor-Buddy.git
 
 1. In VS Code: **File > Open Folder**, and select the `Monitor-Buddy` folder (the one that contains `platformio.ini`).
 2. If VS Code asks whether you trust the authors, say yes.
-3. The first time you open it, PlatformIO reads `platformio.ini` and downloads the pioarduino platform, the ESP32-C6 toolchain, and the libraries this project uses (`Arduino_GFX`, `ArduinoJson`, `AyresWiFiManager`). This is a large download, several hundred MB, and only happens once.
+3. The first time you open it, pioarduino reads `platformio.ini` and downloads the pioarduino platform, the ESP32-C6 toolchain, and the libraries this project uses (`Arduino_GFX`, `ArduinoJson`, `AyresWiFiManager`). This is a large download, several hundred MB, and only happens once.
 
-<!-- SHOT: pio-first-build.png - VS Code with the PlatformIO terminal open, showing platform/toolchain/library download progress on first open -->
+<!-- SHOT: pio-first-build.png - VS Code with the pioarduino terminal open, showing platform/toolchain/library download progress on first open -->
 
 ![First-time platform and library install](docs/images/pio-first-build.png)
 
@@ -190,15 +190,15 @@ Connect the Waveshare board to your computer with the USB-C cable.
 - **macOS:** no driver needed. The port shows up as `/dev/cu.usbmodemXXXX`.
 - **Linux:** no driver needed. The port is usually `/dev/ttyACM0`. If uploads fail with a permissions error, add yourself to the `dialout` group: `sudo usermod -aG dialout $USER`, then log out and back in.
 
-PlatformIO detects the port automatically. You do not normally need to select it by hand.
+pioarduino detects the port automatically. You do not normally need to select it by hand.
 
 ### 4.7 Build and upload the firmware
 
-<!-- SHOT: pio-toolbar.png - the PlatformIO status bar at the bottom of VS Code, with the checkmark (Build), right-arrow (Upload), and the "..." leading to Project Tasks annotated -->
+<!-- SHOT: pio-toolbar.png - the pioarduino status bar at the bottom of VS Code, with the checkmark (Build), right-arrow (Upload), and the "..." leading to Project Tasks annotated -->
 
-![The PlatformIO toolbar](docs/images/pio-toolbar.png)
+![The pioarduino toolbar](docs/images/pio-toolbar.png)
 
-Along the bottom bar of VS Code, PlatformIO adds a row of small icons:
+Along the bottom bar of VS Code, pioarduino adds a row of small icons:
 
 1. Click the **checkmark (Build)** first. This compiles the project. The first build takes a few minutes. It ends with `SUCCESS`.
 2. Click the **right-arrow (Upload)**. This flashes the firmware onto the board. The screen goes dark for a moment and then the Buddy starts up.
@@ -209,13 +209,13 @@ If the upload fails to start, hold the **BOOT** button on the board, click Uploa
 
 The Wi-Fi setup page lives in the `data/` folder, on a separate flash partition from the firmware. **You don't need to upload it by hand.** `scripts/auto_upload_fs.py` flashes it on your first firmware upload, and again whenever a file in `data/` changes — while skipping routine uploads so it doesn't wipe your saved Wi-Fi credentials.
 
-<!-- SHOT: pio-project-tasks.png - PlatformIO panel expanded, esp32-c6 > Platform > "Upload Filesystem Image" highlighted -->
+<!-- SHOT: pio-project-tasks.png - pioarduino panel expanded, esp32-c6 > Platform > "Upload Filesystem Image" highlighted -->
 
 ![Upload Filesystem Image task](docs/images/pio-project-tasks.png)
 
 If the Buddy ever boots showing **PORTAL FILES MISSING** on screen (and the setup page returns an error), the automatic upload did not run. Force it manually:
 
-1. Open the **PlatformIO** panel from the left sidebar (the alien-head icon).
+1. Open the **pioarduino** panel from the left sidebar (the pioarduino icon).
 2. Expand **esp32-c6 > Platform**.
 3. Click **Upload Filesystem Image**.
 

@@ -14,9 +14,9 @@ Photos: `.jpg`. Screenshots: `.png`. Keep the long edge around 1200 to 1600 px.
 | `vscode-install.png` | The <https://code.visualstudio.com/> download page, Windows download button in frame. |
 | `pioarduino-ext.png` | VS Code Extensions panel, search box showing `pioarduino`, the pioarduino IDE extension result with its Install button. |
 | `github-download-zip.png` | The GitHub repo page with the green **Code** button open and **Download ZIP** highlighted. |
-| `pio-first-build.png` | VS Code with the PlatformIO terminal open, showing platform / toolchain / library download progress right after first opening the folder. |
+| `pio-first-build.png` | VS Code with the pioarduino terminal open, showing platform / toolchain / library download progress right after first opening the folder. |
 | `config-file.png` | VS Code explorer with `config/config.h.example` and `config/config.h` both visible, `config.h` open showing the settings. |
 | `config-defines.png` | `config/config.h` open at the `#define` block (THEME, GITHUB_USER, TIMEZONE, TICKER, STOCKKEY, LAT/LONG). |
-| `pio-toolbar.png` | The PlatformIO status bar at the bottom of VS Code, with the checkmark (Build) and right-arrow (Upload) icons annotated. |
-| `pio-project-tasks.png` | PlatformIO panel expanded: esp32-c6 > Platform > **Upload Filesystem Image** highlighted. |
+| `pio-toolbar.png` | The pioarduino status bar at the bottom of VS Code, with the checkmark (Build) and right-arrow (Upload) icons annotated. |
+| `pio-project-tasks.png` | pioarduino panel expanded: esp32-c6 > Platform > **Upload Filesystem Image** highlighted. |
 | `portal-phone.jpg` | A phone showing the Monitor-Buddy captive portal with a Wi-Fi network list. |
