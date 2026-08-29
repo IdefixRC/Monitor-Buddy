@@ -21,9 +21,14 @@
 // ------------------------------------------------------------
 //  !! BEFORE YOU FLASH — READ THIS !!
 // ------------------------------------------------------------
-//  1) Install libraries (Arduino IDE → Library Manager):
-//       - AyresWiFiManager   (>= 2.0.2)
-//       - ArduinoJson        (v7.x — this sketch uses JsonDocument)
+//  This is a PlatformIO project. Open the folder in VS Code with
+//  the pioarduino IDE extension. The full step-by-step flashing
+//  guide is in README.md, chapter 4. Short version:
+//
+//  1) Platform, board, partition table (huge_app.csv) and the
+//     three libraries (Arduino_GFX, ArduinoJson v7, AyresWiFiManager
+//     >= 2.0.2) are all declared in platformio.ini and installed
+//     automatically on the first build. Nothing to install by hand.
 //     Note: AWM internally uses the older StaticJsonDocument /
 //     DynamicJsonDocument names. Under ArduinoJson 7 those still
 //     compile but emit *deprecation warnings*. Warnings only —
@@ -33,19 +38,14 @@
 //  2) UPLOAD THE PORTAL HTML TO LittleFS. This is mandatory.
 //     AWM serves the portal from the filesystem; if /index.html
 //     is missing the portal answers HTTP 500 and you cannot
-//     configure anything.
-//       - index.html, success.html and error.html are in the
-//         data/  folder
-//       - Arduino IDE: Tools → "ESP32 LittleFS Data Upload"
-//         (install the arduino-littlefs-upload plugin first)
-//       - PlatformIO:  pio run --target uploadfs
-//     This sketch checks for /index.html at boot and shows a
+//     configure anything. index.html, success.html and error.html
+//     live in the data/ folder. Run the PlatformIO task
+//     "Upload Filesystem Image" once (PlatformIO panel > esp32-c6 >
+//     Platform > Upload Filesystem Image, or: pio run -t uploadfs).
+//     After that, scripts/auto_upload_fs.py re-uploads it
+//     automatically whenever data/ changes, so a normal Upload is
+//     enough. This sketch checks for /index.html at boot and shows a
 //     "PORTAL FILES MISSING" warning on the LCD if it is absent.
-//
-//  3) Partition scheme must include SPIFFS/LittleFS:
-//     Tools → Partition Scheme → "Default 4MB with spiffs" or
-//     "Huge APP (3MB No OTA/1MB SPIFFS)". A "No FS" scheme will
-//     make LittleFS.begin() fail.
 //
 // ------------------------------------------------------------
 //  HOW TO CONFIGURE WI-FI
@@ -78,7 +78,8 @@
 // Time: 	    Define your timezone as IANA name (find your timezone here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
 //       	    Define your timezone offset from UTC (refer to UTC offset column - with/without daylight saving - in the link above)
 // Stocks: 	  Replace Apple (AAPL) with the US stock ticker symbol of your choice
-//			      Replace the xxxxxxx API key with your finnhub.io API Key (register free on https://finnhub.io)
+//			      Put your finnhub.io API key in src/secrets.h (copy
+//			      src/secrets.h.example to src/secrets.h first). Register free on https://finnhub.io
 // Weather:   Replace the LAT/LONG data below with your location
 //			      Choose the temp unit: celsuis or fahrenheit
 //			      Choose the wind speed unit: kmh or mph
@@ -130,16 +131,16 @@
 // Stock Market Settings
 // Quotes come from Finnhub (https://finnhub.io/api/v1/quote).
 // You will need to create an account to get your own API Key.
+
 #define TICKER            "AAPL"  // change to the desired stock ticker symbol (US Stocks only with free API)
-// Your Finnhub API token lives in src/secrets.h, which is gitignored so the
-// key never lands in version control. Copy src/secrets.h.example to
-// src/secrets.h and paste your token there. Without it the stock page still
-// builds but Finnhub rejects the request.
+
+// We have 2 options for storing your Finnhub API Key. Either create a file src/secrets.h and define STOCKKEY there, or edit the xxxxx placeholder below.
+
 #if __has_include("secrets.h")
-#include "secrets.h"
+  #include "secrets.h"
 #endif
 #ifndef STOCKKEY
-#define STOCKKEY "xxxxxxx"  // placeholder — create src/secrets.h with your token
+#define STOCKKEY "xxxxxxx"  // edit this placeholder — or create src/secrets.h with your token
 #endif
 
 // Weather Settings
@@ -2068,8 +2069,8 @@ void setup() {
   portalFilesOk = LittleFS.exists("/index.html");
   if (!portalFilesOk) {
     Serial.println("WARNING: /index.html not found in LittleFS.");
-    Serial.println("         Upload the AyresWiFiManager data/ folder");
-    Serial.println("         (Tools > ESP32 LittleFS Data Upload).");
+    Serial.println("         Upload the data/ folder: PlatformIO panel >");
+    Serial.println("         esp32-c6 > Platform > Upload Filesystem Image.");
     drawBootMessage("FILES MISSING", "upload index.html", "to LittleFS");
     delay(3000);
   }
