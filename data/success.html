@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Credenciales guardadas</title>
+  <title>Credentials saved</title>
   <style>
     :root{
       --bg:#0b1220; --card:#121a2b; --ring:#17223a; --muted:#9fb0cf; --text:#e6efff;
@@ -31,15 +31,15 @@
     .muted{color:var(--muted); margin:.2rem 0 .4rem 0}
     .small{font-size:12px; color:#a8b7d6}
 
-    /* Animaciones */
+    /* Animations */
     .icon svg{ display:block; width:100%; height:100%; animation:pop .35s ease-out both; }
-    /* Pulso del aro */
+    /* Ring pulse */
     .icon svg .pulse{
       transform-origin:50% 50%;
       animation:pulse 2.2s ease-out infinite;
       opacity:.35;
     }
-    /* Sombra de “respiración” al fondo del disco */
+    /* "Breathing" shadow behind the disc */
     .icon svg .disc{
       filter: drop-shadow(0 4px 10px rgba(67,97,238,.25));
     }
@@ -54,7 +54,7 @@
       100%{ transform:scale(1.35); opacity:0 }
     }
 
-    /* Accesibilidad: respetar “reducir movimiento” */
+    /* Accessibility: respect "reduce motion" */
     @media (prefers-reduced-motion: reduce){
       .icon svg{ animation:none !important }
       .icon svg .pulse{ animation:none !important; opacity:.2 }
@@ -63,7 +63,7 @@
 </head>
 <body>
   <main class="card" role="status" aria-live="polite">
-    <!-- Ícono SVG con check + pulso -->
+    <!-- SVG icon with check + pulse -->
     <div class="icon" aria-hidden="true">
       <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
         <defs>
@@ -73,22 +73,22 @@
           </linearGradient>
         </defs>
 
-        <!-- Aro que pulsa (solo trazo) -->
+        <!-- Pulsing ring (stroke only) -->
         <circle class="pulse" cx="32" cy="32" r="23" fill="none" stroke="url(#g)" stroke-width="4" />
 
-        <!-- Disco de fondo -->
+        <!-- Background disc -->
         <circle class="disc" cx="32" cy="32" r="22" fill="url(#g)"/>
 
-        <!-- Check redondeado -->
+        <!-- Rounded check -->
         <path d="M22.5 33.5 L29 40.2 L43 24.8"
               fill="none" stroke="#fff" stroke-width="4.5"
               stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </div>
 
-    <h1>Credenciales guardadas</h1>
-    <p class="muted">El dispositivo se reiniciará para conectarse a tu Wi-Fi.</p>
-    <p class="small">Si luego no aparece en tu red, revisá la contraseña o acercá el equipo al router.</p>
+    <h1>Credentials saved</h1>
+    <p class="muted">The device will restart to connect to your Wi-Fi.</p>
+    <p class="small">If it doesn't show up on your network afterwards, check the password or move the device closer to the router.</p>
   </main>
 </body>
 </html>

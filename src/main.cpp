@@ -27,7 +27,7 @@
 //
 //  1) Platform, board, partition table (huge_app.csv) and the
 //     three libraries (Arduino_GFX, ArduinoJson v7, AyresWiFiManager
-//     >= 2.0.2) are all declared in platformio.ini and installed
+//     2.0.2) are all declared in platformio.ini and installed
 //     automatically on the first build. Nothing to install by hand.
 //     Note: AWM internally uses the older StaticJsonDocument /
 //     DynamicJsonDocument names. Under ArduinoJson 7 those still

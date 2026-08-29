@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta
@@ -186,63 +186,63 @@
 
     <div class="card">
       <section class="sec">
-        <h2>Redes disponibles</h2>
+        <h2>Available networks</h2>
         <div class="toolbar">
-          <input id="filter" class="input" type="search" placeholder="Filtrar SSID…" inputmode="search" />
-          <button id="btn-scan" class="btn" type="button">Reescanear</button>
+          <input id="filter" class="input" type="search" placeholder="Filter SSID…" inputmode="search" />
+          <button id="btn-scan" class="btn" type="button">Rescan</button>
           <label class="switch">
             <input id="auto" type="checkbox" checked />
             <span id="autoTxt"></span>
           </label>
         </div>
-        <div id="status" class="hint" style="margin-top:8px">Escaneando…</div>
+        <div id="status" class="hint" style="margin-top:8px">Scanning…</div>
         <ul id="list" class="list" aria-live="polite"></ul>
-        <div id="empty" class="hint" style="display:none">No se encontraron redes. Probá reescanear.</div>
+        <div id="empty" class="hint" style="display:none">No networks found. Try rescanning.</div>
       </section>
 
       <section class="sec">
-        <h2>Conectar</h2>
+        <h2>Connect</h2>
         <form id="form" method="POST" action="/save" autocomplete="off">
           <div class="row">
             <label for="ssid">SSID</label>
-            <input id="ssid" class="input grow" name="ssid" required placeholder="Nombre de la red" />
+            <input id="ssid" class="input grow" name="ssid" required placeholder="Network name" />
           </div>
 
           <div class="row">
             <label for="password">Password</label>
-            <input id="password" class="input grow" name="password" type="password" required minlength="8" placeholder="Contraseña" />
+            <input id="password" class="input grow" name="password" type="password" required minlength="8" placeholder="Password" />
           </div>
 
           <div class="row">
             <label></label>
-            <label class="switch"><input id="show" type="checkbox" /> Mostrar contraseña</label>
+            <label class="switch"><input id="show" type="checkbox" /> Show password</label>
           </div>
 
-          <p class="hint">Las credenciales se guardan en el dispositivo y se reinicia para conectar.</p>
+          <p class="hint">Credentials are stored on the device and it restarts to connect.</p>
 
           <div class="footer">
-            <button id="btn-save" class="btn primary" type="submit">Guardar y conectar</button>
+            <button id="btn-save" class="btn primary" type="submit">Save and connect</button>
           </div>
         </form>
       </section>
 
       <details class="accordion sec">
         <summary>
-          <span>Opciones avanzadas</span>
+          <span>Advanced options</span>
           <span class="chev">▶</span>
         </summary>
         <div class="sec acc">
           <div class="danger-zone">
-            <h3>Zona peligrosa <span class="pill">admin</span></h3>
-            <p class="hint">Borra los archivos <code>.json</code> (excepto los protegidos) y reinicia el equipo.</p>
+            <h3>Danger zone <span class="pill">admin</span></h3>
+            <p class="hint">Deletes the <code>.json</code> files (except the protected ones) and restarts the device.</p>
             <div class="row">
-              <label for="confirm">Confirmar</label>
-              <input id="confirm" class="input grow" placeholder="Escribí BORRAR para habilitar" />
+              <label for="confirm">Confirm</label>
+              <input id="confirm" class="input grow" placeholder="Type ERASE to enable" />
             </div>
             <div class="row">
               <label></label>
-              <button id="btn-erase" class="btn danger" type="button" disabled>🗑️ Borrar credenciales y reiniciar</button>
-              <button id="btn-reload" class="btn ghost" type="button" style="display:none">Refrescar</button>
+              <button id="btn-erase" class="btn danger" type="button" disabled>🗑️ Erase credentials and restart</button>
+              <button id="btn-reload" class="btn ghost" type="button" style="display:none">Refresh</button>
             </div>
             <p id="erase-msg" class="hint" style="min-height:1.2em"></p>
           </div>
@@ -251,7 +251,7 @@
 
       <section class="sec">
         <div class="hint">
-          Si el portal no abre solo, conectate al AP y entrá a <code id="portal-url">http://192.168.4.1</code>.
+          If the portal doesn't open on its own, connect to the AP and go to <code id="portal-url">http://192.168.4.1</code>.
         </div>
       </section>
     </div>
@@ -275,15 +275,15 @@
         confirm: $('#confirm'), btnErase: $('#btn-erase'), eraseMsg: $('#erase-msg'), btnReload: $('#btn-reload')
       };
 
-      // Pintar versión / textos
+      // Render version / texts
       if (els.ver) els.ver.textContent = 'v' + VERSION;
       if (vf) vf.textContent = 'v' + VERSION;
 
-      // Texto dinámico del auto-scan
+      // Dynamic auto-scan text
       const autoTxt = document.getElementById('autoTxt');
       if (autoTxt) autoTxt.textContent = `Auto ${AUTO_MS/1000}s`;
 
-      // Info AP/host
+      // AP/host info
       els.apHost.textContent = 'AP: ' + (location.hostname || '192.168.4.1');
       els.portalUrl.textContent = 'http://' + (location.host || '192.168.4.1');
 
@@ -307,10 +307,10 @@
         return wrap;
       }
       function qualityTag(rssi){
-        let text = 'Mala', cls = 'bad';
-        if (rssi >= -60){ text = 'Buena'; cls = 'good'; }
-        else if (rssi >= -67){ text = 'Moderada'; cls = 'mid'; }
-        else if (rssi >= -75){ text = 'Débil'; cls = 'weak'; }
+        let text = 'Poor', cls = 'bad';
+        if (rssi >= -60){ text = 'Good'; cls = 'good'; }
+        else if (rssi >= -67){ text = 'Fair'; cls = 'mid'; }
+        else if (rssi >= -75){ text = 'Weak'; cls = 'weak'; }
         const span = document.createElement('span');
         span.className = 'qual ' + cls;
         span.textContent = text;
@@ -367,17 +367,17 @@
       async function scan(){
         try{
           els.btnScan.disabled=true;
-          els.status.textContent='Escaneando…';
+          els.status.textContent='Scanning…';
           let resp = await fetch('/scan', {cache:'no-store'});
           if (!resp.ok) throw new Error('HTTP '+resp.status);
           let data = await resp.json();
           if (!Array.isArray(data)) data = (data && data.networks) || [];
           lastScan = data;
           render(lastScan);
-          els.status.textContent = `Listo. ${lastScan.length} redes`;
+          els.status.textContent = `Done. ${lastScan.length} networks`;
         }catch(e){
           console.error(e);
-          els.status.textContent='Error al escanear. Reintentá.';
+          els.status.textContent='Scan failed. Try again.';
         }finally{
           els.btnScan.disabled=false;
         }
@@ -388,7 +388,7 @@
 
       function stopAuto(){ if (timer){ clearTimeout(timer); timer=null; } }
 
-      // Interacciones
+      // Interactions
       els.btnScan.addEventListener('click', ()=>{ stopAuto(); scan(); });
       els.filter.addEventListener('input', ()=> render(lastScan));
       els.auto.addEventListener('change', ()=>{ stopAuto(); if (els.auto.checked) scan(); });
@@ -405,25 +405,25 @@
 
       els.form.addEventListener('submit', ()=>{
         els.btnSave.disabled=true;
-        els.btnSave.textContent='Guardando…';
+        els.btnSave.textContent='Saving…';
       });
 
-      // Avanzadas: habilitar BORRAR
+      // Advanced: enable ERASE
       if (els.confirm && els.btnErase){
         els.confirm.addEventListener('input', ()=>{
-          const ok = (els.confirm.value.trim().toUpperCase() === 'BORRAR');
+          const ok = (els.confirm.value.trim().toUpperCase() === 'ERASE');
           els.btnErase.disabled = !ok;
-          if (els.eraseMsg) els.eraseMsg.textContent = ok ? 'Listo para borrar.' : '';
+          if (els.eraseMsg) els.eraseMsg.textContent = ok ? 'Ready to erase.' : '';
         });
 
         els.btnErase.addEventListener('click', async ()=>{
           if (els.btnErase.disabled) return;
           els.btnErase.disabled = true;
-          els.btnErase.textContent = 'Eliminando…';
-          if (els.eraseMsg) els.eraseMsg.textContent = 'Borrando credenciales y reiniciando…';
+          els.btnErase.textContent = 'Erasing…';
+          if (els.eraseMsg) els.eraseMsg.textContent = 'Erasing credentials and restarting…';
 
           try{
-            const body = new URLSearchParams(); body.set('confirm','BORRAR');
+            const body = new URLSearchParams(); body.set('confirm','ERASE');
             await fetch('/erase', {
               method:'POST',
               headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -432,9 +432,9 @@
             if (els.btnReload) els.btnReload.style.display = 'inline-block';
           }catch(e){
             console.error(e);
-            if (els.eraseMsg) els.eraseMsg.textContent = 'Error al solicitar borrado.';
+            if (els.eraseMsg) els.eraseMsg.textContent = 'Erase request failed.';
             els.btnErase.disabled = false;
-            els.btnErase.textContent = '🗑️ Borrar credenciales y reiniciar';
+            els.btnErase.textContent = '🗑️ Erase credentials and restart';
           }
         });
       }
@@ -443,7 +443,7 @@
         els.btnReload.addEventListener('click', ()=> location.reload());
       }
 
-      // Acordeón suave
+      // Smooth accordion
       (function initAccordion(){
         const det = document.querySelector('details.accordion');
         if (!det) return;
@@ -484,7 +484,7 @@
         });
       })();
 
-      // Primer ciclo
+      // First cycle
       scan();
     })();
   </script>
