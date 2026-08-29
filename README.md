@@ -49,9 +49,7 @@ Nothing else. No resistors, no headers, no hot glue.
 
 ## 3. Assembly
 
-<!-- SHOT: holder-versions.jpg - the two printed parts side by side on a desk, labelled flat vs cutout -->
-
-![The two holder versions](docs/images/holder-versions.jpg)
+![Picture of the flat holder with double sided tape](docs/images/flat-holder.jpg)
 
 ### a) Print the holder
 
@@ -63,8 +61,6 @@ There are two versions of the mount. Pick one:
 PLA or PETG is recommended. Only minor supports needed.
 
 ### b) Slide the board into the holder
-
-<!-- SHOT: assembly-slide-in.jpg - hand sliding the Waveshare board into the printed holder, USB-C port facing down/out -->
 
 ![Sliding the board into the holder](docs/images/assembly-slide-in.jpg)
 
@@ -90,8 +86,6 @@ The board is a **Waveshare ESP32-C6-Touch-LCD-1.47**. The ESP32-C6 is new enough
 
 ### 4.1 Install VS Code
 
-<!-- SHOT: vscode-install.png - code.visualstudio.com download page with the Windows button highlighted -->
-
 ![VS Code download page](docs/images/vscode-install.png)
 
 1. Go to <https://code.visualstudio.com/>.
@@ -101,8 +95,6 @@ The board is a **Waveshare ESP32-C6-Touch-LCD-1.47**. The ESP32-C6 is new enough
 Launch VS Code when it finishes.
 
 ### 4.2 Install the pioarduino IDE extension
-
-<!-- SHOT: pioarduino-ext.png - VS Code Extensions panel, search box showing "pioarduino", the pioarduino IDE extension result highlighted with its Install button -->
 
 ![Installing the pioarduino extension](docs/images/pioarduino-ext.png)
 
@@ -118,8 +110,6 @@ Launch VS Code when it finishes.
 ### 4.3 Get the Monitor-Buddy code
 
 **Option A, download a ZIP (simplest):**
-
-<!-- SHOT: github-download-zip.png - GitHub repo page, green "Code" button open, "Download ZIP" highlighted -->
 
 ![Downloading the code as a ZIP](docs/images/github-download-zip.png)
 
@@ -138,10 +128,6 @@ git clone https://github.com/IdefixRC/Monitor-Buddy.git
 2. If VS Code asks whether you trust the authors, say yes.
 3. The first time you open it, pioarduino reads `platformio.ini` and downloads the pioarduino platform, the ESP32-C6 toolchain, and the libraries this project uses (`Arduino_GFX`, `ArduinoJson`, `AyresWiFiManager`). This is a large download, several hundred MB, and only happens once.
 
-<!-- SHOT: pio-first-build.png - VS Code with the pioarduino terminal open, showing platform/toolchain/library download progress on first open -->
-
-![First-time platform and library install](docs/images/pio-first-build.png)
-
 Wait until the terminal activity stops before moving on.
 
 ### 4.5 Personalize your Buddy
@@ -153,8 +139,6 @@ One file to touch: `config/config.h`. It is plain text, edit it right inside VS 
 1. In the VS Code file explorer, open the `config` folder and find `config.h.example`.
 2. Right-click it, **Copy**, then **Paste** into the same `config` folder. Rename the copy to `config.h`.
 3. `config/config.h` is gitignored on purpose — it holds your Finnhub API key, so it never gets committed. `config.h.example` is the only config file tracked by git.
-
-<!-- SHOT: config-file.png - VS Code explorer showing config/config.h.example and config/config.h side by side, config.h open with the settings visible -->
 
 ![Creating config.h](docs/images/config-file.png)
 
@@ -174,10 +158,6 @@ Open `config/config.h` and change these `#define` lines:
 | `TEMP` / `WIND`                | `"celsius"` or `"fahrenheit"`, `"kmh"` or `"mph"`                                                                             |
 | `SHOW_FACE`, `SHOW_CLOCK`, ... | `true` or `false` to enable or disable each page                                                                              |
 
-<!-- SHOT: config-defines.png - config/config.h open in VS Code, the #define block (THEME, GITHUB_USER, TIMEZONE, TICKER, STOCKKEY, LAT/LONG) visible -->
-
-![The configuration file](docs/images/config-defines.png)
-
 Save the file (`Ctrl+S`).
 
 Don't care about stocks? Leave `STOCKKEY` as is — the project still builds, the stock page just will not load data, and you can turn it off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
@@ -194,11 +174,9 @@ pioarduino detects the port automatically. You do not normally need to select it
 
 ### 4.7 Build and upload the firmware
 
-<!-- SHOT: pio-toolbar.png - the pioarduino status bar at the bottom of VS Code, with the checkmark (Build), right-arrow (Upload), and the "..." leading to Project Tasks annotated -->
-
 ![The pioarduino toolbar](docs/images/pio-toolbar.png)
 
-Along the bottom bar of VS Code, pioarduino adds a row of small icons:
+Along the top bar of VS Code, pioarduino adds a row of small icons:
 
 1. Click the **checkmark (Build)** first. This compiles the project. The first build takes a few minutes. It ends with `SUCCESS`.
 2. Click the **right-arrow (Upload)**. This flashes the firmware onto the board. The screen goes dark for a moment and then the Buddy starts up.
@@ -209,8 +187,6 @@ If the upload fails to start, hold the **BOOT** button on the board, click Uploa
 
 The Wi-Fi setup page lives in the `data/` folder, on a separate flash partition from the firmware. **You don't need to upload it by hand.** `scripts/auto_upload_fs.py` flashes it on your first firmware upload, and again whenever a file in `data/` changes — while skipping routine uploads so it doesn't wipe your saved Wi-Fi credentials.
 
-<!-- SHOT: pio-project-tasks.png - pioarduino panel expanded, esp32-c6 > Platform > "Upload Filesystem Image" highlighted -->
-
 ![Upload Filesystem Image task](docs/images/pio-project-tasks.png)
 
 If the Buddy ever boots showing **PORTAL FILES MISSING** on screen (and the setup page returns an error), the automatic upload did not run. Force it manually:
@@ -220,8 +196,6 @@ If the Buddy ever boots showing **PORTAL FILES MISSING** on screen (and the setu
 3. Click **Upload Filesystem Image**.
 
 ### 4.9 First boot: connect it to Wi-Fi
-
-<!-- SHOT: portal-phone.jpg - a phone showing the Monitor-Buddy captive portal with a list of Wi-Fi networks -->
 
 ![The Wi-Fi setup portal on a phone](docs/images/portal-phone.jpg)
 
@@ -243,7 +217,7 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | Screen shows **PORTAL FILES MISSING**       | The automatic filesystem upload did not run (see [4.8](#48-portal-files-uploaded-automatically)). Run **Upload Filesystem Image** manually.                              |
 | Setup page shows an error 500               | Same cause. Upload the filesystem image.                                                                                                                                 |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
-| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                     |
+| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                   |
 | Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                               |
 
 ---
