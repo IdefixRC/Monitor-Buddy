@@ -205,21 +205,19 @@ Along the bottom bar of VS Code, PlatformIO adds a row of small icons:
 
 If the upload fails to start, hold the **BOOT** button on the board, click Upload again, and release BOOT once you see it connecting. Do not hold BOOT through a power cycle, that puts the chip into a different download mode.
 
-### 4.8 Upload the portal files
+### 4.8 Portal files (uploaded automatically)
 
-The Wi-Fi setup page lives in the `data/` folder and has to be copied to the board's flash storage separately from the firmware.
+The Wi-Fi setup page lives in the `data/` folder, on a separate flash partition from the firmware. **You don't need to upload it by hand.** `scripts/auto_upload_fs.py` flashes it on your first firmware upload, and again whenever a file in `data/` changes — while skipping routine uploads so it doesn't wipe your saved Wi-Fi credentials.
 
 <!-- SHOT: pio-project-tasks.png - PlatformIO panel expanded, esp32-c6 > Platform > "Upload Filesystem Image" highlighted -->
 
 ![Upload Filesystem Image task](docs/images/pio-project-tasks.png)
 
+If the Buddy ever boots showing **PORTAL FILES MISSING** on screen (and the setup page returns an error), the automatic upload did not run. Force it manually:
+
 1. Open the **PlatformIO** panel from the left sidebar (the alien-head icon).
 2. Expand **esp32-c6 > Platform**.
 3. Click **Upload Filesystem Image**.
-
-You only have to do this manually once. After that, this project re-uploads the portal files automatically whenever you change something in `data/`, so a normal firmware upload is enough.
-
-> If you skip this step, the Buddy boots but shows **PORTAL FILES MISSING** on screen, and the setup page returns an error.
 
 ### 4.9 First boot: connect it to Wi-Fi
 
@@ -242,7 +240,7 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | No port shown / Upload can't find the board | Try a different USB-C cable. Many are charge-only. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board). |
 | Upload starts then fails                    | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                              |
-| Screen shows **PORTAL FILES MISSING**       | You skipped [4.8](#48-upload-the-portal-files). Run **Upload Filesystem Image**.                                                                                         |
+| Screen shows **PORTAL FILES MISSING**       | The automatic filesystem upload did not run (see [4.8](#48-portal-files-uploaded-automatically)). Run **Upload Filesystem Image** manually.                              |
 | Setup page shows an error 500               | Same cause. Upload the filesystem image.                                                                                                                                 |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
 | Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                     |
