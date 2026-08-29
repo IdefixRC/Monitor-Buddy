@@ -146,42 +146,41 @@ Wait until the terminal activity stops before moving on.
 
 ### 4.5 Personalize your Buddy
 
-Two files to touch. Both are plain text, edit them right inside VS Code.
+One file to touch: `config/config.h`. It is plain text, edit it right inside VS Code.
 
-**a) Your Finnhub API key (`src/secrets.h`)**
+**a) Create your config file**
 
-The stock page needs a free API key from <https://finnhub.io/>. The key is kept out of the shared code on purpose.
+1. In the VS Code file explorer, open the `config` folder and find `config.h.example`.
+2. Right-click it, **Copy**, then **Paste** into the same `config` folder. Rename the copy to `config.h`.
+3. `config/config.h` is gitignored on purpose — it holds your Finnhub API key, so it never gets committed. `config.h.example` is the only config file tracked by git.
 
-1. In the VS Code file explorer, find `src/secrets.h.example`.
-2. Right-click it, **Copy**, then **Paste** into the same `src` folder. Rename the copy to `secrets.h`.
-3. Open `src/secrets.h` and replace `xxxxxxx` with your Finnhub key.
+<!-- SHOT: config-file.png - VS Code explorer showing config/config.h.example and config/config.h side by side, config.h open with the settings visible -->
 
-<!-- SHOT: secrets-file.png - VS Code explorer showing src/secrets.h.example and src/secrets.h side by side, secrets.h open with the STOCKKEY line visible -->
+![Creating config.h](docs/images/config-file.png)
 
-![Creating secrets.h](docs/images/secrets-file.png)
+**b) Edit your settings**
 
-If you do not care about stocks, skip this. The project still builds, the stock page just will not load data. You can also turn the page off in the next step.
-
-**b) The rest of your settings (`src/main.cpp`)**
-
-Open `src/main.cpp` and scroll to the **USER CONFIGURATION** block near the top. Change these `#define` lines:
+Open `config/config.h` and change these `#define` lines:
 
 | Setting                        | What to put                                                                                                                   |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `THEME`                        | `0` to `4`, see the comments above the line                                                                                   |
 | `GITHUB_USER`                  | your GitHub username                                                                                                          |
 | `TIMEZONE`                     | your IANA timezone name, for example `"Europe/Berlin"` ([list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
 | `TZ_OFFSET_HOURS`              | your offset from UTC in hours, for example `1` for CET, `-5` for US Eastern                                                   |
 | `TICKER`                       | a US stock symbol, for example `"AAPL"`                                                                                       |
+| `STOCKKEY`                     | your free Finnhub API key from <https://finnhub.io/> — replace `xxxxxxx`                                                      |
 | `LAT` / `LONG`                 | your latitude and longitude for weather                                                                                       |
 | `TEMP` / `WIND`                | `"celsius"` or `"fahrenheit"`, `"kmh"` or `"mph"`                                                                             |
-| `THEME`                        | `0` to `4`, see the comments above the line                                                                                   |
 | `SHOW_FACE`, `SHOW_CLOCK`, ... | `true` or `false` to enable or disable each page                                                                              |
 
-<!-- SHOT: config-defines.png - src/main.cpp open in VS Code, the #define block (GITHUB_USER, TIMEZONE, TICKER, LAT/LONG, THEME) visible -->
+<!-- SHOT: config-defines.png - config/config.h open in VS Code, the #define block (THEME, GITHUB_USER, TIMEZONE, TICKER, STOCKKEY, LAT/LONG) visible -->
 
-![The configuration block in main.cpp](docs/images/config-defines.png)
+![The configuration file](docs/images/config-defines.png)
 
 Save the file (`Ctrl+S`).
+
+Don't care about stocks? Leave `STOCKKEY` as is — the project still builds, the stock page just will not load data, and you can turn it off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
 
 ### 4.6 Plug in the board
 
@@ -246,7 +245,7 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | Screen shows **PORTAL FILES MISSING**       | You skipped [4.8](#48-upload-the-portal-files). Run **Upload Filesystem Image**.                                                                                         |
 | Setup page shows an error 500               | Same cause. Upload the filesystem image.                                                                                                                                 |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
-| Stock page is blank                         | Missing or wrong Finnhub key in `src/secrets.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                     |
+| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                     |
 | Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                               |
 
 ---

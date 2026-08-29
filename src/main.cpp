@@ -73,18 +73,12 @@
 // ------------------------------------------------------------
 //  HOW TO USE
 // ------------------------------------------------------------
-// To customize Monitor-Buddy to you, a few entries are required below:
-// Github: 	  Replace IdefixRC with your own github username
-// Time: 	    Define your timezone as IANA name (find your timezone here: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
-//       	    Define your timezone offset from UTC (refer to UTC offset column - with/without daylight saving - in the link above)
-// Stocks: 	  Replace Apple (AAPL) with the US stock ticker symbol of your choice
-//			      Put your finnhub.io API key in src/secrets.h (copy
-//			      src/secrets.h.example to src/secrets.h first). Register free on https://finnhub.io
-// Weather:   Replace the LAT/LONG data below with your location
-//			      Choose the temp unit: celsuis or fahrenheit
-//			      Choose the wind speed unit: kmh or mph
-// Themes:    Chose the desired Theme from the options below
-//   		
+// To customize Monitor-Buddy to you (GitHub user, timezone, stock
+// ticker + Finnhub API key, weather location, theme, which pages to
+// show): copy  config/config.h.example  to  config/config.h  and edit
+// the values there. config/config.h is gitignored so your API key
+// never lands on GitHub.
+//
 // Use Monitor-Buddy:
 // Setup Wifi on first boot by connecting to the Monitor-Buddy access point (AP)
 // Press and hold the touch screen for 3 sec at any time later to redo the Wifi Setup (AP will start and you can configure your Monitor-Buddy
@@ -110,57 +104,17 @@
 #include <LittleFS.h>
 #include <AyresWiFiManager.h>
 
-// USER CONFIGURATION --------> EDIT BELOW
-
-// Color Theme -- pick one:
-//   0 = Classic   (white on black, the original look)
-//   1 = Minimal   (white/gray with a single cyan accent on the key value)
-//   2 = Semantic  (stock up=green/down=red, warm weather, gold sun & moon...)
-//   3 = Warm amber (one gold/amber hue everywhere)
-//   4 = Cool teal / blue
-#define THEME 2
-
-//Set your Github username to get Github statistics
-#define GITHUB_USER   "IdefixRC"  // your GitHub username, for the stats page
-
-// Adjust to your timezone
-// UTC offset in hours — Examples: -5 = US Eastern, -8 = US Pacific, +1 = CET, +5.5 = IST, +8 = SGT
-#define TIMEZONE        "Asia/Singapore"  // IANA name — used for weather URL only
-#define TZ_OFFSET_HOURS 8               // UTC offset in hours (e.g. +8 = SGT, -5 = EST, +5.5 = IST)
-
-// Stock Market Settings
-// Quotes come from Finnhub (https://finnhub.io/api/v1/quote).
-// You will need to create an account to get your own API Key.
-
-#define TICKER            "AAPL"  // change to the desired stock ticker symbol (US Stocks only with free API)
-
-// We have 2 options for storing your Finnhub API Key. Either create a file src/secrets.h and define STOCKKEY there, or edit the xxxxx placeholder below.
-
-#if __has_include("secrets.h")
-  #include "secrets.h"
+// USER CONFIGURATION --------> EDIT config/config.h
+// Copy config/config.h.example to
+// config/config.h and edit it there — that file is gitignored so
+// your Finnhub API key never gets committed. If config/config.h is
+// absent the build falls back to the placeholder values in
+// config/config.h.example (the stock page just won't load data as it required the API key).
+#if __has_include("config.h")
+  #include "config.h"
+#else
+  #include "config.h.example"
 #endif
-#ifndef STOCKKEY
-#define STOCKKEY "xxxxxxx"  // edit this placeholder — or create src/secrets.h with your token
-#endif
-
-// Weather Settings
-// Define the lang/lat, Temperature Unit, Wind Speed Unit
-#define LAT         "1.3119"    //define the latitude to be used for weather queries
-#define LONG        "103.8149"  //define the longitude to be used for weather queries
-#define TEMP        "celsius"   //define the temperature unit to be used - celsius/fahrenheit
-#define WIND        "kmh"       //define the windspeed unit to be used for weather queries  - kmh/mph
-
-// Page Settings
-// Toggle each page on (true) or off (false). Disabled pages are skipped when
-// swiping and auto-scrolling, and never fetch data. Leave at least one on — if
-// all are off, the Face page is forced back on so the screen is never blank.
-#define SHOW_FACE     true   // animated expressive face
-#define SHOW_CLOCK    true   // digital clock
-#define SHOW_DATE     true   // weekday / date
-#define SHOW_WEATHER  true   // current weather (needs Wi-Fi)
-#define SHOW_MOON     true   // moon phase
-#define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
-#define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)
 
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY

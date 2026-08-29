@@ -1,0 +1,78 @@
+#pragma once
+// ============================================================
+//  Monitor-Buddy — user configuration
+// ------------------------------------------------------------
+//  HOW TO USE THIS FILE
+//
+//  1. Copy this file to  config/config.h  (same folder).
+//       - VS Code: right-click config.h.example > Copy, then Paste,
+//         and rename the copy to  config.h
+//  2. Open  config/config.h  and edit the values below.
+//  3. config/config.h is gitignored and must never be committed —
+//     it holds your private Finnhub API key. This template is the
+//     only config file tracked by git.
+//
+//  If config/config.h is missing, the project still builds using
+//  the placeholder values in this template (the stock page just
+//  will not load data until you add a real key).
+//
+//  A few entries are worth setting:
+//   Github:  Replace the username with your own.
+//   Time:    Set your IANA timezone name and your UTC offset.
+//   Stocks:  Set a US stock ticker and your free Finnhub API key
+//            (register at https://finnhub.io).
+//   Weather: Set LAT/LONG to your location, pick temp/wind units.
+//   Theme:   Pick one of the five colour themes.
+//   Pages:   Toggle each page on/off.
+// ============================================================
+
+// ── Colour theme ────────────────────────────────────────────
+//   0 = Classic   (white on black, the original look)
+//   1 = Minimal   (white/gray with a single cyan accent on the key value)
+//   2 = Semantic  (stock up=green/down=red, warm weather, gold sun & moon...)
+//   3 = Warm amber (one gold/amber hue everywhere)
+//   4 = Cool teal / blue
+#define THEME 2
+
+// ── GitHub ──────────────────────────────────────────────────
+// Your GitHub username, shown on the stats page. Leave "" to
+// disable the GitHub page.
+#define GITHUB_USER   "IdefixRC"
+
+// ── Time ────────────────────────────────────────────────────
+// TIMEZONE   IANA name — used for the weather URL only.
+//            List: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+// TZ_OFFSET_HOURS  UTC offset in hours, used for the clock.
+//            Examples: -5 = US Eastern, -8 = US Pacific, +1 = CET,
+//                      +5.5 = IST, +8 = SGT
+#define TIMEZONE        "Asia/Singapore"
+#define TZ_OFFSET_HOURS 8
+
+// ── Stock market ────────────────────────────────────────────
+// Quotes come from Finnhub (https://finnhub.io/).
+// TICKER    US stock symbol (the free Finnhub tier is US only).
+// STOCKKEY  Your Finnhub API token — create a free account to get one.
+#define TICKER    "AAPL"
+#define STOCKKEY  "xxxxxxx"
+
+// ── Weather ─────────────────────────────────────────────────
+// LAT / LONG  Your location for weather queries.
+// TEMP        Temperature unit — "celsius" or "fahrenheit".
+// WIND        Wind speed unit — "kmh" or "mph".
+#define LAT   "1.3119"
+#define LONG  "103.8149"
+#define TEMP  "celsius"
+#define WIND  "kmh"
+
+// ── Pages ───────────────────────────────────────────────────
+// Toggle each page on (true) or off (false). Disabled pages are
+// skipped when swiping and auto-scrolling, and never fetch data.
+// Leave at least one on — if all are off, the Face page is forced
+// back on so the screen is never blank.
+#define SHOW_FACE     true   // animated expressive face
+#define SHOW_CLOCK    true   // digital clock
+#define SHOW_DATE     true   // weekday / date
+#define SHOW_WEATHER  true   // current weather (needs Wi-Fi)
+#define SHOW_MOON     true   // moon phase
+#define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
+#define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)

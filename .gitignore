@@ -13,5 +13,5 @@ compile_commands.json
 # Claude Code — ignore local/personal settings only; keep shared .claude/ files tracked
 .claude/settings.local.json
 
-# Local secrets — API tokens etc. Never commit; see src/secrets.h.example
-src/secrets.h
+# Local config — holds the Finnhub API token. Never commit; see config/config.h.example
+config/config.h
