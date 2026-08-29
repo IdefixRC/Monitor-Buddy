@@ -129,9 +129,18 @@
 
 // Stock Market Settings
 // Quotes come from Finnhub (https://finnhub.io/api/v1/quote).
-// You will need to create an account to get your own API Key
+// You will need to create an account to get your own API Key.
 #define TICKER            "AAPL"  // change to the desired stock ticker symbol (US Stocks only with free API)
-#define STOCKKEY          "xxxxxxx"  // add your Finnhub API token
+// Your Finnhub API token lives in src/secrets.h, which is gitignored so the
+// key never lands in version control. Copy src/secrets.h.example to
+// src/secrets.h and paste your token there. Without it the stock page still
+// builds but Finnhub rejects the request.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef STOCKKEY
+#define STOCKKEY "xxxxxxx"  // placeholder — create src/secrets.h with your token
+#endif
 
 // Weather Settings
 // Define the lang/lat, Temperature Unit, Wind Speed Unit
