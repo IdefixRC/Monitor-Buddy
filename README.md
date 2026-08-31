@@ -33,15 +33,13 @@ The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-print
 
 ## 2. What you need
 
-| Item                                                                          | Quantity | Where                                                                                                                  |
-| ----------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 3D-printed holder: `Monitor-Buddy_flat.STL` **or** `Monitor-Buddy_recess.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3096322-digi-hami-your-digital-desk-hamster-companion#profileId-3489563) |
-| Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)                                                               |
-| USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)                                                    |
+| Item                                                                          | Quantity | Where                                                                |
+| ----------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------- |
+| 3D-printed holder: `Monitor-Buddy_flat.STL` **or** `Monitor-Buddy_recess.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3241960-monitor-buddy) |
+| Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)             |
+| USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)  |
 
 You also need a computer to flash the board once. After that the USB-C cable is only for power, so any charger or a spare USB port on the monitor will do.
-
-> **Note:** the MakerWorld link is a placeholder until the print files are published. It currently points at a different model.
 
 Nothing else. No resistors, no headers, no hot glue.
 
