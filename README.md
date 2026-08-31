@@ -33,11 +33,11 @@ The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-print
 
 ## 2. What you need
 
-| Item                                                                                    | Quantity | Where                                                                                                                  |
-| --------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| 3D-printed holder: `Monitor Side Mount_flat.STL` **or** `Monitor Side Mount_cutout.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3096322-digi-hami-your-digital-desk-hamster-companion#profileId-3489563) |
-| Waveshare ESP32-C6-Touch-LCD-1.47                                                       | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)                                                               |
-| USB-C cable (power and flashing)                                                        | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)                                                    |
+| Item                                                                          | Quantity | Where                                                                                                                  |
+| ----------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 3D-printed holder: `Monitor-Buddy_flat.STL` **or** `Monitor-Buddy_recess.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3096322-digi-hami-your-digital-desk-hamster-companion#profileId-3489563) |
+| Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)                                                               |
+| USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)                                                    |
 
 You also need a computer to flash the board once. After that the USB-C cable is only for power, so any charger or a spare USB port on the monitor will do.
 
@@ -55,8 +55,8 @@ Nothing else. No resistors, no headers, no hot glue.
 
 There are two versions of the mount. Pick one:
 
-- **`Monitor Side Mount_flat.STL`** has a flat back. Stick it to the side of your monitor with a strip of ordinary double-sided tape.
-- **`Monitor Side Mount_cutout.STL`** has a recess sized for **3M Dual Lock** tape. Use this one if you want to be able to pull the Buddy off and put it back without peeling anything.
+- **`Monitor-Buddy_flat.STL`** has a flat back. Stick it to the side of your monitor with a strip of ordinary double-sided tape.
+- **`Monitor-Buddy_recess.STL`** has a recess sized for **3M Dual Lock** tape. Use this one if you want to be able to pull the Buddy off and put it back without peeling anything.
 
 PLA or PETG is recommended. Only minor supports needed.
 
