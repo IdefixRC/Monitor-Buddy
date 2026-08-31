@@ -15,3 +15,6 @@ compile_commands.json
 
 # Local config — holds the Finnhub API token. Never commit; see config/config.h.example
 config/config.h
+
+# Local working notes/scratch — never goes to GitHub
+.project/
