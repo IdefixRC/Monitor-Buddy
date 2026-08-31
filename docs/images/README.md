@@ -13,7 +13,6 @@ Photos: `.jpg`. Screenshots: `.png`. Keep the long edge around 1200 to 1600 px.
 | `assembly-slide-in.jpg` | A hand sliding the Waveshare board into the printed holder, USB-C port facing out. |
 | `vscode-install.png` | The <https://code.visualstudio.com/> download page, Windows download button in frame. |
 | `pioarduino-ext.png` | VS Code Extensions panel, search box showing `pioarduino`, the pioarduino IDE extension result with its Install button. |
-| `github-download-zip.png` | The GitHub repo page with the green **Code** button open and **Download ZIP** highlighted. |
 | `pio-first-build.png` | VS Code with the pioarduino terminal open, showing platform / toolchain / library download progress right after first opening the folder. |
 | `config-file.png` | VS Code explorer with `config/config.h.example` and `config/config.h` both visible, `config.h` open showing the settings. |
 | `config-defines.png` | `config/config.h` open at the `#define` block (THEME, GITHUB_USER, TIMEZONE, TICKER, STOCKKEY, LAT/LONG). |
