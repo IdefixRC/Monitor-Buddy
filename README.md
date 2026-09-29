@@ -108,7 +108,7 @@ Launch VS Code when it finishes.
 ### 4.3 Get the Monitor-Buddy code
 
 1. Open the [**latest release**](https://github.com/IdefixRC/Monitor-Buddy/releases/latest).
-2. Under **Assets**, download **`Monitor-Buddy-1.0.zip`**. It contains only the files needed to build and flash, nothing else.
+2. Under **Assets**, download the **`Monitor-Buddy-<version>.zip`** file (for example `Monitor-Buddy-1.0.1.zip`). It contains only the files needed to build and flash, nothing else.
 3. Extract it somewhere permanent, for example `Documents\Monitor-Buddy`. Do not run it from inside the ZIP or from your Downloads folder.
 
 > Prefer Git? `git clone https://github.com/IdefixRC/Monitor-Buddy.git` works too — you just get the full repo (docs, screenshots, CI) alongside the code.
