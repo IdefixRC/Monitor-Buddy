@@ -34,6 +34,13 @@ jobs:
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
+        env:
+          # Claude Code runs subagents in the background by default. The
+          # code-review plugin starts with a subagent, so the main turn ends
+          # with "waiting for it to finish", and the action stops at that
+          # first result: about 3 s, two turns, no review. Keep subagents in
+          # the foreground so the whole review runs inside one turn.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
