@@ -576,9 +576,6 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
-bool     weatherValid    = false;
-bool     stockValid      = false;
-bool     githubValid     = false;
 bool     portalFilesOk   = false;   // /index.html present in LittleFS?
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
@@ -608,11 +605,8 @@ uint32_t lastSerialMs    = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
-uint32_t weatherUpdatedAt   = 0;
 uint32_t weatherAttemptedAt = 0;
-uint32_t stockUpdatedAt     = 0;
 uint32_t stockAttemptedAt   = 0;
-uint32_t githubUpdatedAt    = 0;
 uint32_t githubAttemptedAt  = 0;
 uint32_t lastWifiRetryMs    = 0;
 uint32_t lastNtpSyncMs      = 0;
@@ -627,19 +621,37 @@ float faceGlanceY  = 0.0f;
 float faceTargetX  = 0.0f;
 float faceTargetY  = 0.0f;
 float pressPulse   = 0.0f;
-int   weatherTempF    = 0;
-int   weatherHumidity = 0;
-int   weatherWindMph  = 0;
-int   weatherCode     = -1;
-bool  weatherIsDay    = true;
-String weatherLabel   = "WAITING";
-float  stockPrice = 0.0f;
-float  stockOpen  = 0.0f;
-float  stockHigh  = 0.0f;
-float  stockLow   = 0.0f;
-String stockTime  = "";
-int githubFollowers = 0;
-int githubRepos     = 0;
+
+// ── Network data ──────────────────────────────────────────
+// Fetch results live in netShared, written only after a successful fetch and
+// only under netMutex. Once per frame the loop copies netShared into netView,
+// and the draw functions read netView only, so a frame never mixes old and new
+// values. Plain values only (no String), so a copy never touches the heap.
+struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
+struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
+struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
+struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+
+NetData           netShared = {};
+NetData           netView   = {};
+SemaphoreHandle_t netMutex  = nullptr;
+
+// Store one fetch result for the UI. The lock covers only this copy.
+template <typename T>
+void publishNetData(T &slot, const T &value) {
+  if (!netMutex) return;
+  xSemaphoreTake(netMutex, portMAX_DELAY);
+  slot = value;
+  xSemaphoreGive(netMutex);
+}
+
+// Copy the latest fetch results for this frame's drawing.
+void snapshotNetData() {
+  if (!netMutex) return;
+  xSemaphoreTake(netMutex, portMAX_DELAY);
+  netView = netShared;
+  xSemaphoreGive(netMutex);
+}
 
 // Themed colours, assigned once by applyTheme() from the THEME setting above.
 uint16_t COL_TIME, COL_SEC, COL_DATE_WD, COL_DATE_BIG, COL_VALUE, COL_LABEL;
@@ -1034,14 +1046,15 @@ bool fetchWeather() {
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
   if (err) return false;
-  weatherTempF     = (int)round(doc["current"]["temperature_2m"].as<float>());
-  weatherHumidity  = doc["current"]["relative_humidity_2m"].as<int>();
-  weatherWindMph   = (int)round(doc["current"]["wind_speed_10m"].as<float>());
-  weatherCode      = doc["current"]["weather_code"].as<int>();
-  weatherIsDay     = doc["current"]["is_day"].as<int>() != 0;
-  weatherLabel     = weatherCodeText(weatherCode);
-  weatherUpdatedAt = millis();
-  weatherValid     = true;
+  WeatherData w;
+  w.temp      = (int)round(doc["current"]["temperature_2m"].as<float>());
+  w.humidity  = doc["current"]["relative_humidity_2m"].as<int>();
+  w.wind      = (int)round(doc["current"]["wind_speed_10m"].as<float>());
+  w.code      = doc["current"]["weather_code"].as<int>();
+  w.isDay     = doc["current"]["is_day"].as<int>() != 0;
+  w.updatedAt = millis();
+  w.valid     = true;
+  publishNetData(netShared.weather, w);
   return true;
 }
 
@@ -1073,13 +1086,14 @@ bool fetchStock() {
   float last = doc["c"].as<float>();
   if (last <= 0.0f) return false;
 
-  stockPrice = last;                                     // "c"  → price (was closeText)
-  stockOpen  = doc["o"].as<float>();                     // "o"  → open
-  stockHigh  = doc["h"].as<float>();                     // "h"  → high
-  stockLow   = doc["l"].as<float>();                     // "l"  → low
-  stockTime  = String(doc["dp"].as<float>(), 2) + "%";   // "dp" → percent change
-  stockUpdatedAt = millis();
-  stockValid = true;
+  StockData s;
+  s.price     = last;                    // "c" → last price
+  s.open      = doc["o"].as<float>();    // "o" → open
+  s.high      = doc["h"].as<float>();    // "h" → high
+  s.low       = doc["l"].as<float>();    // "l" → low
+  s.updatedAt = millis();
+  s.valid     = true;
+  publishNetData(netShared.stock, s);
   return true;
 }
 
@@ -1100,10 +1114,12 @@ bool fetchGithub() {
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
   if (err) return false;
-  githubFollowers  = doc["followers"].as<int>();
-  githubRepos      = doc["public_repos"].as<int>();
-  githubUpdatedAt  = millis();
-  githubValid      = true;
+  GithubData g;
+  g.followers = doc["followers"].as<int>();
+  g.repos     = doc["public_repos"].as<int>();
+  g.updatedAt = millis();
+  g.valid     = true;
+  publishNetData(netShared.github, g);
   return true;
 }
 
@@ -1566,18 +1582,19 @@ bool drawWifiGate() {
 void drawWeather() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  if (!weatherValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
-  drawWeatherIcon(250, 66, weatherCode, weatherIsDay, COL_WICON);
+  const WeatherData &w = netView.weather;
+  if (!w.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  drawWeatherIcon(250, 66, w.code, w.isDay, COL_WICON);
   gfx->setTextSize(8); gfx->setTextColor(COL_TEMP);
-  gfx->setCursor(14, 34); gfx->print(weatherTempF);
+  gfx->setCursor(14, 34); gfx->print(w.temp);
   gfx->setTextSize(3); gfx->print(String(TEMP).startsWith("f") ? "F" : "C");
   gfx->setTextSize(2); gfx->setTextColor(COL_WSUB);
-  gfx->setCursor(14, 116); gfx->print(weatherLabel);
+  gfx->setCursor(14, 116); gfx->print(weatherCodeText(w.code));
   gfx->setTextColor(COL_LABEL);
-  gfx->setCursor(14,  140); gfx->print("H "); gfx->print(weatherHumidity); gfx->print("%");
+  gfx->setCursor(14,  140); gfx->print("H "); gfx->print(w.humidity); gfx->print("%");
   // Wind, right-aligned: same 14 px gap from the right edge as humidity has from the left.
   { String wu = String(WIND); wu.toUpperCase();
-    String windStr = String("W ") + weatherWindMph + wu;
+    String windStr = String("W ") + w.wind + wu;
     int windW = (int)windStr.length() * 12;          // size-2 chars are 12 px wide
     gfx->setCursor(SCREEN_W - 14 - windW, 140);
     gfx->print(windStr); }
@@ -1637,10 +1654,11 @@ void drawMoon() {
 void drawStock() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  if (!stockValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  const StockData &s = netView.stock;
+  if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
-  snprintf(pbuf, sizeof(pbuf), "$%.2f", stockPrice);
-  uint16_t priceCol = (stockPrice >= stockOpen) ? COL_PRICE_UP : COL_PRICE_DOWN;
+  snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
+  uint16_t priceCol = (s.price >= s.open) ? COL_PRICE_UP : COL_PRICE_DOWN;
   centeredTextColor(pbuf, 26, 6, priceCol);      // big price (up=green/down=red in semantic)
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
@@ -1653,9 +1671,9 @@ void drawStock() {
   gfx->print(TICKER);
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
-  gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(stockOpen, 2);
-  gfx->setCursor(150, 116); gfx->print("HIGH  "); gfx->print(stockHigh, 2);
-  gfx->setCursor(150, 140); gfx->print("LOW   "); gfx->print(stockLow, 2);
+  gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
+  gfx->setCursor(150, 116); gfx->print("HIGH  "); gfx->print(s.high, 2);
+  gfx->setCursor(150, 140); gfx->print("LOW   "); gfx->print(s.low, 2);
   drawPageDots();
 }
 
@@ -1669,7 +1687,8 @@ void drawGithub() {
     drawPageDots(); return;
   }
   if (drawWifiGate()) return;
-  if (!githubValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  const GithubData &g = netView.github;
+  if (!g.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
 
   // GitHub logo on the left, filling the vertical space.
   const int scale = 2;                          // 56x56 bitmap -> 112 px on screen
@@ -1680,13 +1699,13 @@ void drawGithub() {
   const int rx = 150;
   gfx->setTextColor(COL_GHNUM);
   gfx->setTextSize(6);
-  gfx->setCursor(rx, 22);  gfx->print(githubFollowers);
+  gfx->setCursor(rx, 22);  gfx->print(g.followers);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(2);
   gfx->setCursor(rx, 78);  gfx->print("FOLLOWERS");
   gfx->setTextColor(COL_VALUE);
   gfx->setTextSize(3);
-  gfx->setCursor(rx, 110); gfx->print(githubRepos);
+  gfx->setCursor(rx, 110); gfx->print(g.repos);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(1);
   gfx->setCursor(rx, 140); gfx->print("REPOS");
@@ -1963,7 +1982,7 @@ void updateNetworkPages() {
   if (!ensureWifi()) return;
 
   // Weather: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
-  bool weatherDue = !weatherValid || millis() - weatherUpdatedAt >= WEATHER_REFRESH_INTERVAL_MS;
+  bool weatherDue = !netShared.weather.valid || millis() - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS;
   bool weatherRetryOk = weatherAttemptedAt == 0 || millis() - weatherAttemptedAt >= FETCH_RETRY_MS;
   if (currentApp == PAGE_WEATHER && weatherDue && weatherRetryOk) {
     weatherAttemptedAt = millis();
@@ -1973,9 +1992,9 @@ void updateNetworkPages() {
   // Stock: fetch once when first shown, then refresh at most once per minute
   // (STOCK_REFRESH_MS) while the page stays on screen. No market-hours gating.
   else if (currentApp == PAGE_STOCK) {
-    bool shouldFetch = !stockValid
+    bool shouldFetch = !netShared.stock.valid
             && (stockAttemptedAt == 0 || millis() - stockAttemptedAt >= STOCK_REFRESH_MS);
-    if (stockValid && millis() - stockAttemptedAt >= STOCK_REFRESH_MS) shouldFetch = true;
+    if (netShared.stock.valid && millis() - stockAttemptedAt >= STOCK_REFRESH_MS) shouldFetch = true;
     if (shouldFetch) {
       stockAttemptedAt = millis();
       if (fetchStock()) {
@@ -1987,7 +2006,7 @@ void updateNetworkPages() {
 
   // GitHub: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
   else if (currentApp == PAGE_GITHUB) {
-    bool githubDue = !githubValid || millis() - githubUpdatedAt >= GITHUB_REFRESH_INTERVAL_MS;
+    bool githubDue = !netShared.github.valid || millis() - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS;
     bool githubRetryOk = githubAttemptedAt == 0 || millis() - githubAttemptedAt >= FETCH_RETRY_MS;
     if (githubDue && githubRetryOk) {
       githubAttemptedAt = millis();
@@ -2018,6 +2037,8 @@ void setup() {
   Serial.begin(115200);
   delay(150);
   Serial.println("ESP32-C6 Monitor-Buddy starting");
+  netMutex = xSemaphoreCreateMutex();
+  if (!netMutex) Serial.println("ERROR: no memory for netMutex - network pages disabled");
   applyTheme();   // set themed colours from THEME
 
   if (!gfx->begin(40000000)) Serial.println("Display init failed — check wiring");
@@ -2168,6 +2189,7 @@ void loop() {
     ty = cos(millis()*0.0011f)*0.16f;
   }
 
+  snapshotNetData();
   switch (currentApp) {
     case 0: drawFace(tx, ty); break;
     case 1: drawClock();      break;
