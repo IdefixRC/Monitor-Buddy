@@ -169,7 +169,11 @@
 static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
 
-static constexpr uint32_t HTTP_TIMEOUT_MS              = 1500UL;
+// Fetch timeouts. Fetches run in netTask, so these bound how long one stuck
+// fetch can hold up the next, not the UI. Worst case per fetch is about 20 s.
+static constexpr uint32_t HTTP_TIMEOUT_MS         = 5000UL;  // response wait
+static constexpr int32_t  HTTP_CONNECT_TIMEOUT_MS = 4000;    // TCP connect (lib default 5 s)
+static constexpr uint32_t TLS_HANDSHAKE_TIMEOUT_S = 8;       // TLS (lib default 120 s)
 static constexpr uint32_t NTP_RETRY_INTERVAL_MS        = 60000UL;
 static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
@@ -1037,6 +1041,7 @@ bool fetchWeather() {
   if (!ensureWifi()) return false;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   String tzEncoded = String(TIMEZONE);
   tzEncoded.replace("/", "%2F");
   String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
@@ -1075,8 +1080,10 @@ bool fetchStock() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   if (!http.begin(client, "https://finnhub.io/api/v1/quote?symbol=" TICKER "&token=" STOCKKEY))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
@@ -1109,8 +1116,10 @@ bool fetchGithub() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   String url = String("https://api.github.com/users/") + GITHUB_USER;
   if (!http.begin(client, url)) return false;
   http.addHeader("User-Agent", "ESP32-C6-Touch-LCD");
