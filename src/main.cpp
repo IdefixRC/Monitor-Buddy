@@ -594,7 +594,8 @@ uint16_t touchLastY      = 0;
 uint32_t touchStartMs    = 0;
 uint8_t  touchMissFrames  = 0;
 bool     touchMoved       = false;
-uint8_t  tapCount         = 0;
+bool     touchSwipeDone   = false;  // page swipe fired; ignore this press until release
+uint8_t  tapCount        = 0;
 uint32_t lastTapMs        = 0;
 uint32_t autoPageBannerUntil = 0;
 uint32_t nextBlink       = 1400;
@@ -1876,10 +1877,14 @@ void readTouch() {
     if (!touchWasDown) {
       touchStartX = x; touchStartY = y; touchStartMs = now;
       touchMoved = false;
+      touchSwipeDone = false;
       touchWasDown = true;
       touchPortalArmed = true;   // this press is eligible to open the portal
       return;
     }
+    // A page swipe already fired for this press: the rest of the contact is
+    // part of that swipe, not a new press, until the finger lifts.
+    if (touchSwipeDone) return;
     int16_t dx = (int16_t)x-(int16_t)touchStartX;
     int16_t dy = (int16_t)y-(int16_t)touchStartY;
     if (abs(dx) > 12 || abs(dy) > 12) touchMoved = true;
@@ -1892,17 +1897,19 @@ void readTouch() {
       return;
     }
 
+    // A swipe keeps the press alive (touchWasDown stays true) and marks it as
+    // moved, so holding still afterwards can't open the portal and lifting
+    // can't count as a tap. The press ends only when the finger lifts.
     if (abs(dx) > 55 && abs(dx) > abs(dy)+18) {
       switchApp(dx < 0 ? 1 : -1);
-      touchWasDown = false;
-      touchMissFrames = 0;
-      touchMoved = false;
+      touchSwipeDone = true;     // one page per swipe
+      touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
       setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
-      touchWasDown = false;
-      touchMissFrames = 0;
-      touchMoved = false;
+      // Re-base so a continued drag steps brightness again every 55 px.
+      touchStartX = x; touchStartY = y;
+      touchMoved = true;
       touchPortalArmed = false;
     }
   } else if (touchWasDown) {
@@ -1919,6 +1926,7 @@ void readTouch() {
     touchWasDown = false;
     touchMissFrames = 0;
     touchMoved = false;
+    touchSwipeDone = false;
     touchPortalArmed = false;
   }
 }
