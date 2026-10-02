@@ -175,6 +175,12 @@ static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
+// Background fetch task. Stack: HTTPS (mbedTLS) handshakes need a lot of it.
+// Start generous and trim to the measured high-water mark plus a margin.
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 12288;
+static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
+static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
+
 // ── Pin definitions ────────────────────────────────────────
 #define LCD_BL    23
 #define LCD_DC    15
@@ -267,7 +273,6 @@ void readSensors();
 void readTouch();
 void updateFaceTimers();
 void updateAutoPage();
-void updateNetworkPages();
 void calibrateNeutral();
 void loadDisplaySettings();
 void saveDisplaySettings();
@@ -579,7 +584,7 @@ bool     ntpSynced       = false;
 bool     portalFilesOk   = false;   // /index.html present in LittleFS?
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
-uint8_t  currentApp      = 0;   // ID of the page currently shown (PAGE_*)
+volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
 uint8_t  pageOrder[APP_COUNT];  // enabled page IDs, built from SHOW_* at boot
 uint8_t  pageCount       = 0;   // how many pages are enabled
 uint8_t  currentPageIdx  = 0;   // index into pageOrder[] of the current page
@@ -605,9 +610,6 @@ uint32_t lastSerialMs    = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
-uint32_t weatherAttemptedAt = 0;
-uint32_t stockAttemptedAt   = 0;
-uint32_t githubAttemptedAt  = 0;
 uint32_t lastWifiRetryMs    = 0;
 uint32_t lastNtpSyncMs      = 0;
 uint32_t lastNtpAttemptMs    = 0;
@@ -911,10 +913,13 @@ void switchApp(int8_t delta) {
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return strlen(GITHUB_USER) > 0; }
 
-// Network fetches call this before doing anything. It is now a pure
-// status check — AWM owns connecting and reconnecting. It also refuses
-// to run while the captive portal is up, because during the portal the
-// radio is in AP / AP_STA mode and outbound requests would just stall.
+// Network fetches call this before doing anything. It is a pure status
+// check — AWM owns connecting and reconnecting. It refuses while the captive
+// portal is up, because the radio is then in AP / AP_STA mode.
+// Called from netTask as well as loop(): isPortalActive() only reads a bool,
+// and isConnected() reads WiFi.status() (task-safe) and writes AWM's
+// `connected` flag, which loop() also writes with the same derived value.
+// Benign; goes away with the AWM upgrade.
 bool ensureWifi() {
   if (wifiManager.isPortalActive()) return false;
   return wifiManager.isConnected();
@@ -1977,41 +1982,69 @@ static uint8_t currentClockHour() {
   return (uint8_t)(sod / 3600UL);
 }
 
-void updateNetworkPages() {
-  // Nothing to fetch without a live STA connection.
-  if (!ensureWifi()) return;
+// ── Background fetch task ────────────────────────────────
+// Owns the fetch schedule so loop() never waits on the network:
+//   stock   every STOCK_REFRESH_MS, only while the stock page is shown
+//   weather prefetched every WEATHER_REFRESH_INTERVAL_MS
+//   GitHub  prefetched every GITHUB_REFRESH_INTERVAL_MS
+// A failed weather/GitHub fetch is retried after FETCH_RETRY_MS. At most one
+// fetch per pass, so only one HTTPS connection exists at a time.
 
-  // Weather: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
-  bool weatherDue = !netShared.weather.valid || millis() - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS;
-  bool weatherRetryOk = weatherAttemptedAt == 0 || millis() - weatherAttemptedAt >= FETCH_RETRY_MS;
-  if (currentApp == PAGE_WEATHER && weatherDue && weatherRetryOk) {
-    weatherAttemptedAt = millis();
-    fetchWeather();
-  }
+// Run one fetch and log its result and duration, e.g. "[net] weather ok 640 ms".
+static bool runFetch(const char *name, bool (*fetch)()) {
+  uint32_t t0 = millis();
+  bool ok = fetch();
+  Serial.printf("[net] %s %s %lu ms\n", name, ok ? "ok" : "FAIL",
+                (unsigned long)(millis() - t0));
+  return ok;
+}
 
-  // Stock: fetch once when first shown, then refresh at most once per minute
-  // (STOCK_REFRESH_MS) while the page stays on screen. No market-hours gating.
-  else if (currentApp == PAGE_STOCK) {
-    bool shouldFetch = !netShared.stock.valid
-            && (stockAttemptedAt == 0 || millis() - stockAttemptedAt >= STOCK_REFRESH_MS);
-    if (netShared.stock.valid && millis() - stockAttemptedAt >= STOCK_REFRESH_MS) shouldFetch = true;
-    if (shouldFetch) {
-      stockAttemptedAt = millis();
-      if (fetchStock()) {
-        Serial.printf("Stock fetched — next in >= %lu s\n",
-                      (unsigned long)(STOCK_REFRESH_MS / 1000UL));
-      }
+// Free heap, lowest free heap since boot, and this task's unused stack.
+static void logNetHealth() {
+  Serial.printf("[net] heap %luk (min %luk), stack free %lu bytes\n",
+                (unsigned long)(ESP.getFreeHeap() / 1024),
+                (unsigned long)(ESP.getMinFreeHeap() / 1024),
+                (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
+}
+
+void netTask(void *) {
+  // 0 = never attempted. millis() is far past 0 once this task runs.
+  uint32_t weatherAttemptedAt = 0, stockAttemptedAt = 0, githubAttemptedAt = 0;
+  uint32_t lastHealthLogMs = millis();
+  bool tlsHealthLogged = false;
+
+  for (;;) {
+    if (!ensureWifi()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+
+    // This task is netShared's only writer, so it may read it without the lock.
+    const uint32_t now = millis();
+    bool ran = false, usedTls = false;
+    if (SHOW_STOCK && currentApp == PAGE_STOCK
+        && (stockAttemptedAt == 0 || now - stockAttemptedAt >= STOCK_REFRESH_MS)) {
+      stockAttemptedAt = now;
+      runFetch("stock", fetchStock);
+      ran = usedTls = true;
+    } else if (SHOW_WEATHER
+        && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
+        && (weatherAttemptedAt == 0 || now - weatherAttemptedAt >= FETCH_RETRY_MS)) {
+      weatherAttemptedAt = now;
+      runFetch("weather", fetchWeather);
+      ran = true;
+    } else if (SHOW_GITHUB && githubConfigured()
+        && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
+        && (githubAttemptedAt == 0 || now - githubAttemptedAt >= FETCH_RETRY_MS)) {
+      githubAttemptedAt = now;
+      runFetch("github", fetchGithub);
+      ran = usedTls = true;
     }
-  }
 
-  // GitHub: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
-  else if (currentApp == PAGE_GITHUB) {
-    bool githubDue = !netShared.github.valid || millis() - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS;
-    bool githubRetryOk = githubAttemptedAt == 0 || millis() - githubAttemptedAt >= FETCH_RETRY_MS;
-    if (githubDue && githubRetryOk) {
-      githubAttemptedAt = millis();
-      fetchGithub();
+    // Stack use peaks during the first HTTPS handshake; log then, and every 5 min.
+    if ((usedTls && !tlsHealthLogged) || millis() - lastHealthLogMs >= NET_HEALTH_LOG_MS) {
+      logNetHealth();
+      lastHealthLogMs = millis();
+      if (usedTls) tlsHealthLogged = true;
     }
+    vTaskDelay(pdMS_TO_TICKS(ran ? 250 : 500));
   }
 }
 
@@ -2148,6 +2181,15 @@ void setup() {
   } else {
     Serial.println("Wi-Fi unavailable — running offline, hold the screen to configure");
   }
+
+  // Start the fetch task last, once Wi-Fi state exists. It idles while the
+  // portal is open or Wi-Fi is down.
+  if (!netMutex) {
+    Serial.println("ERROR: no netMutex - network pages disabled");
+  } else if (xTaskCreate(netTask, "net", NET_TASK_STACK_BYTES, nullptr,
+                         NET_TASK_PRIORITY, nullptr) != pdPASS) {
+    Serial.println("ERROR: could not start fetch task - network pages disabled");
+  }
 }
 
 void loop() {
@@ -2178,7 +2220,6 @@ void loop() {
   if (ntpSynced && millis() - lastNtpSyncMs > 6UL * 3600UL * 1000UL) ntpSynced = false;
   if (!ntpSynced) syncNTP();
 
-  updateNetworkPages();
 
   float tx=0.0f, ty=0.0f;
   if (imuReady) {
