@@ -24,7 +24,8 @@ It is also genuinely useful when you swipe past the face:
 - **GitHub stats** for your username
 - **5 colour themes**, from plain white-on-black to a green-up / red-down semantic theme
 - **Toggle any page on or off** so your Buddy only shows what you care about
-- **Swipe** left and right to move between pages, **double-tap** to stop the auto-scroll, **tap the face** to change expression
+- **Swipe** left and right to move between pages, up and down to adjust brightness,
+**double-tap** to stop the auto-scroll, **tap the face** to change expression
 - **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done.
 
 The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-printed clip**. **No soldering**, no breadboard, and no wiring required. You print the holder, slide the board in, and plug in a USB-C cable and Monitor-Buddy is ready to rock.

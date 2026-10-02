@@ -166,6 +166,15 @@
 // the rate limit. Fetches only happen while the stock page is actually shown.
 #define STOCK_REFRESH_MS  60000UL   // minimum ms between stock API calls (60 s)
 
+static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
+static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
+
+static constexpr uint32_t HTTP_TIMEOUT_MS              = 1500UL;
+static constexpr uint32_t NTP_RETRY_INTERVAL_MS        = 60000UL;
+static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
+static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
+static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
+
 // ── Pin definitions ────────────────────────────────────────
 #define LCD_BL    23
 #define LCD_DC    15
@@ -260,6 +269,9 @@ void updateFaceTimers();
 void updateAutoPage();
 void updateNetworkPages();
 void calibrateNeutral();
+void loadDisplaySettings();
+void saveDisplaySettings();
+void setBrightness(int level);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -425,9 +437,9 @@ void bsp_touch_init(TwoWire *wire, uint8_t rstPin, uint8_t intPin,
   if (_touchRst != 255) {
     pinMode(_touchRst, OUTPUT);
     digitalWrite(_touchRst, LOW);
-    delay(20);
+    delay(200);
     digitalWrite(_touchRst, HIGH);
-    delay(50);
+    delay(300);
   }
   if (_touchInt != 255) {
     pinMode(_touchInt, INPUT_PULLUP);
@@ -455,21 +467,27 @@ uint16_t scaleTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t
 bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
   if (!_touchWire || !outX || !outY) return false;
 
-  // Read only the first 6-byte touch frame. The UI only uses one point, and
-  // shorter reads are less flaky than asking this controller for the optional
-  // second-point bytes on every frame.
+  // Read the complete AXS5106L frame. Its second byte is a full-byte touch
+  // count; reading the complete frame also keeps the controller's read pointer
+  // aligned for the next poll.
   _touchWire->beginTransmission(AXS5106L_ADDR);
   _touchWire->write(AXS5106L_TOUCH_DATA_REG);
-  if (_touchWire->endTransmission(true) != 0) { resetSharedI2CBus(); return false; }
+  if (_touchWire->endTransmission(true) != 0) {
+    resetSharedI2CBus();
+    return false;
+  }
   delayMicroseconds(300);
 
-  uint8_t len = _touchWire->requestFrom((uint8_t)AXS5106L_ADDR, (uint8_t)6, (uint8_t)true);
-  if (len < 6) { resetSharedI2CBus(); return false; }
+  uint8_t len = _touchWire->requestFrom((uint8_t)AXS5106L_ADDR, (uint8_t)14, (uint8_t)true);
+  if (len < 6) {
+    resetSharedI2CBus();
+    return false;
+  }
 
-  uint8_t buf[6];
-  for (uint8_t i = 0; i < 6; i++) buf[i] = _touchWire->read();
+  uint8_t buf[14];
+  for (uint8_t i = 0; i < len && i < sizeof(buf); i++) buf[i] = _touchWire->read();
 
-  uint8_t nPoints = buf[1] & 0x0F;
+  uint8_t nPoints = buf[1];
   if (nPoints == 0 || nPoints > 2) return false;
 
   // First point begins at byte 2: x_hi/event, x_lo, y_hi/id, y_lo.
@@ -513,13 +531,13 @@ static const uint8_t APP_COUNT    = 7;   // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by the SHOW_* toggles above.
-#define PAGE_FACE     0
-#define PAGE_CLOCK    1
-#define PAGE_DATE     2
-#define PAGE_WEATHER  3
-#define PAGE_MOON     4
-#define PAGE_STOCK    5
-#define PAGE_GITHUB   6
+static constexpr uint8_t PAGE_FACE    = 0;
+static constexpr uint8_t PAGE_CLOCK   = 1;
+static constexpr uint8_t PAGE_DATE    = 2;
+static constexpr uint8_t PAGE_WEATHER = 3;
+static constexpr uint8_t PAGE_MOON    = 4;
+static constexpr uint8_t PAGE_STOCK   = 5;
+static constexpr uint8_t PAGE_GITHUB  = 6;
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -583,15 +601,21 @@ uint32_t nextBlink       = 1400;
 uint32_t blinkUntil      = 0;
 uint32_t nextGlance      = 900;
 uint32_t nextAutoPage    = PAGE_AUTO_INTERVAL_MS;
+uint8_t  brightnessLevel = BRIGHTNESS_DEFAULT;
+uint32_t brightnessBannerUntil = 0;
 uint32_t lastSerialMs    = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
 uint32_t weatherUpdatedAt   = 0;
+uint32_t weatherAttemptedAt = 0;
 uint32_t stockUpdatedAt     = 0;
+uint32_t stockAttemptedAt   = 0;
 uint32_t githubUpdatedAt    = 0;
+uint32_t githubAttemptedAt  = 0;
 uint32_t lastWifiRetryMs    = 0;
 uint32_t lastNtpSyncMs      = 0;
+uint32_t lastNtpAttemptMs    = 0;
 float restAx    = 0.0f;
 float restAy    = 0.0f;
 float filteredAx = 0.0f;
@@ -916,19 +940,19 @@ void syncNTP() {
   if (ntpSynced) return;
   if (!wifiManager.isConnected()) return;
 
-  // Numeric offset: TZ_OFFSET_HOURS * 3600 seconds. DST = 0.
-  configTime((long)TZ_OFFSET_HOURS * 3600L, 0, "pool.ntp.org", "time.cloudflare.com");
+  // NTP answers later: check every loop, restart the request only every 60 s.
+  bool startOrRetry = lastNtpAttemptMs == 0
+                   || millis() - lastNtpAttemptMs >= NTP_RETRY_INTERVAL_MS;
+  if (startOrRetry) {
+    lastNtpAttemptMs = millis();
+    // Numeric offset: TZ_OFFSET_HOURS * 3600 seconds. DST = 0.
+    configTime((long)TZ_OFFSET_HOURS * 3600L, 0, "pool.ntp.org", "time.cloudflare.com");
+  }
 
-  // Wait up to 8 s for a valid epoch (reject year ≤ 2000 / tm_year ≤ 100).
-  uint32_t deadline = millis() + 8000UL;
   struct tm ti;
   memset(&ti, 0, sizeof(ti));
-  while (millis() < deadline) {
-    if (getLocalTime(&ti, 0) && ti.tm_year > 100) break;
-    delay(200);
-  }
-  if (ti.tm_year <= 100) {
-    Serial.println("NTP: no response — using compile-time seed");
+  if (!getLocalTime(&ti, 0) || ti.tm_year <= 100) {
+    if (startOrRetry) Serial.println("NTP: pending — using compile-time seed");
     return;
   }
 
@@ -994,7 +1018,7 @@ void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color) {
 bool fetchWeather() {
   if (!ensureWifi()) return false;
   HTTPClient http;
-  http.setTimeout(6000);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   String tzEncoded = String(TIMEZONE);
   tzEncoded.replace("/", "%2F");
   String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
@@ -1033,7 +1057,7 @@ bool fetchStock() {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(7000);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   if (!http.begin(client, "https://finnhub.io/api/v1/quote?symbol=" TICKER "&token=" STOCKKEY))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
@@ -1066,7 +1090,7 @@ bool fetchGithub() {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(7000);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   String url = String("https://api.github.com/users/") + GITHUB_USER;
   if (!http.begin(client, url)) return false;
   http.addHeader("User-Agent", "ESP32-C6-Touch-LCD");
@@ -1760,6 +1784,35 @@ void maintainWifi() {
   wifiManager.reintentarConexionSiNecesario();
 }
 
+void saveDisplaySettings() {
+  JsonDocument doc;
+  doc["brightness"] = brightnessLevel;
+  File file = LittleFS.open("/display.json", "w");
+  if (!file) return;
+  serializeJson(doc, file);
+  file.close();
+}
+
+void loadDisplaySettings() {
+  if (!LittleFS.exists("/display.json")) return;
+  File file = LittleFS.open("/display.json", "r");
+  if (!file) return;
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  if (error) return;
+  int level = doc["brightness"] | BRIGHTNESS_DEFAULT;
+  brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
+}
+
+void setBrightness(int level) {
+  brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
+  ledcWrite(LCD_BL, brightnessLevel);
+  saveDisplaySettings();
+  brightnessBannerUntil = millis() + 1200;
+  Serial.printf("Brightness: %u/255\n", brightnessLevel);
+}
+
 // ── Interaction handlers ──────────────────────────────────
 
 void triggerDoubleTap() {
@@ -1845,6 +1898,12 @@ void readTouch() {
       touchMissFrames = 0;
       touchMoved = false;
       touchPortalArmed = false;
+    } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
+      setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      touchWasDown = false;
+      touchMissFrames = 0;
+      touchMoved = false;
+      touchPortalArmed = false;
     }
   } else if (touchWasDown) {
     // The AXS5106L INT/read path can miss the odd frame. Require a few
@@ -1895,30 +1954,38 @@ void updateNetworkPages() {
   // Nothing to fetch without a live STA connection.
   if (!ensureWifi()) return;
 
-  // Weather: refresh every 15 min while on the weather page.
-  if (currentApp == 3 && (!weatherValid || millis() - weatherUpdatedAt > 15UL * 60UL * 1000UL))
+  // Weather: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
+  bool weatherDue = !weatherValid || millis() - weatherUpdatedAt >= WEATHER_REFRESH_INTERVAL_MS;
+  bool weatherRetryOk = weatherAttemptedAt == 0 || millis() - weatherAttemptedAt >= FETCH_RETRY_MS;
+  if (currentApp == PAGE_WEATHER && weatherDue && weatherRetryOk) {
+    weatherAttemptedAt = millis();
     fetchWeather();
+  }
 
   // Stock: fetch once when first shown, then refresh at most once per minute
   // (STOCK_REFRESH_MS) while the page stays on screen. No market-hours gating.
-  else if (currentApp == 5) {
-    static uint32_t lastStockFetchMs  = 0;
-    static bool     stockFetchedOnce  = false;
-    bool shouldFetch = !stockFetchedOnce                               // first view ever
-                    || (millis() - lastStockFetchMs >= STOCK_REFRESH_MS);
+  else if (currentApp == PAGE_STOCK) {
+    bool shouldFetch = !stockValid
+            && (stockAttemptedAt == 0 || millis() - stockAttemptedAt >= STOCK_REFRESH_MS);
+    if (stockValid && millis() - stockAttemptedAt >= STOCK_REFRESH_MS) shouldFetch = true;
     if (shouldFetch) {
+      stockAttemptedAt = millis();
       if (fetchStock()) {
-        lastStockFetchMs = millis();
-        stockFetchedOnce = true;
         Serial.printf("Stock fetched — next in >= %lu s\n",
                       (unsigned long)(STOCK_REFRESH_MS / 1000UL));
       }
     }
   }
 
-  // GitHub: refresh every 30 min while on the GitHub page.
-  else if (currentApp == 6 && (!githubValid || millis() - githubUpdatedAt > 30UL * 60UL * 1000UL))
-    fetchGithub();
+  // GitHub: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
+  else if (currentApp == PAGE_GITHUB) {
+    bool githubDue = !githubValid || millis() - githubUpdatedAt >= GITHUB_REFRESH_INTERVAL_MS;
+    bool githubRetryOk = githubAttemptedAt == 0 || millis() - githubAttemptedAt >= FETCH_RETRY_MS;
+    if (githubDue && githubRetryOk) {
+      githubAttemptedAt = millis();
+      fetchGithub();
+    }
+  }
 }
 
 void calibrateNeutral() {
@@ -1948,8 +2015,8 @@ void setup() {
   if (!gfx->begin(40000000)) Serial.println("Display init failed — check wiring");
   lcdRegInit();
   display->setRotation(ROTATION);
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);
+  ledcAttach(LCD_BL, 5000, 8);
+  ledcWrite(LCD_BL, brightnessLevel);
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -2012,11 +2079,15 @@ void setup() {
   wifiManager.setReconnectAttemptMs(WIFI_RETRY_WINDOW_MS);
   wifiManager.setReconnectBackoffMs(WIFI_RETRY_INTERVAL_MS);
 
-  // Note: deliberately NOT calling setProtectedJsons({"/wifi.json"}).
-  // Whitelisting wifi.json would make the portal's "erase credentials"
-  // button and the >=5 s button hold do nothing.
+  // Note: deliberately NOT calling setProtectedJsons().
+  // Protecting /wifi.json would make the portal's "erase credentials"
+  // button and the >=5 s button hold do nothing. Protecting
+  // /display.json would keep a near-black brightness across a factory
+  // reset, which is the case that reset is meant to recover.
 
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
+  loadDisplaySettings();
+  ledcWrite(LCD_BL, brightnessLevel);
 
   // Verify the portal's HTML is actually on the filesystem. Without it AWM
   // serves HTTP 500 and the user has no way to enter credentials.
@@ -2098,8 +2169,19 @@ void loop() {
     case 5: drawStock();      break;
     default: drawGithub();    break;
   }
-  // Auto-advance banner — shown briefly after double-tap
-  if (millis() < autoPageBannerUntil) {
+  // Brightness or auto-advance feedback banner — shown briefly after a gesture.
+  if (millis() < brightnessBannerUntil) {
+    char msg[20];
+    snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
+    uint16_t bannerColor = rgb(0,200,255);
+    gfx->setTextSize(1);
+    gfx->setTextColor(bannerColor);
+    int bw = (int)strlen(msg)*6;
+    gfx->fillRoundRect((SCREEN_W-bw-12)/2, SCREEN_H/2-10, bw+12, 20, 4, BG);
+    gfx->drawRoundRect((SCREEN_W-bw-12)/2, SCREEN_H/2-10, bw+12, 20, 4, bannerColor);
+    gfx->setCursor((SCREEN_W-bw)/2, SCREEN_H/2-4);
+    gfx->print(msg);
+  } else if (millis() < autoPageBannerUntil) {
     const char *msg = autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
     uint16_t bannerColor = autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
     gfx->setTextSize(1);
