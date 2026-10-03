@@ -184,6 +184,8 @@
 
 static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
+// Save brightness this long after the last step, so a drag writes once.
+static constexpr uint32_t BRIGHTNESS_SAVE_DELAY_MS = 2000;
 
 // Fetch timeouts. Fetches run in netTask, so these bound how long one stuck
 // fetch can hold up the next, not the UI. Worst case per fetch is about 20 s.
@@ -303,6 +305,7 @@ void calibrateNeutral();
 void loadDisplaySettings();
 void saveDisplaySettings();
 void setBrightness(int level);
+void flushBrightnessSave(bool now);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -635,7 +638,10 @@ uint32_t nextGlance      = 900;
 uint32_t nextAutoPage    = PAGE_AUTO_INTERVAL_MS;
 uint8_t  brightnessLevel = BRIGHTNESS_DEFAULT;
 uint32_t brightnessBannerUntil = 0;
-uint32_t lastSerialMs    = 0;
+uint8_t  savedBrightness       = BRIGHTNESS_DEFAULT;  // level in /display.json
+bool     brightnessSavePending = false;
+uint32_t brightnessChangedMs   = 0;
+uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
@@ -1867,9 +1873,23 @@ void loadDisplaySettings() {
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
   ledcWrite(LCD_BL, brightnessLevel);
-  saveDisplaySettings();
+  brightnessSavePending = true;           // written by flushBrightnessSave()
+  brightnessChangedMs   = millis();
   brightnessBannerUntil = millis() + 1200;
   Serial.printf("Brightness: %u/255\n", brightnessLevel);
+}
+
+// Writes a pending brightness change once the drag has been still for
+// BRIGHTNESS_SAVE_DELAY_MS, or at once when `now` is set. Skips the write
+// when the level ended where it started.
+void flushBrightnessSave(bool now) {
+  if (!brightnessSavePending) return;
+  if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
+  brightnessSavePending = false;
+  if (brightnessLevel == savedBrightness) return;
+  saveDisplaySettings();
+  savedBrightness = brightnessLevel;
+  Serial.printf("Brightness saved: %u/255\n", brightnessLevel);
 }
 
 // ── Interaction handlers ──────────────────────────────────
@@ -2204,6 +2224,7 @@ void setup() {
 
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
+  savedBrightness = brightnessLevel;
   ledcWrite(LCD_BL, brightnessLevel);
 
   // Verify the portal's HTML is actually on the filesystem. Without it AWM
@@ -2252,6 +2273,9 @@ void loop() {
   // AWM must service DNS + HTTP promptly, and the network pages are
   // meaningless while the radio is in AP mode.
   if (wifiManager.isPortalActive()) {
+    // Save now, long before anyone can press "erase" in the portal, so a
+    // factory reset still removes /display.json.
+    flushBrightnessSave(true);
     servicePortal();
     return;
   }
@@ -2263,6 +2287,7 @@ void loop() {
 
   readSensors();
   readTouch();
+  flushBrightnessSave(false);
 
   // A touch-hold inside readTouch() may have just opened the portal.
   if (wifiManager.isPortalActive()) return;
