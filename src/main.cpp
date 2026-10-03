@@ -184,9 +184,10 @@ static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
-// Background fetch task. Stack: HTTPS (mbedTLS) handshakes need a lot of it.
-// Start generous and trim to the measured high-water mark plus a margin.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 12288;
+// Background fetch task. Stack sized from the measured high-water mark: an
+// HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
+// If "[net] ... stack free" ever drops below 2048 bytes, raise this.
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
