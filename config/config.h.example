@@ -29,9 +29,9 @@
 
 // ── Mounting location ───────────────────────────────────────
 // Which side of the monitor your Buddy is mounted on. The printed holder
-// works on either side; MOUNT_RIGHT turns the screen, touch and eye tilt
-// by 180° so everything reads the right way up.
-#define MOUNTING_LOCATION MOUNT_LEFT   // MOUNT_LEFT or MOUNT_RIGHT
+// works on either side; RIGHT turns the screen, touch and eye tilt by 180°
+// so everything reads the right way up.
+#define MOUNTING_LOCATION LEFT   // LEFT or RIGHT (capitals)
 
 // ── Colour theme ────────────────────────────────────────────
 //   0 = Classic   (white on black, the original look)

@@ -116,16 +116,22 @@
   #include "config.h.example"
 #endif
 
-// Mounting location (config.h). Older config.h copies predate the setting,
-// so default to the original left-side orientation.
-#define MOUNT_LEFT  0
-#define MOUNT_RIGHT 1
+// Mounting location (config.h): LEFT or RIGHT. The word is turned into a
+// number by token pasting (RIGHT -> MOUNT_ID_RIGHT), so LEFT and RIGHT are
+// never defined as macros of their own and can't clash with library names.
+// Older config.h copies predate the setting, so default to LEFT.
 #ifndef MOUNTING_LOCATION
-  #define MOUNTING_LOCATION MOUNT_LEFT
+  #define MOUNTING_LOCATION LEFT
 #endif
-#if MOUNTING_LOCATION != MOUNT_LEFT && MOUNTING_LOCATION != MOUNT_RIGHT
-  #error "MOUNTING_LOCATION in config/config.h must be MOUNT_LEFT or MOUNT_RIGHT"
+#define MOUNT_ID_LEFT    1
+#define MOUNT_ID_RIGHT   2
+#define MOUNT_CAT_(a, b) a##b
+#define MOUNT_CAT(a, b)  MOUNT_CAT_(a, b)
+#define MOUNT_ID         MOUNT_CAT(MOUNT_ID_, MOUNTING_LOCATION)
+#if MOUNT_ID != MOUNT_ID_LEFT && MOUNT_ID != MOUNT_ID_RIGHT
+  #error "MOUNTING_LOCATION in config/config.h must be LEFT or RIGHT"
 #endif
+#define MOUNT_IS_RIGHT   (MOUNT_ID == MOUNT_ID_RIGHT)
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -582,8 +588,8 @@ static const uint16_t FG = RGB565_WHITE;
 static const uint16_t BG = RGB565_BLACK;
 // Landscape, turned 180° for a right-side mount. Drives the display and the
 // touch mapping; TILT_SIGN flips the IMU tilt to match.
-static const uint8_t ROTATION  = (MOUNTING_LOCATION == MOUNT_RIGHT) ? 3 : 1;
-static const float   TILT_SIGN = (MOUNTING_LOCATION == MOUNT_RIGHT) ? -1.0f : 1.0f;
+static const uint8_t ROTATION  = MOUNT_IS_RIGHT ? 3 : 1;
+static const float   TILT_SIGN = MOUNT_IS_RIGHT ? -1.0f : 1.0f;
 
 Arduino_DataBus *bus     = new Arduino_HWSPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI);
 Arduino_GFX    *display  = new Arduino_ST7789(bus, LCD_RST, 0, false, 172, 320, 34, 0, 34, 0);
