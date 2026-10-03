@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Print or holder questions, and showing off your build
+    url: https://makerworld.com/en/models/3241960-monitor-buddy
+    about: Questions about printing the holder, and pictures of your Buddy, are best posted on MakerWorld.
+  - name: Troubleshooting
+    url: https://github.com/IdefixRC/Monitor-Buddy#411-troubleshooting
+    about: The most common problems and their fixes, in README §4.11.
