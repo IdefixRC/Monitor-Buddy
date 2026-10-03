@@ -1,0 +1,123 @@
+name: Bug report
+description: Something on your Monitor-Buddy doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Before you start, check [Troubleshooting (README §4.11)](https://github.com/IdefixRC/Monitor-Buddy#411-troubleshooting): the most common problems are answered there.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How do we make it happen on our Buddy?
+      placeholder: |
+        1. Swipe to the weather page
+        2. Unplug the router
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Monitor-Buddy?
+      options:
+        - Face / expressions
+        - Clock or date
+        - Weather
+        - Moon phase
+        - Stock ticker
+        - GitHub stats
+        - Touch and gestures
+        - Brightness
+        - Wi-Fi setup page
+        - Building or flashing the firmware
+        - Holder / print fit
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version
+      description: The version from the release ZIP name, e.g. `Monitor-Buddy-1.1.0.zip` is `1.1.0`. If you cloned the repo, give the commit (`git log -1 --oneline`).
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed from
+      options:
+        - Release ZIP
+        - git clone
+    validations:
+      required: true
+
+  - type: dropdown
+    id: board
+    attributes:
+      label: Board
+      description: The firmware is written for the Waveshare ESP32-C6-Touch-LCD-1.47 only. Other boards aren't supported, but reports are still welcome.
+      options:
+        - Waveshare ESP32-C6-Touch-LCD-1.47
+        - Other (please say which in the additional context)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mounting
+    attributes:
+      label: Mounted on
+      description: The `MOUNTING_LOCATION` setting in `config/config.h`.
+      options:
+        - Left (LEFT, the default)
+        - Right (RIGHT)
+
+  - type: input
+    id: flashing-setup
+    attributes:
+      label: Computer used for flashing
+      description: Only needed for build or flashing problems. Your OS, and the VS Code extension you use.
+      placeholder: "Windows 11, pioarduino IDE extension"
+
+  - type: textarea
+    id: serial-log
+    attributes:
+      label: Serial log
+      description: |
+        If you can, connect the Buddy to your computer and open the serial monitor (`pio device monitor`, or the plug icon in the pioarduino toolbar), then reproduce the problem and paste the output here.
+        The status line ends with `up=<seconds> rst=<reason>`: if `up=` drops back to a small number, the Buddy restarted, and `rst=` says why.
+        Remove anything you consider private before posting, such as your network's IP addresses.
+      render: shell
+
+  - type: textarea
+    id: media
+    attributes:
+      label: Photos or screenshots
+      description: A photo of the screen often says more than a description. Drag images into this box.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might help, e.g. Wi-Fi signal strength, a setting you changed in `config/config.h`, or when it started.

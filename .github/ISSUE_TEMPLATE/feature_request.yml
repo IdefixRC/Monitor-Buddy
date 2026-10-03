@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an idea for Monitor-Buddy.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your idea related to a problem?
+      description: What's missing or annoying today? For example, "I always have to ... when ...".
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like to happen?
+      description: Describe the feature or change you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other ways to solve it, or workarounds you use now.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Sketches, screenshots, links to similar projects, or anything else that helps.
