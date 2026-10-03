@@ -1,5 +1,10 @@
 # Monitor-Buddy
 
+[![Version](https://img.shields.io/badge/version-1.1.0-4361ee)](https://github.com/IdefixRC/Monitor-Buddy/releases)
+[![Platform](https://img.shields.io/badge/platform-ESP32--C6-2ec27e?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-c6)
+[![Arduino](https://img.shields.io/badge/framework-Arduino-00979d?logo=arduino)](https://www.arduino.cc/)
+[![License](https://img.shields.io/badge/license-MIT-6c757d)](LICENSE)
+
 **A tiny friend for the side of your monitor.** It pulls faces at you, follows your movements with its eyes, and in its spare time tells you the weather, the date, the moon phase, your stock ticker, and your GitHub stats.
 
 <!-- SHOT: hero.jpg - Monitor-Buddy clipped to the right edge of a monitor, screen showing the animated face, taken slightly from the side so you can see the printed holder -->
