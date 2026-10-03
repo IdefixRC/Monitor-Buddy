@@ -2323,7 +2323,7 @@ void loop() {
   if (millis()-lastSerialMs > 1200) {
     lastSerialMs = millis();
     Serial.print("app="); Serial.print(currentApp);
-    Serial.print(" mood="); Serial.println(faceMood);
+    Serial.print(" mood="); Serial.print(faceMood);
     Serial.print(" wifi="); Serial.println(wifiManager.isConnected() ? "up" : "down");
   }
   delay(24);
