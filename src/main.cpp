@@ -92,6 +92,7 @@
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <esp_sntp.h>
+#include <esp_system.h>
 #include <math.h>
 #include <string.h>
 
@@ -2333,7 +2334,10 @@ void loop() {
     lastSerialMs = millis();
     Serial.print("app="); Serial.print(currentApp);
     Serial.print(" mood="); Serial.print(faceMood);
-    Serial.print(" wifi="); Serial.println(wifiManager.isConnected() ? "up" : "down");
+    Serial.print(" wifi="); Serial.print(wifiManager.isConnected() ? "up" : "down");
+    // Uptime and why the chip last started, so a restart nobody watched still
+    // shows up the next time a serial monitor is opened.
+    Serial.printf(" up=%lus rst=%d\n", (unsigned long)(millis() / 1000), (int)esp_reset_reason());
   }
   delay(24);
 }
