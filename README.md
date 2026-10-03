@@ -210,7 +210,14 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | Double-tap                                      | Stop or restart the automatic page scrolling                                                     |
 | Tilt or move the Buddy                          | The eyes follow the motion                                                                       |
 | Hold the screen still for about 3 seconds       | Open the Wi-Fi setup hotspot. Hold again for 3 seconds to close it.                              |
-| **Factory reset**: unplug and plug back in. As soon as the screen shows **CONNECTING** (or **WIFI SETUP**), press the **BOOT** button within 2 seconds and hold it for 5 seconds or more | Erases the saved Wi-Fi and the brightness, then restarts into Wi-Fi setup. The **erase** button on the setup page does the same. Don't hold BOOT while plugging in: that starts the chip's download mode instead. |
+| **Factory reset**: open the Wi-Fi setup page (hold the screen for 3 seconds) and press **erase** | Erases the saved Wi-Fi and the brightness, then restarts into Wi-Fi setup.                       |
+
+The board also has a **BOOT** button, next to **RESET**. Check the labels, because RESET just restarts the Buddy. BOOT only counts in a short window while the Buddy starts up, not while it is running. Unplug and plug back in, and as soon as the screen shows **CONNECTING** (or **WIFI SETUP**), press BOOT within 2 seconds:
+
+- **Hold 2 to 5 seconds**: opens the Wi-Fi setup hotspot.
+- **Hold 5 seconds or more**: forgets the saved Wi-Fi and restarts into Wi-Fi setup. Brightness is kept; use **erase** on the setup page to reset that too.
+
+Don't hold BOOT while plugging in: that starts the chip's download mode instead.
 
 Your `config/config.h` settings are built into the firmware, so a factory reset doesn't touch them.
 
@@ -222,7 +229,7 @@ Your `config/config.h` settings are built into the firmware, so a factory reset 
 | Upload starts then fails                    | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                              |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
 | Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again.                                             |
-| Screen too dark to read                     | Swipe up a few times to raise the brightness, or do a factory reset (see [4.10](#410-everyday-controls)).                                                               |
+| Screen too dark to read                     | Swipe up a few times to raise the brightness, or press **erase** on the setup page (see [4.10](#410-everyday-controls)).                                                 |
 | Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                   |
 | Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                               |
 

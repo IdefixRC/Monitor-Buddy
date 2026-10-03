@@ -50,9 +50,10 @@
 //  On demand: PRESS AND HOLD ANYWHERE ON THE TOUCH SCREEN for
 //  ~2.5 s. Works from any page, at any time.
 //
-//  Hardware fallback: within the first 2 s after power-up, press
-//  and hold the BOOT button (GPIO9): 2–5 s opens the portal,
-//  >= 5 s erases the stored credentials and reboots.
+//  Hardware fallback: within 2 s of the screen showing CONNECTING
+//  (or WIFI SETUP), press and hold the BOOT button (GPIO9): 2–5 s
+//  opens the portal, >= 5 s erases the stored Wi-Fi (only
+//  /wifi.json) and reboots. BOOT is not read once the Buddy runs.
 //  (Do NOT hold BOOT *through* reset — that enters USB download
 //  mode. Power up first, then press.)
 //
@@ -2203,9 +2204,9 @@ void setup() {
 
   // Note: deliberately NOT calling setProtectedJsons().
   // Protecting /wifi.json would make the portal's "erase credentials"
-  // button and the >=5 s button hold do nothing. Protecting
-  // /display.json would keep a near-black brightness across a factory
-  // reset, which is the case that reset is meant to recover.
+  // button do nothing. Protecting /display.json would keep a near-black
+  // brightness across the portal's erase, which is the case that reset is
+  // meant to recover. (The >=5 s BOOT hold only ever deletes /wifi.json.)
 
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
