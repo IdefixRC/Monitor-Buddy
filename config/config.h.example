@@ -17,6 +17,7 @@
 //  will not load data until you add a real key).
 //
 //  A few entries are worth setting:
+//   Mount:   Left or right side of your monitor.
 //   Github:  Replace the username with your own.
 //   Time:    Set your IANA timezone name and your UTC offset.
 //   Stocks:  Set a US stock ticker and your free Finnhub API key
@@ -25,6 +26,12 @@
 //   Theme:   Pick one of the five colour themes.
 //   Pages:   Toggle each page on/off.
 // ============================================================
+
+// ── Mounting location ───────────────────────────────────────
+// Which side of the monitor your Buddy is mounted on. The printed holder
+// works on either side; RIGHT turns the screen, touch and eye tilt by 180°
+// so everything reads the right way up.
+#define MOUNTING_LOCATION LEFT   // LEFT or RIGHT (capitals)
 
 // ── Colour theme ────────────────────────────────────────────
 //   0 = Classic   (white on black, the original look)

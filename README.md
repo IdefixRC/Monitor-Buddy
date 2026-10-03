@@ -59,6 +59,8 @@ There are two versions of the mount. Pick one:
 
 PLA or PETG is recommended. Only minor supports needed.
 
+Both versions work on either side of your monitor: for the right side, mount the holder turned upside down and set `MOUNTING_LOCATION` to `RIGHT` (see [4.5](#45-personalize-your-buddy)) so the screen reads the right way up.
+
 ### b) Slide the board into the holder
 
 ![Sliding the board into the holder](docs/images/assembly-slide-in.jpg)
@@ -140,6 +142,7 @@ Open `config/config.h` and change these `#define` lines:
 
 | Setting                        | What to put                                                                                                                   |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `MOUNTING_LOCATION`            | `LEFT` or `RIGHT`, the side of the monitor your Buddy is mounted on                                                           |
 | `THEME`                        | `0` to `4`, see the comments above the line                                                                                   |
 | `GITHUB_USER`                  | your GitHub username                                                                                                          |
 | `TIMEZONE`                     | your IANA timezone name, for example `"Europe/Berlin"` ([list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |

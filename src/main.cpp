@@ -116,6 +116,22 @@
   #include "config.h.example"
 #endif
 
+// Mounting location (config.h): LEFT or RIGHT. The word is turned into a
+// number by token pasting (RIGHT -> MOUNT_ID_RIGHT), so LEFT and RIGHT are
+// never defined as macros of their own and can't clash with library names.
+// Older config.h copies predate the setting, so default to LEFT.
+#ifndef MOUNTING_LOCATION
+  #define MOUNTING_LOCATION LEFT
+#endif
+#define MOUNT_ID_LEFT    1
+#define MOUNT_ID_RIGHT   2
+#define MOUNT_CAT_(a, b) a##b
+#define MOUNT_CAT(a, b)  MOUNT_CAT_(a, b)
+#define MOUNT_ID         MOUNT_CAT(MOUNT_ID_, MOUNTING_LOCATION)
+#if MOUNT_ID != MOUNT_ID_LEFT && MOUNT_ID != MOUNT_ID_RIGHT
+  #error "MOUNTING_LOCATION in config/config.h must be LEFT or RIGHT"
+#endif
+#define MOUNT_IS_RIGHT   (MOUNT_ID == MOUNT_ID_RIGHT)
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -525,9 +541,9 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
       mappedX = _touchW - 1 - scaleTouchAxis(rawX, edge, _touchW > edge ? _touchW - 1 - edge : _touchW - 1, _touchW);
       mappedY = _touchH - 1 - scaleTouchAxis(rawY, edge, _touchH > edge ? _touchH - 1 - edge : _touchH - 1, _touchH);
       break;
-    case 3:
+    case 3:  // landscape turned 180° (right-side mount): case 1 with both axes flipped
       mappedX = _touchW - 1 - scaleTouchAxis(rawY, edge, _touchW > edge ? _touchW - 1 - edge : _touchW - 1, _touchW);
-      mappedY = scaleTouchAxis(rawX, edge, _touchH > edge ? _touchH - 1 - edge : _touchH - 1, _touchH);
+      mappedY = _touchH - 1 - scaleTouchAxis(rawX, edge, _touchH > edge ? _touchH - 1 - edge : _touchH - 1, _touchH);
       break;
     default:  // 0 — portrait
       mappedX = scaleTouchAxis(rawX, edge, _touchW > edge ? _touchW - 1 - edge : _touchW - 1, _touchW);
@@ -570,7 +586,10 @@ static const uint8_t FACE_MOOD_COUNT = 9;
 static const uint32_t PAGE_AUTO_INTERVAL_MS = 8000;
 static const uint16_t FG = RGB565_WHITE;
 static const uint16_t BG = RGB565_BLACK;
-static const uint8_t ROTATION = 1;
+// Landscape, turned 180° for a right-side mount. Drives the display and the
+// touch mapping; TILT_SIGN flips the IMU tilt to match.
+static const uint8_t ROTATION  = MOUNT_IS_RIGHT ? 3 : 1;
+static const float   TILT_SIGN = MOUNT_IS_RIGHT ? -1.0f : 1.0f;
 
 Arduino_DataBus *bus     = new Arduino_HWSPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI);
 Arduino_GFX    *display  = new Arduino_ST7789(bus, LCD_RST, 0, false, 172, 320, 34, 0, 34, 0);
@@ -2259,8 +2278,8 @@ void loop() {
 
   float tx=0.0f, ty=0.0f;
   if (imuReady) {
-    tx = clampFloat(-(filteredAy-restAy)*2.2f, -1.0f, 1.0f);
-    ty = clampFloat( (filteredAx-restAx)*2.2f, -1.0f, 1.0f);
+    tx = clampFloat(-TILT_SIGN*(filteredAy-restAy)*2.2f, -1.0f, 1.0f);
+    ty = clampFloat( TILT_SIGN*(filteredAx-restAx)*2.2f, -1.0f, 1.0f);
   } else {
     tx = sin(millis()*0.0014f)*0.25f;
     ty = cos(millis()*0.0011f)*0.16f;
