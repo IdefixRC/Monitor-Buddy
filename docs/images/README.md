@@ -17,5 +17,4 @@ Photos: `.jpg`. Screenshots: `.png`. Keep the long edge around 1200 to 1600 px.
 | `config-file.png` | VS Code explorer with `config/config.h.example` and `config/config.h` both visible, `config.h` open showing the settings. |
 | `config-defines.png` | `config/config.h` open at the `#define` block (THEME, GITHUB_USER, TIMEZONE, TICKER, STOCKKEY, LAT/LONG). |
 | `pio-toolbar.png` | The pioarduino status bar at the bottom of VS Code, with the checkmark (Build) and right-arrow (Upload) icons annotated. |
-| `pio-project-tasks.png` | pioarduino panel expanded: esp32-c6 > Platform > **Upload Filesystem Image** highlighted. |
 | `portal-phone.jpg` | A phone showing the Monitor-Buddy captive portal with a Wi-Fi network list. |

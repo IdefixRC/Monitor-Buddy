@@ -27,7 +27,7 @@ It is also genuinely useful when you swipe past the face:
 - **Left or right side** of your monitor: one setting turns the screen, touch and eye movement around for a right-side mount
 - **Swipe** left and right to move between pages, up and down to adjust brightness (remembered across restarts), **double-tap** to stop the auto-scroll, **tap the face** to change expression (all controls in [4.10](#410-everyday-controls))
 - **Stays smooth on bad Wi-Fi**: weather, stock and GitHub data load in the background, so the face and touch never wait for the network
-- **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done.
+- **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done. The setup page follows your phone's language (English, Spanish or German).
 
 The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-printed clip**. **No soldering**, no breadboard, and no wiring required. You print the holder, slide the board in, and plug in a USB-C cable and Monitor-Buddy is ready to rock.
 
@@ -179,17 +179,13 @@ Along the top bar of VS Code, pioarduino adds a row of small icons:
 
 If the upload fails to start, hold the **BOOT** button on the board, click Upload again, and release BOOT once you see it connecting. Do not hold BOOT through a power cycle, that puts the chip into a different download mode.
 
-### 4.8 Portal files (uploaded automatically)
+### 4.8 Updating to a new version
 
-The Wi-Fi setup page lives in the `data/` folder, on a separate flash partition from the firmware. **You don't need to upload it by hand.** `scripts/auto_upload_fs.py` flashes it on your first firmware upload, and again whenever a file in `data/` changes — while skipping routine uploads so it doesn't wipe your saved Wi-Fi credentials.
+1. Download and extract the new release as in [4.3](#43-get-the-monitor-buddy-code), into a new folder.
+2. Copy your `config/config.h` from the old folder into the new one.
+3. Open the new folder and click **Upload** as in [4.7](#47-build-and-upload-the-firmware).
 
-![Upload Filesystem Image task](docs/images/pio-project-tasks.png)
-
-If the Buddy ever boots showing **PORTAL FILES MISSING** on screen (and the setup page returns an error), the automatic upload did not run. Force it manually:
-
-1. Open the **pioarduino** panel from the left sidebar (the pioarduino icon).
-2. Expand **esp32-c6 > Platform**.
-3. Click **Upload Filesystem Image**.
+Your saved Wi-Fi and brightness stay on the board, so the Buddy reconnects by itself after the update. Coming from 1.0.2 or older? The old setup page is removed on the first start, and from then on the setup page follows your phone's language.
 
 ### 4.9 First boot: connect it to Wi-Fi
 
@@ -224,8 +220,6 @@ Your `config/config.h` settings are built into the firmware, so a factory reset 
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | No port shown / Upload can't find the board | Try a different USB-C cable. Many are charge-only. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board). |
 | Upload starts then fails                    | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                              |
-| Screen shows **PORTAL FILES MISSING**       | The automatic filesystem upload did not run (see [4.8](#48-portal-files-uploaded-automatically)). Run **Upload Filesystem Image** manually.                              |
-| Setup page shows an error 500               | Same cause. Upload the filesystem image.                                                                                                                                 |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
 | Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again.                                             |
 | Screen too dark to read                     | Swipe up a few times to raise the brightness, or do a factory reset (see [4.10](#410-everyday-controls)).                                                               |
@@ -240,7 +234,7 @@ Monitor-Buddy builds on the work of others:
 
 - **[schematik.io](https://schematik.io/)** Tiny ESP DeskBuddy, the starting-point idea.
 - **[EDISON-SCIENCE-CORNER / DESKBUDDY-1.0](https://github.com/EDISON-SCIENCE-CORNER/DESKBUDDY-1.0)** for additional face designs.
-- **[AyresWiFiManager](https://github.com/ayresnet/AyresWiFiManager)** for the captive-portal Wi-Fi setup.
+- **[AyresWiFiManager](https://github.com/ayresnet/AyresWiFiManager)** for the captive-portal Wi-Fi setup. Monitor-Buddy uses the [IdefixRC fork](https://github.com/IdefixRC/AyresWiFiManager), which adds Arduino core 3.x support, the multilingual setup page and a time sync that never blocks.
 
 Contributors:
 

@@ -27,7 +27,7 @@
 //
 //  1) Platform, board, partition table (huge_app.csv) and the
 //     three libraries (Arduino_GFX, ArduinoJson v7, AyresWiFiManager
-//     2.0.2) are all declared in platformio.ini and installed
+//     2.5.0) are all declared in platformio.ini and installed
 //     automatically on the first build. Nothing to install by hand.
 //     Note: AWM internally uses the older StaticJsonDocument /
 //     DynamicJsonDocument names. Under ArduinoJson 7 those still
@@ -35,17 +35,10 @@
 //     the build succeeds. Do not "fix" them by downgrading to v6,
 //     that would break this sketch's JsonDocument usage.
 //
-//  2) UPLOAD THE PORTAL HTML TO LittleFS. This is mandatory.
-//     AWM serves the portal from the filesystem; if /index.html
-//     is missing the portal answers HTTP 500 and you cannot
-//     configure anything. index.html, success.html and error.html
-//     live in the data/ folder. Run the PlatformIO task
-//     "Upload Filesystem Image" once (PlatformIO panel > esp32-c6 >
-//     Platform > Upload Filesystem Image, or: pio run -t uploadfs).
-//     After that, scripts/auto_upload_fs.py re-uploads it
-//     automatically whenever data/ changes, so a normal Upload is
-//     enough. This sketch checks for /index.html at boot and shows a
-//     "PORTAL FILES MISSING" warning on the LCD if it is absent.
+//  2) There is no filesystem image to upload. The Wi-Fi setup
+//     pages are built into AyresWiFiManager and follow the phone's
+//     language (English, Spanish, German). Saved Wi-Fi and
+//     brightness live on LittleFS and survive firmware updates.
 //
 // ------------------------------------------------------------
 //  HOW TO CONFIGURE WI-FI
@@ -170,8 +163,9 @@
 #define AWM_BUTTON_PIN  9   // onboard BOOT button, active LOW
 
 // Wi-Fi retry behaviour once we are running.
-#define WIFI_RETRY_INTERVAL_MS  60000UL  // how often to attempt a reconnect
-#define WIFI_RETRY_WINDOW_MS     2000UL  // how long each attempt may block the UI
+// AWM runs the reconnect in the background, so neither value blocks the UI.
+#define WIFI_RETRY_INTERVAL_MS  60000UL  // wait after a failed attempt
+#define WIFI_RETRY_WINDOW_MS    15000UL  // how long one attempt may take to connect
 
 // Hold the touchscreen this long to open the portal on demand.
 #define TOUCH_PORTAL_HOLD_MS     2500UL
@@ -613,7 +607,6 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
-bool     portalFilesOk   = false;   // /index.html present in LittleFS?
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
 volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
@@ -645,7 +638,6 @@ uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
-uint32_t lastWifiRetryMs    = 0;
 uint32_t lastNtpSyncMs      = 0;
 uint32_t lastNtpAttemptMs    = 0;
 float restAx    = 0.0f;
@@ -982,12 +974,8 @@ void openSetupPortal(const char *reason) {
 // offset directly to the synced epoch before returning it via time()/localtime().
 // DST is set to 0 (add 3600 if your region is currently on summer time).
 //
-// NOTE (V2): AyresWiFiManager also runs its own NTP sync on connect, but it
-// calls configTime(0, 0, ...) — i.e. plain UTC. That is harmless here because
-// this function runs afterwards and re-issues configTime() with the local
-// offset, and because the on-screen clock is millis()-driven once seeded.
-// The 6-hour resync below re-applies the local offset periodically so an AWM
-// reconnect can never leave the displayed clock on UTC.
+// AyresWiFiManager's own time sync is switched off in setup()
+// (setTimeSync(false)), so this is the only code that touches the clock.
 
 void syncNTP() {
   if (ntpSynced) return;
@@ -1769,14 +1757,6 @@ void drawPortalScreen() {
   // Blinking "portal is live" dot, mirrors AWM's BLINK_SLOW LED state.
   if ((millis() / 500) % 2 == 0) gfx->fillCircle(SCREEN_W-16, 12, 5, rgb(0,220,120));
 
-  if (!portalFilesOk) {
-    centeredTextColor("SETUP FILES", 34, 3, rgb(255,90,90));
-    centeredTextColor("MISSING", 64, 3, rgb(255,90,90));
-    centeredText("Upload index.html", 104, 2);
-    centeredText("to LittleFS", 130, 2);
-    return;
-  }
-
   // 1) Wi-Fi network name (large) -- all centred
   centeredTextColor("1  JOIN THIS WIFI", 32, 1, rgb(150,160,175));
   centeredTextColor(AP_SSID, 44, 2, FG);
@@ -1836,15 +1816,12 @@ void servicePortal() {
 }
 
 // ── Wi-Fi upkeep while running ────────────────────────────
-// AWM's reintentarConexionSiNecesario() blocks for up to
-// reconnectAttemptMs, so it is rate-limited and the attempt window is
-// kept short (2 s) to avoid visibly freezing the animation.
+// AWM's reintentarConexionSiNecesario() is a non-blocking state machine
+// with its own backoff (setReconnectBackoffMs). It only advances when
+// called, so it runs on every loop pass.
 
 void maintainWifi() {
   if (wifiManager.isPortalActive()) return;
-  if (wifiManager.isConnected()) return;
-  if (millis() - lastWifiRetryMs < WIFI_RETRY_INTERVAL_MS) return;
-  lastWifiRetryMs = millis();
   if (!wifiConfigured()) return;          // nothing to reconnect to
   wifiManager.reintentarConexionSiNecesario();
 }
@@ -2218,9 +2195,11 @@ void setup() {
   wifiManager.enableButtonPortal(true);          // BOOT button 2–5 s opens portal
   wifiManager.setLedAuto(true);
 
-  // Keep reconnect attempts short so they don't stall the animation.
   wifiManager.setReconnectAttemptMs(WIFI_RETRY_WINDOW_MS);
   wifiManager.setReconnectBackoffMs(WIFI_RETRY_INTERVAL_MS);
+
+  // syncNTP() owns the clock and the timezone; AWM stays out of it.
+  wifiManager.setTimeSync(false);
 
   // Note: deliberately NOT calling setProtectedJsons().
   // Protecting /wifi.json would make the portal's "erase credentials"
@@ -2233,15 +2212,13 @@ void setup() {
   savedBrightness = brightnessLevel;
   ledcWrite(LCD_BL, brightnessLevel);
 
-  // Verify the portal's HTML is actually on the filesystem. Without it AWM
-  // serves HTTP 500 and the user has no way to enter credentials.
-  portalFilesOk = LittleFS.exists("/index.html");
-  if (!portalFilesOk) {
-    Serial.println("WARNING: /index.html not found in LittleFS.");
-    Serial.println("         Upload the data/ folder: PlatformIO panel >");
-    Serial.println("         esp32-c6 > Platform > Upload Filesystem Image.");
-    drawBootMessage("FILES MISSING", "upload index.html", "to LittleFS");
-    delay(3000);
+  // Firmware up to 1.0.2 uploaded its own English-only setup pages to
+  // LittleFS. AWM serves those in preference to its built-in, multilingual
+  // pages, so remove them. /wifi.json and /display.json stay.
+  for (const char *page : {"/index.html", "/success.html", "/error.html"}) {
+    if (LittleFS.exists(page) && LittleFS.remove(page)) {
+      Serial.printf("Removed old setup page %s\n", page);
+    }
   }
 
   if (wifiManager.tieneCredenciales()) {
