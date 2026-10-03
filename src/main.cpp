@@ -2123,6 +2123,12 @@ void calibrateNeutral() {
 
 void setup() {
   Serial.begin(115200);
+  // Never wait on the USB serial. Once a serial monitor has read the port,
+  // the core treats it as connected; when the monitor closes, every print
+  // then blocks for up to 2 s, slowing the loop to a crawl (no blinking,
+  // touch ignored) until the next reset. With no wait, output nobody reads
+  // is simply dropped.
+  Serial.setTxTimeoutMs(0);
   delay(150);
   Serial.println("ESP32-C6 Monitor-Buddy starting");
   netMutex = xSemaphoreCreateMutex();
