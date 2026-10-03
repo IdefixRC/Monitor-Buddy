@@ -169,11 +169,27 @@
 static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
 
-static constexpr uint32_t HTTP_TIMEOUT_MS              = 1500UL;
+// Fetch timeouts. Fetches run in netTask, so these bound how long one stuck
+// fetch can hold up the next, not the UI. Worst case per fetch is about 20 s.
+static constexpr uint32_t HTTP_TIMEOUT_MS         = 5000UL;  // response wait
+static constexpr int32_t  HTTP_CONNECT_TIMEOUT_MS = 4000;    // TCP connect (lib default 5 s)
+static constexpr uint32_t TLS_HANDSHAKE_TIMEOUT_S = 8;       // TLS (lib default 120 s)
 static constexpr uint32_t NTP_RETRY_INTERVAL_MS        = 60000UL;
+// After a failed fetch, retry after FETCH_RETRY_MIN_MS, doubling each further
+// failure up to FETCH_RETRY_MS (GitHub: GITHUB_RETRY_MAX_MS, to stay well under
+// its 60 calls/hour unauthenticated limit). A success resets the backoff.
+static constexpr uint32_t FETCH_RETRY_MIN_MS           = 10000UL;
 static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
+static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
+
+// Background fetch task. Stack sized from the measured high-water mark: an
+// HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
+// If "[net] ... stack free" ever drops below 2048 bytes, raise this.
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
+static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
+static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
 // ── Pin definitions ────────────────────────────────────────
 #define LCD_BL    23
@@ -267,7 +283,6 @@ void readSensors();
 void readTouch();
 void updateFaceTimers();
 void updateAutoPage();
-void updateNetworkPages();
 void calibrateNeutral();
 void loadDisplaySettings();
 void saveDisplaySettings();
@@ -576,13 +591,10 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
-bool     weatherValid    = false;
-bool     stockValid      = false;
-bool     githubValid     = false;
 bool     portalFilesOk   = false;   // /index.html present in LittleFS?
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
-uint8_t  currentApp      = 0;   // ID of the page currently shown (PAGE_*)
+volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
 uint8_t  pageOrder[APP_COUNT];  // enabled page IDs, built from SHOW_* at boot
 uint8_t  pageCount       = 0;   // how many pages are enabled
 uint8_t  currentPageIdx  = 0;   // index into pageOrder[] of the current page
@@ -608,12 +620,6 @@ uint32_t lastSerialMs    = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
 int32_t  clockStartDays     = 0;   // days-from-civil at last clock seed (NTP or compile)
-uint32_t weatherUpdatedAt   = 0;
-uint32_t weatherAttemptedAt = 0;
-uint32_t stockUpdatedAt     = 0;
-uint32_t stockAttemptedAt   = 0;
-uint32_t githubUpdatedAt    = 0;
-uint32_t githubAttemptedAt  = 0;
 uint32_t lastWifiRetryMs    = 0;
 uint32_t lastNtpSyncMs      = 0;
 uint32_t lastNtpAttemptMs    = 0;
@@ -627,19 +633,37 @@ float faceGlanceY  = 0.0f;
 float faceTargetX  = 0.0f;
 float faceTargetY  = 0.0f;
 float pressPulse   = 0.0f;
-int   weatherTempF    = 0;
-int   weatherHumidity = 0;
-int   weatherWindMph  = 0;
-int   weatherCode     = -1;
-bool  weatherIsDay    = true;
-String weatherLabel   = "WAITING";
-float  stockPrice = 0.0f;
-float  stockOpen  = 0.0f;
-float  stockHigh  = 0.0f;
-float  stockLow   = 0.0f;
-String stockTime  = "";
-int githubFollowers = 0;
-int githubRepos     = 0;
+
+// ── Network data ──────────────────────────────────────────
+// Fetch results live in netShared, written only after a successful fetch and
+// only under netMutex. Once per frame the loop copies netShared into netView,
+// and the draw functions read netView only, so a frame never mixes old and new
+// values. Plain values only (no String), so a copy never touches the heap.
+struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
+struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
+struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
+struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+
+NetData           netShared = {};
+NetData           netView   = {};
+SemaphoreHandle_t netMutex  = nullptr;
+
+// Store one fetch result for the UI. The lock covers only this copy.
+template <typename T>
+void publishNetData(T &slot, const T &value) {
+  if (!netMutex) return;
+  xSemaphoreTake(netMutex, portMAX_DELAY);
+  slot = value;
+  xSemaphoreGive(netMutex);
+}
+
+// Copy the latest fetch results for this frame's drawing.
+void snapshotNetData() {
+  if (!netMutex) return;
+  xSemaphoreTake(netMutex, portMAX_DELAY);
+  netView = netShared;
+  xSemaphoreGive(netMutex);
+}
 
 // Themed colours, assigned once by applyTheme() from the THEME setting above.
 uint16_t COL_TIME, COL_SEC, COL_DATE_WD, COL_DATE_BIG, COL_VALUE, COL_LABEL;
@@ -899,10 +923,13 @@ void switchApp(int8_t delta) {
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return strlen(GITHUB_USER) > 0; }
 
-// Network fetches call this before doing anything. It is now a pure
-// status check — AWM owns connecting and reconnecting. It also refuses
-// to run while the captive portal is up, because during the portal the
-// radio is in AP / AP_STA mode and outbound requests would just stall.
+// Network fetches call this before doing anything. It is a pure status
+// check — AWM owns connecting and reconnecting. It refuses while the captive
+// portal is up, because the radio is then in AP / AP_STA mode.
+// Called from netTask as well as loop(): isPortalActive() only reads a bool,
+// and isConnected() reads WiFi.status() (task-safe) and writes AWM's
+// `connected` flag, which loop() also writes with the same derived value.
+// Benign; goes away with the AWM upgrade.
 bool ensureWifi() {
   if (wifiManager.isPortalActive()) return false;
   return wifiManager.isConnected();
@@ -1020,6 +1047,7 @@ bool fetchWeather() {
   if (!ensureWifi()) return false;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   String tzEncoded = String(TIMEZONE);
   tzEncoded.replace("/", "%2F");
   String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
@@ -1034,14 +1062,15 @@ bool fetchWeather() {
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
   if (err) return false;
-  weatherTempF     = (int)round(doc["current"]["temperature_2m"].as<float>());
-  weatherHumidity  = doc["current"]["relative_humidity_2m"].as<int>();
-  weatherWindMph   = (int)round(doc["current"]["wind_speed_10m"].as<float>());
-  weatherCode      = doc["current"]["weather_code"].as<int>();
-  weatherIsDay     = doc["current"]["is_day"].as<int>() != 0;
-  weatherLabel     = weatherCodeText(weatherCode);
-  weatherUpdatedAt = millis();
-  weatherValid     = true;
+  WeatherData w;
+  w.temp      = (int)round(doc["current"]["temperature_2m"].as<float>());
+  w.humidity  = doc["current"]["relative_humidity_2m"].as<int>();
+  w.wind      = (int)round(doc["current"]["wind_speed_10m"].as<float>());
+  w.code      = doc["current"]["weather_code"].as<int>();
+  w.isDay     = doc["current"]["is_day"].as<int>() != 0;
+  w.updatedAt = millis();
+  w.valid     = true;
+  publishNetData(netShared.weather, w);
   return true;
 }
 
@@ -1057,8 +1086,10 @@ bool fetchStock() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   if (!http.begin(client, "https://finnhub.io/api/v1/quote?symbol=" TICKER "&token=" STOCKKEY))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
@@ -1073,13 +1104,14 @@ bool fetchStock() {
   float last = doc["c"].as<float>();
   if (last <= 0.0f) return false;
 
-  stockPrice = last;                                     // "c"  → price (was closeText)
-  stockOpen  = doc["o"].as<float>();                     // "o"  → open
-  stockHigh  = doc["h"].as<float>();                     // "h"  → high
-  stockLow   = doc["l"].as<float>();                     // "l"  → low
-  stockTime  = String(doc["dp"].as<float>(), 2) + "%";   // "dp" → percent change
-  stockUpdatedAt = millis();
-  stockValid = true;
+  StockData s;
+  s.price     = last;                    // "c" → last price
+  s.open      = doc["o"].as<float>();    // "o" → open
+  s.high      = doc["h"].as<float>();    // "h" → high
+  s.low       = doc["l"].as<float>();    // "l" → low
+  s.updatedAt = millis();
+  s.valid     = true;
+  publishNetData(netShared.stock, s);
   return true;
 }
 
@@ -1090,8 +1122,10 @@ bool fetchGithub() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
   client.setInsecure();
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
   String url = String("https://api.github.com/users/") + GITHUB_USER;
   if (!http.begin(client, url)) return false;
   http.addHeader("User-Agent", "ESP32-C6-Touch-LCD");
@@ -1100,10 +1134,12 @@ bool fetchGithub() {
   DeserializationError err = deserializeJson(doc, http.getString());
   http.end();
   if (err) return false;
-  githubFollowers  = doc["followers"].as<int>();
-  githubRepos      = doc["public_repos"].as<int>();
-  githubUpdatedAt  = millis();
-  githubValid      = true;
+  GithubData g;
+  g.followers = doc["followers"].as<int>();
+  g.repos     = doc["public_repos"].as<int>();
+  g.updatedAt = millis();
+  g.valid     = true;
+  publishNetData(netShared.github, g);
   return true;
 }
 
@@ -1566,18 +1602,19 @@ bool drawWifiGate() {
 void drawWeather() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  if (!weatherValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
-  drawWeatherIcon(250, 66, weatherCode, weatherIsDay, COL_WICON);
+  const WeatherData &w = netView.weather;
+  if (!w.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  drawWeatherIcon(250, 66, w.code, w.isDay, COL_WICON);
   gfx->setTextSize(8); gfx->setTextColor(COL_TEMP);
-  gfx->setCursor(14, 34); gfx->print(weatherTempF);
+  gfx->setCursor(14, 34); gfx->print(w.temp);
   gfx->setTextSize(3); gfx->print(String(TEMP).startsWith("f") ? "F" : "C");
   gfx->setTextSize(2); gfx->setTextColor(COL_WSUB);
-  gfx->setCursor(14, 116); gfx->print(weatherLabel);
+  gfx->setCursor(14, 116); gfx->print(weatherCodeText(w.code));
   gfx->setTextColor(COL_LABEL);
-  gfx->setCursor(14,  140); gfx->print("H "); gfx->print(weatherHumidity); gfx->print("%");
+  gfx->setCursor(14,  140); gfx->print("H "); gfx->print(w.humidity); gfx->print("%");
   // Wind, right-aligned: same 14 px gap from the right edge as humidity has from the left.
   { String wu = String(WIND); wu.toUpperCase();
-    String windStr = String("W ") + weatherWindMph + wu;
+    String windStr = String("W ") + w.wind + wu;
     int windW = (int)windStr.length() * 12;          // size-2 chars are 12 px wide
     gfx->setCursor(SCREEN_W - 14 - windW, 140);
     gfx->print(windStr); }
@@ -1637,10 +1674,11 @@ void drawMoon() {
 void drawStock() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  if (!stockValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  const StockData &s = netView.stock;
+  if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
-  snprintf(pbuf, sizeof(pbuf), "$%.2f", stockPrice);
-  uint16_t priceCol = (stockPrice >= stockOpen) ? COL_PRICE_UP : COL_PRICE_DOWN;
+  snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
+  uint16_t priceCol = (s.price >= s.open) ? COL_PRICE_UP : COL_PRICE_DOWN;
   centeredTextColor(pbuf, 26, 6, priceCol);      // big price (up=green/down=red in semantic)
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
@@ -1653,9 +1691,9 @@ void drawStock() {
   gfx->print(TICKER);
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
-  gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(stockOpen, 2);
-  gfx->setCursor(150, 116); gfx->print("HIGH  "); gfx->print(stockHigh, 2);
-  gfx->setCursor(150, 140); gfx->print("LOW   "); gfx->print(stockLow, 2);
+  gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
+  gfx->setCursor(150, 116); gfx->print("HIGH  "); gfx->print(s.high, 2);
+  gfx->setCursor(150, 140); gfx->print("LOW   "); gfx->print(s.low, 2);
   drawPageDots();
 }
 
@@ -1669,7 +1707,8 @@ void drawGithub() {
     drawPageDots(); return;
   }
   if (drawWifiGate()) return;
-  if (!githubValid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+  const GithubData &g = netView.github;
+  if (!g.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
 
   // GitHub logo on the left, filling the vertical space.
   const int scale = 2;                          // 56x56 bitmap -> 112 px on screen
@@ -1680,13 +1719,13 @@ void drawGithub() {
   const int rx = 150;
   gfx->setTextColor(COL_GHNUM);
   gfx->setTextSize(6);
-  gfx->setCursor(rx, 22);  gfx->print(githubFollowers);
+  gfx->setCursor(rx, 22);  gfx->print(g.followers);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(2);
   gfx->setCursor(rx, 78);  gfx->print("FOLLOWERS");
   gfx->setTextColor(COL_VALUE);
   gfx->setTextSize(3);
-  gfx->setCursor(rx, 110); gfx->print(githubRepos);
+  gfx->setCursor(rx, 110); gfx->print(g.repos);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(1);
   gfx->setCursor(rx, 140); gfx->print("REPOS");
@@ -1958,41 +1997,90 @@ static uint8_t currentClockHour() {
   return (uint8_t)(sod / 3600UL);
 }
 
-void updateNetworkPages() {
-  // Nothing to fetch without a live STA connection.
-  if (!ensureWifi()) return;
+// ── Background fetch task ────────────────────────────────
+// Owns the fetch schedule so loop() never waits on the network:
+//   stock   every STOCK_REFRESH_MS, only while the stock page is shown
+//   weather prefetched every WEATHER_REFRESH_INTERVAL_MS
+//   GitHub  prefetched every GITHUB_REFRESH_INTERVAL_MS
+// A failed fetch backs off 10 s, 20 s, 40 s, ... (see FETCH_RETRY_MIN_MS). At
+// most one fetch per pass, so only one HTTPS connection exists at a time.
 
-  // Weather: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
-  bool weatherDue = !weatherValid || millis() - weatherUpdatedAt >= WEATHER_REFRESH_INTERVAL_MS;
-  bool weatherRetryOk = weatherAttemptedAt == 0 || millis() - weatherAttemptedAt >= FETCH_RETRY_MS;
-  if (currentApp == PAGE_WEATHER && weatherDue && weatherRetryOk) {
-    weatherAttemptedAt = millis();
-    fetchWeather();
-  }
+// Retry pacing for one data source.
+struct FetchPacer {
+  uint32_t attemptedAt = 0;                    // 0 = never attempted
+  uint32_t waitMs      = 0;                    // wait after attemptedAt before the next try
+  uint32_t failWaitMs  = FETCH_RETRY_MIN_MS;   // wait to use after the next failure
 
-  // Stock: fetch once when first shown, then refresh at most once per minute
-  // (STOCK_REFRESH_MS) while the page stays on screen. No market-hours gating.
-  else if (currentApp == PAGE_STOCK) {
-    bool shouldFetch = !stockValid
-            && (stockAttemptedAt == 0 || millis() - stockAttemptedAt >= STOCK_REFRESH_MS);
-    if (stockValid && millis() - stockAttemptedAt >= STOCK_REFRESH_MS) shouldFetch = true;
-    if (shouldFetch) {
-      stockAttemptedAt = millis();
-      if (fetchStock()) {
-        Serial.printf("Stock fetched — next in >= %lu s\n",
-                      (unsigned long)(STOCK_REFRESH_MS / 1000UL));
-      }
+  bool ready(uint32_t now) const { return attemptedAt == 0 || now - attemptedAt >= waitMs; }
+
+  // okWaitMs: wait after a success; maxFailWaitMs: backoff ceiling.
+  void record(uint32_t now, bool ok, uint32_t okWaitMs, uint32_t maxFailWaitMs) {
+    attemptedAt = now;
+    if (ok) {
+      waitMs     = okWaitMs;
+      failWaitMs = FETCH_RETRY_MIN_MS;
+    } else {
+      waitMs     = failWaitMs;
+      failWaitMs = (failWaitMs * 2 > maxFailWaitMs) ? maxFailWaitMs : failWaitMs * 2;
     }
   }
+};
 
-  // GitHub: full interval after a success; retry failed fetches after FETCH_RETRY_MS.
-  else if (currentApp == PAGE_GITHUB) {
-    bool githubDue = !githubValid || millis() - githubUpdatedAt >= GITHUB_REFRESH_INTERVAL_MS;
-    bool githubRetryOk = githubAttemptedAt == 0 || millis() - githubAttemptedAt >= FETCH_RETRY_MS;
-    if (githubDue && githubRetryOk) {
-      githubAttemptedAt = millis();
-      fetchGithub();
+// Run one fetch, update its pacer and log the result, e.g.
+// "[net] weather ok 640 ms" or "[net] weather FAIL 4005 ms, retry in 10 s".
+static void runFetch(const char *name, bool (*fetch)(), FetchPacer &pacer, uint32_t now,
+                     uint32_t okWaitMs, uint32_t maxFailWaitMs) {
+  bool ok = fetch();
+  uint32_t tookMs = millis() - now;
+  pacer.record(now, ok, okWaitMs, maxFailWaitMs);
+  if (ok) Serial.printf("[net] %s ok %lu ms\n", name, (unsigned long)tookMs);
+  else    Serial.printf("[net] %s FAIL %lu ms, retry in %lu s\n", name, (unsigned long)tookMs,
+                        (unsigned long)(pacer.waitMs / 1000UL));
+}
+
+// Free heap, lowest free heap since boot, and this task's unused stack.
+static void logNetHealth() {
+  Serial.printf("[net] heap %luk (min %luk), stack free %lu bytes\n",
+                (unsigned long)(ESP.getFreeHeap() / 1024),
+                (unsigned long)(ESP.getMinFreeHeap() / 1024),
+                (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
+}
+
+void netTask(void *) {
+  FetchPacer weatherPacer, stockPacer, githubPacer;
+  uint32_t lastHealthLogMs = millis();
+  bool tlsHealthLogged = false;
+
+  for (;;) {
+    if (!ensureWifi()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+
+    // This task is netShared's only writer, so it may read it without the lock.
+    const uint32_t now = millis();
+    bool ran = false, usedTls = false;
+    // Weather and GitHub are paced by data age after a success (okWaitMs 0),
+    // stock by STOCK_REFRESH_MS; all three back off after a failure.
+    if (SHOW_STOCK && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
+      runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
+      ran = usedTls = true;
+    } else if (SHOW_WEATHER
+        && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
+        && weatherPacer.ready(now)) {
+      runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
+      ran = true;
+    } else if (SHOW_GITHUB && githubConfigured()
+        && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
+        && githubPacer.ready(now)) {
+      runFetch("github", fetchGithub, githubPacer, now, 0, GITHUB_RETRY_MAX_MS);
+      ran = usedTls = true;
     }
+
+    // Stack use peaks during the first HTTPS handshake; log then, and every 5 min.
+    if ((usedTls && !tlsHealthLogged) || millis() - lastHealthLogMs >= NET_HEALTH_LOG_MS) {
+      logNetHealth();
+      lastHealthLogMs = millis();
+      if (usedTls) tlsHealthLogged = true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(ran ? 250 : 500));
   }
 }
 
@@ -2018,6 +2106,8 @@ void setup() {
   Serial.begin(115200);
   delay(150);
   Serial.println("ESP32-C6 Monitor-Buddy starting");
+  netMutex = xSemaphoreCreateMutex();
+  if (!netMutex) Serial.println("ERROR: no memory for netMutex - network pages disabled");
   applyTheme();   // set themed colours from THEME
 
   if (!gfx->begin(40000000)) Serial.println("Display init failed — check wiring");
@@ -2127,6 +2217,15 @@ void setup() {
   } else {
     Serial.println("Wi-Fi unavailable — running offline, hold the screen to configure");
   }
+
+  // Start the fetch task last, once Wi-Fi state exists. It idles while the
+  // portal is open or Wi-Fi is down.
+  if (!netMutex) {
+    Serial.println("ERROR: no netMutex - network pages disabled");
+  } else if (xTaskCreate(netTask, "net", NET_TASK_STACK_BYTES, nullptr,
+                         NET_TASK_PRIORITY, nullptr) != pdPASS) {
+    Serial.println("ERROR: could not start fetch task - network pages disabled");
+  }
 }
 
 void loop() {
@@ -2157,7 +2256,6 @@ void loop() {
   if (ntpSynced && millis() - lastNtpSyncMs > 6UL * 3600UL * 1000UL) ntpSynced = false;
   if (!ntpSynced) syncNTP();
 
-  updateNetworkPages();
 
   float tx=0.0f, ty=0.0f;
   if (imuReady) {
@@ -2168,6 +2266,7 @@ void loop() {
     ty = cos(millis()*0.0011f)*0.16f;
   }
 
+  snapshotNetData();
   switch (currentApp) {
     case 0: drawFace(tx, ty); break;
     case 1: drawClock();      break;
