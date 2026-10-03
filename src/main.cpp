@@ -175,7 +175,12 @@ static constexpr uint32_t HTTP_TIMEOUT_MS         = 5000UL;  // response wait
 static constexpr int32_t  HTTP_CONNECT_TIMEOUT_MS = 4000;    // TCP connect (lib default 5 s)
 static constexpr uint32_t TLS_HANDSHAKE_TIMEOUT_S = 8;       // TLS (lib default 120 s)
 static constexpr uint32_t NTP_RETRY_INTERVAL_MS        = 60000UL;
+// After a failed fetch, retry after FETCH_RETRY_MIN_MS, doubling each further
+// failure up to FETCH_RETRY_MS (GitHub: GITHUB_RETRY_MAX_MS, to stay well under
+// its 60 calls/hour unauthenticated limit). A success resets the backoff.
+static constexpr uint32_t FETCH_RETRY_MIN_MS           = 10000UL;
 static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
+static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
@@ -1996,16 +2001,40 @@ static uint8_t currentClockHour() {
 //   stock   every STOCK_REFRESH_MS, only while the stock page is shown
 //   weather prefetched every WEATHER_REFRESH_INTERVAL_MS
 //   GitHub  prefetched every GITHUB_REFRESH_INTERVAL_MS
-// A failed weather/GitHub fetch is retried after FETCH_RETRY_MS. At most one
-// fetch per pass, so only one HTTPS connection exists at a time.
+// A failed fetch backs off 10 s, 20 s, 40 s, ... (see FETCH_RETRY_MIN_MS). At
+// most one fetch per pass, so only one HTTPS connection exists at a time.
 
-// Run one fetch and log its result and duration, e.g. "[net] weather ok 640 ms".
-static bool runFetch(const char *name, bool (*fetch)()) {
-  uint32_t t0 = millis();
+// Retry pacing for one data source.
+struct FetchPacer {
+  uint32_t attemptedAt = 0;                    // 0 = never attempted
+  uint32_t waitMs      = 0;                    // wait after attemptedAt before the next try
+  uint32_t failWaitMs  = FETCH_RETRY_MIN_MS;   // wait to use after the next failure
+
+  bool ready(uint32_t now) const { return attemptedAt == 0 || now - attemptedAt >= waitMs; }
+
+  // okWaitMs: wait after a success; maxFailWaitMs: backoff ceiling.
+  void record(uint32_t now, bool ok, uint32_t okWaitMs, uint32_t maxFailWaitMs) {
+    attemptedAt = now;
+    if (ok) {
+      waitMs     = okWaitMs;
+      failWaitMs = FETCH_RETRY_MIN_MS;
+    } else {
+      waitMs     = failWaitMs;
+      failWaitMs = (failWaitMs * 2 > maxFailWaitMs) ? maxFailWaitMs : failWaitMs * 2;
+    }
+  }
+};
+
+// Run one fetch, update its pacer and log the result, e.g.
+// "[net] weather ok 640 ms" or "[net] weather FAIL 4005 ms, retry in 10 s".
+static void runFetch(const char *name, bool (*fetch)(), FetchPacer &pacer, uint32_t now,
+                     uint32_t okWaitMs, uint32_t maxFailWaitMs) {
   bool ok = fetch();
-  Serial.printf("[net] %s %s %lu ms\n", name, ok ? "ok" : "FAIL",
-                (unsigned long)(millis() - t0));
-  return ok;
+  uint32_t tookMs = millis() - now;
+  pacer.record(now, ok, okWaitMs, maxFailWaitMs);
+  if (ok) Serial.printf("[net] %s ok %lu ms\n", name, (unsigned long)tookMs);
+  else    Serial.printf("[net] %s FAIL %lu ms, retry in %lu s\n", name, (unsigned long)tookMs,
+                        (unsigned long)(pacer.waitMs / 1000UL));
 }
 
 // Free heap, lowest free heap since boot, and this task's unused stack.
@@ -2017,8 +2046,7 @@ static void logNetHealth() {
 }
 
 void netTask(void *) {
-  // 0 = never attempted. millis() is far past 0 once this task runs.
-  uint32_t weatherAttemptedAt = 0, stockAttemptedAt = 0, githubAttemptedAt = 0;
+  FetchPacer weatherPacer, stockPacer, githubPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2028,22 +2056,20 @@ void netTask(void *) {
     // This task is netShared's only writer, so it may read it without the lock.
     const uint32_t now = millis();
     bool ran = false, usedTls = false;
-    if (SHOW_STOCK && currentApp == PAGE_STOCK
-        && (stockAttemptedAt == 0 || now - stockAttemptedAt >= STOCK_REFRESH_MS)) {
-      stockAttemptedAt = now;
-      runFetch("stock", fetchStock);
+    // Weather and GitHub are paced by data age after a success (okWaitMs 0),
+    // stock by STOCK_REFRESH_MS; all three back off after a failure.
+    if (SHOW_STOCK && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
+      runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (SHOW_WEATHER
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
-        && (weatherAttemptedAt == 0 || now - weatherAttemptedAt >= FETCH_RETRY_MS)) {
-      weatherAttemptedAt = now;
-      runFetch("weather", fetchWeather);
+        && weatherPacer.ready(now)) {
+      runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
     } else if (SHOW_GITHUB && githubConfigured()
         && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
-        && (githubAttemptedAt == 0 || now - githubAttemptedAt >= FETCH_RETRY_MS)) {
-      githubAttemptedAt = now;
-      runFetch("github", fetchGithub);
+        && githubPacer.ready(now)) {
+      runFetch("github", fetchGithub, githubPacer, now, 0, GITHUB_RETRY_MAX_MS);
       ran = usedTls = true;
     }
 
