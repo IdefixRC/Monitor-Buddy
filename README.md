@@ -24,8 +24,9 @@ It is also genuinely useful when you swipe past the face:
 - **GitHub stats** for your username
 - **5 colour themes**, from plain white-on-black to a green-up / red-down semantic theme
 - **Toggle any page on or off** so your Buddy only shows what you care about
-- **Swipe** left and right to move between pages, up and down to adjust brightness,
-**double-tap** to stop the auto-scroll, **tap the face** to change expression
+- **Left or right side** of your monitor: one setting turns the screen, touch and eye movement around for a right-side mount
+- **Swipe** left and right to move between pages, up and down to adjust brightness (remembered across restarts), **double-tap** to stop the auto-scroll, **tap the face** to change expression (all controls in [4.10](#410-everyday-controls))
+- **Stays smooth on bad Wi-Fi**: weather, stock and GitHub data load in the background, so the face and touch never wait for the network
 - **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done.
 
 The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-printed clip**. **No soldering**, no breadboard, and no wiring required. You print the holder, slide the board in, and plug in a USB-C cable and Monitor-Buddy is ready to rock.
@@ -203,7 +204,21 @@ With no Wi-Fi configured, the Buddy starts its own hotspot at power-on.
 
 To change the Wi-Fi later, **press and hold anywhere on the touchscreen for about 3 seconds**. The setup hotspot comes back.
 
-### 4.10 Troubleshooting
+### 4.10 Everyday controls
+
+| Do this                                         | What happens                                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Swipe left / right                              | Next / previous page                                                                             |
+| Swipe up / down                                 | Brighter / dimmer. Keep dragging for bigger steps. The level is remembered across restarts.      |
+| Tap the face                                    | Change the expression                                                                            |
+| Double-tap                                      | Stop or restart the automatic page scrolling                                                     |
+| Tilt or move the Buddy                          | The eyes follow the motion                                                                       |
+| Hold the screen still for about 3 seconds       | Open the Wi-Fi setup hotspot. Hold again for 3 seconds to close it.                              |
+| **Factory reset**: unplug and plug back in. As soon as the screen shows **CONNECTING** (or **WIFI SETUP**), press the **BOOT** button within 2 seconds and hold it for 5 seconds or more | Erases the saved Wi-Fi and the brightness, then restarts into Wi-Fi setup. The **erase** button on the setup page does the same. Don't hold BOOT while plugging in: that starts the chip's download mode instead. |
+
+Your `config/config.h` settings are built into the firmware, so a factory reset doesn't touch them.
+
+### 4.11 Troubleshooting
 
 | Symptom                                     | Fix                                                                                                                                                                      |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -212,6 +227,8 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | Screen shows **PORTAL FILES MISSING**       | The automatic filesystem upload did not run (see [4.8](#48-portal-files-uploaded-automatically)). Run **Upload Filesystem Image** manually.                              |
 | Setup page shows an error 500               | Same cause. Upload the filesystem image.                                                                                                                                 |
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
+| Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again.                                             |
+| Screen too dark to read                     | Swipe up a few times to raise the brightness, or do a factory reset (see [4.10](#410-everyday-controls)).                                                               |
 | Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                   |
 | Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                               |
 
@@ -224,6 +241,10 @@ Monitor-Buddy builds on the work of others:
 - **[schematik.io](https://schematik.io/)** Tiny ESP DeskBuddy, the starting-point idea.
 - **[EDISON-SCIENCE-CORNER / DESKBUDDY-1.0](https://github.com/EDISON-SCIENCE-CORNER/DESKBUDDY-1.0)** for additional face designs.
 - **[AyresWiFiManager](https://github.com/ayresnet/AyresWiFiManager)** for the captive-portal Wi-Fi setup.
+
+Contributors:
+
+- **[AmyJoT](https://github.com/AmyJoT)** for the brightness swipe, a sturdier touch read and the first network changes that keep the UI responsive ([#3](https://github.com/IdefixRC/Monitor-Buddy/pull/3)).
 
 ## License
 
