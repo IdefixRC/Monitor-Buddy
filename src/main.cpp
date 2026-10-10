@@ -98,6 +98,14 @@
 
 #include <LittleFS.h>
 #include <AyresWiFiManager.h>
+#include <esp_mac.h>
+#include "settings.h"
+#include "protocol.h"
+
+// Set from the release tag by the release workflow (-DFW_VERSION=\"1.2.0\").
+#ifndef FW_VERSION
+  #define FW_VERSION "dev"
+#endif
 
 // USER CONFIGURATION --------> EDIT config/config.h
 // Copy config/config.h.example to
@@ -127,6 +135,13 @@
   #error "MOUNTING_LOCATION in config/config.h must be LEFT or RIGHT"
 #endif
 #define MOUNT_IS_RIGHT   (MOUNT_ID == MOUNT_ID_RIGHT)
+
+// Optional POSIX time zone rule with daylight saving, e.g.
+// "CET-1CEST,M3.5.0,M10.5.0/3". Older config.h copies don't have it; empty
+// means "build a fixed rule from TZ_OFFSET_HOURS".
+#ifndef TZ_RULE
+  #define TZ_RULE ""
+#endif
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
@@ -269,6 +284,7 @@ uint8_t compileMonthNumber();
 int32_t daysFromCivil(int32_t y, uint8_t mo, uint8_t d);
 void civilFromDays(int32_t z, int32_t *year, uint8_t *month, uint8_t *day);
 int32_t compileDateDays();
+void seedClockFromCompileTime();
 void centeredText(const char *text, int y, uint8_t size);
 void drawPageDots();
 void drawHeader(const char *title);
@@ -299,6 +315,8 @@ void updateFaceTimers();
 void updateAutoPage();
 void calibrateNeutral();
 void loadDisplaySettings();
+Settings defaultsFromConfig();
+void loadSettings();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
@@ -560,7 +578,7 @@ static const int SCREEN_H         = 172;
 static const uint8_t APP_COUNT    = 7;   // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
-// loop(); which are actually shown is decided by the SHOW_* toggles above.
+// loop(); which are actually shown is decided by settings.pages.
 static constexpr uint8_t PAGE_FACE    = 0;
 static constexpr uint8_t PAGE_CLOCK   = 1;
 static constexpr uint8_t PAGE_DATE    = 2;
@@ -585,10 +603,23 @@ static const uint8_t FACE_MOOD_COUNT = 9;
 static const uint32_t PAGE_AUTO_INTERVAL_MS = 8000;
 static const uint16_t FG = RGB565_WHITE;
 static const uint16_t BG = RGB565_BLACK;
-// Landscape, turned 180° for a right-side mount. Drives the display and the
-// touch mapping; TILT_SIGN flips the IMU tilt to match.
-static const uint8_t ROTATION  = MOUNT_IS_RIGHT ? 3 : 1;
-static const float   TILT_SIGN = MOUNT_IS_RIGHT ? -1.0f : 1.0f;
+// Landscape, turned 180° for a right-side mount (settings.mountRight, applied
+// in setup()). Drives the display and the touch mapping; tiltSign flips the
+// IMU tilt to match.
+uint8_t screenRotation = 1;
+float   tiltSign       = 1.0f;
+
+// ── Settings ──────────────────────────────────────────────
+// Loaded once in setup() from /config.json, with the config.h values as the
+// defaults. Never changed while running: every save restarts the board, so
+// netTask may read them without a lock.
+static const char *const CONFIG_PATH = "/config.json";
+Settings  settings;
+AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
+
+static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
+              PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
+              PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
 
 Arduino_DataBus *bus     = new Arduino_HWSPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI);
 Arduino_GFX    *display  = new Arduino_ST7789(bus, LCD_RST, 0, false, 172, 320, 34, 0, 34, 0);
@@ -612,7 +643,7 @@ bool     ntpSynced       = false;
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
 volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
-uint8_t  pageOrder[APP_COUNT];  // enabled page IDs, built from SHOW_* at boot
+uint8_t  pageOrder[APP_COUNT];  // enabled page IDs, built from settings.pages at boot
 uint8_t  pageCount       = 0;   // how many pages are enabled
 uint8_t  currentPageIdx  = 0;   // index into pageOrder[] of the current page
 uint8_t  faceMood        = 0;
@@ -684,7 +715,7 @@ void snapshotNetData() {
   xSemaphoreGive(netMutex);
 }
 
-// Themed colours, assigned once by applyTheme() from the THEME setting above.
+// Themed colours, assigned once by applyTheme() from settings.theme.
 uint16_t COL_TIME, COL_SEC, COL_DATE_WD, COL_DATE_BIG, COL_VALUE, COL_LABEL;
 uint16_t COL_TEMP, COL_WICON, COL_WSUB, COL_MOON, COL_MOONLAB;
 uint16_t COL_PRICE_UP, COL_PRICE_DOWN, COL_TICKER, COL_GHLOGO, COL_GHNUM;
@@ -695,42 +726,52 @@ uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 }
 
-// Assign the themed colours from the THEME setting. Called once at boot.
-// Everything defaults to classic white (FG) so THEME 0 reproduces the
+// Assign the themed colours from settings.theme. Called once at boot.
+// Everything defaults to classic white (FG) so theme 0 reproduces the
 // original look exactly; each theme below overrides the roles it colours.
 void applyTheme() {
   uint16_t W = FG;
   COL_TIME=COL_SEC=COL_DATE_WD=COL_DATE_BIG=COL_VALUE=COL_LABEL=W;
   COL_TEMP=COL_WICON=COL_WSUB=W;  COL_MOON=W;  COL_MOONLAB=W;
   COL_PRICE_UP=COL_PRICE_DOWN=COL_TICKER=COL_GHLOGO=COL_GHNUM=W;
-#if THEME == 1
-  uint16_t CY=rgb(0,200,255), GRAY=rgb(120,130,140);
-  COL_SEC=CY; COL_DATE_WD=CY; COL_TEMP=CY; COL_MOONLAB=CY;
-  COL_PRICE_UP=COL_PRICE_DOWN=CY; COL_GHNUM=CY;
-  COL_LABEL=GRAY; COL_WSUB=GRAY; COL_MOON=rgb(220,220,220);
-#elif THEME == 2
-  uint16_t GRAY=rgb(120,130,140);
-  COL_SEC=rgb(255,180,40); COL_DATE_WD=rgb(255,180,40);
-  COL_TEMP=rgb(255,140,60); COL_WICON=rgb(255,210,90); COL_WSUB=rgb(60,200,200);
-  COL_MOON=rgb(255,210,90); COL_MOONLAB=rgb(0,200,255);
-  COL_PRICE_UP=rgb(60,220,120); COL_PRICE_DOWN=rgb(255,80,90);
-  COL_GHNUM=rgb(60,220,120); COL_LABEL=GRAY;
-#elif THEME == 3
-  uint16_t AM=rgb(255,180,40), GO=rgb(255,210,90), CR=rgb(245,225,190);
-  COL_TIME=AM; COL_SEC=GO; COL_DATE_WD=AM; COL_DATE_BIG=CR;
-  COL_VALUE=rgb(235,215,180); COL_LABEL=rgb(150,120,80);
-  COL_TEMP=AM; COL_WICON=GO; COL_WSUB=rgb(180,150,110);
-  COL_MOON=GO; COL_MOONLAB=AM;
-  COL_PRICE_UP=COL_PRICE_DOWN=AM; COL_TICKER=CR; COL_GHLOGO=CR; COL_GHNUM=AM;
-#elif THEME == 4
-  uint16_t CY=rgb(0,200,255), BL=rgb(90,170,255), TE=rgb(60,200,200),
-           SL=rgb(150,160,185), LG=rgb(205,220,235);
-  COL_TIME=CY; COL_SEC=TE; COL_DATE_WD=BL; COL_DATE_BIG=LG;
-  COL_VALUE=LG; COL_LABEL=SL;
-  COL_TEMP=CY; COL_WICON=BL; COL_WSUB=TE;
-  COL_MOON=rgb(210,225,245); COL_MOONLAB=CY;
-  COL_PRICE_UP=COL_PRICE_DOWN=CY; COL_TICKER=LG; COL_GHLOGO=LG; COL_GHNUM=CY;
-#endif
+  switch (settings.theme) {
+    case 1: {
+      uint16_t CY=rgb(0,200,255), GRAY=rgb(120,130,140);
+      COL_SEC=CY; COL_DATE_WD=CY; COL_TEMP=CY; COL_MOONLAB=CY;
+      COL_PRICE_UP=COL_PRICE_DOWN=CY; COL_GHNUM=CY;
+      COL_LABEL=GRAY; COL_WSUB=GRAY; COL_MOON=rgb(220,220,220);
+      break;
+    }
+    case 2: {
+      uint16_t GRAY=rgb(120,130,140);
+      COL_SEC=rgb(255,180,40); COL_DATE_WD=rgb(255,180,40);
+      COL_TEMP=rgb(255,140,60); COL_WICON=rgb(255,210,90); COL_WSUB=rgb(60,200,200);
+      COL_MOON=rgb(255,210,90); COL_MOONLAB=rgb(0,200,255);
+      COL_PRICE_UP=rgb(60,220,120); COL_PRICE_DOWN=rgb(255,80,90);
+      COL_GHNUM=rgb(60,220,120); COL_LABEL=GRAY;
+      break;
+    }
+    case 3: {
+      uint16_t AM=rgb(255,180,40), GO=rgb(255,210,90), CR=rgb(245,225,190);
+      COL_TIME=AM; COL_SEC=GO; COL_DATE_WD=AM; COL_DATE_BIG=CR;
+      COL_VALUE=rgb(235,215,180); COL_LABEL=rgb(150,120,80);
+      COL_TEMP=AM; COL_WICON=GO; COL_WSUB=rgb(180,150,110);
+      COL_MOON=GO; COL_MOONLAB=AM;
+      COL_PRICE_UP=COL_PRICE_DOWN=AM; COL_TICKER=CR; COL_GHLOGO=CR; COL_GHNUM=AM;
+      break;
+    }
+    case 4: {
+      uint16_t CY=rgb(0,200,255), BL=rgb(90,170,255), TE=rgb(60,200,200),
+               SL=rgb(150,160,185), LG=rgb(205,220,235);
+      COL_TIME=CY; COL_SEC=TE; COL_DATE_WD=BL; COL_DATE_BIG=LG;
+      COL_VALUE=LG; COL_LABEL=SL;
+      COL_TEMP=CY; COL_WICON=BL; COL_WSUB=TE;
+      COL_MOON=rgb(210,225,245); COL_MOONLAB=CY;
+      COL_PRICE_UP=COL_PRICE_DOWN=CY; COL_TICKER=LG; COL_GHLOGO=LG; COL_GHNUM=CY;
+      break;
+    }
+    default: break;   // 0 = Classic: everything stays white
+  }
 }
 
 float clampFloat(float v, float lo, float hi) {
@@ -851,6 +892,17 @@ int32_t compileDateDays() {
   return daysFromCivil(y, compileMonthNumber(), day);
 }
 
+// Fallback clock until NTP syncs. __DATE__/__TIME__ are the build machine's
+// clock (UTC on the release workflow), converted through the time zone rule.
+// Needs TZ set (setup() does that before calling this).
+void seedClockFromCompileTime() {
+  time_t t = (time_t)compileDateDays() * 86400 + (time_t)compileTimeSeconds();
+  struct tm lt;
+  localtime_r(&t, &lt);
+  clockStartSeconds = (uint32_t)lt.tm_hour * 3600UL + (uint32_t)lt.tm_min * 60UL + lt.tm_sec;
+  clockStartDays    = daysFromCivil(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
+}
+
 // ── Drawing primitives ────────────────────────────────────
 
 void centeredText(const char *text, int y, uint8_t size) {
@@ -906,18 +958,13 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 
 // ── App navigation ────────────────────────────────────────
 
-// Build the list of enabled pages (in fixed order) from the SHOW_* toggles.
+// Build the list of enabled pages (in fixed order) from settings.pages.
 // Falls back to the Face page if everything is switched off, so the screen is
 // never left blank.
 void buildPageList() {
   pageCount = 0;
-  if (SHOW_FACE)    pageOrder[pageCount++] = PAGE_FACE;
-  if (SHOW_CLOCK)   pageOrder[pageCount++] = PAGE_CLOCK;
-  if (SHOW_DATE)    pageOrder[pageCount++] = PAGE_DATE;
-  if (SHOW_WEATHER) pageOrder[pageCount++] = PAGE_WEATHER;
-  if (SHOW_MOON)    pageOrder[pageCount++] = PAGE_MOON;
-  if (SHOW_STOCK)   pageOrder[pageCount++] = PAGE_STOCK;
-  if (SHOW_GITHUB)  pageOrder[pageCount++] = PAGE_GITHUB;
+  for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++)
+    if (settings.pages[i]) pageOrder[pageCount++] = i;
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
   if (currentPageIdx >= pageCount) currentPageIdx = 0;
   currentApp = pageOrder[currentPageIdx];
@@ -940,7 +987,7 @@ void switchApp(int8_t delta) {
 // AWM's tieneCredenciales() checks that /wifi.json exists AND that a
 // non-empty ssid+password were parsed from it at begin().
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
-bool githubConfigured() { return strlen(GITHUB_USER) > 0; }
+bool githubConfigured() { return settings.githubUser[0] != '\0'; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -970,11 +1017,8 @@ void openSetupPortal(const char *reason) {
 }
 
 // ── NTP time sync ─────────────────────────────────────────
-// Uses configTime() with a plain numeric UTC offset (TZ_OFFSET_HOURS * 3600).
-// This is the most reliable approach on all ESP32 variants — no POSIX TZ
-// strings, no IANA name lookup, no setenv/tzset. The ESP32 applies the
-// offset directly to the synced epoch before returning it via time()/localtime().
-// DST is set to 0 (add 3600 if your region is currently on summer time).
+// The time zone is settings.tzRule, a POSIX rule such as
+// "CET-1CEST,M3.5.0,M10.5.0/3", so daylight saving switches by itself.
 //
 // AyresWiFiManager's own time sync is switched off in setup()
 // (setTimeSync(false)), so this is the only code that touches the clock.
@@ -988,8 +1032,9 @@ void syncNTP() {
                    || millis() - lastNtpAttemptMs >= NTP_RETRY_INTERVAL_MS;
   if (startOrRetry) {
     lastNtpAttemptMs = millis();
-    // Numeric offset: TZ_OFFSET_HOURS * 3600 seconds. DST = 0.
-    configTime((long)TZ_OFFSET_HOURS * 3600L, 0, "pool.ntp.org", "time.cloudflare.com");
+    // configTzTime() sets TZ to the POSIX rule (daylight saving included).
+    // configTime() with an offset would overwrite TZ with a fixed one.
+    configTzTime(settings.tzRule, "pool.ntp.org", "time.cloudflare.com");
   }
 
   struct tm ti;
@@ -1010,9 +1055,8 @@ void syncNTP() {
   clockStartDays    = daysFromCivil(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
   ntpSynced   = true;
   lastNtpSyncMs = millis();
-  Serial.printf("NTP synced: %02d:%02d:%02d (UTC%+d / %s)\n",
-                ti.tm_hour, ti.tm_min, ti.tm_sec,
-                TZ_OFFSET_HOURS, TIMEZONE);
+  Serial.printf("NTP synced: %02d:%02d:%02d (%s / %s)\n",
+                ti.tm_hour, ti.tm_min, ti.tm_sec, settings.tzRule, settings.tzName);
 }
 
 // ── Weather fetch (Open-Meteo) ────────────────────────────
@@ -1063,12 +1107,19 @@ bool fetchWeather() {
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  String tzEncoded = String(TIMEZONE);
+  // '+' means a space in a URL query, so encode it (Etc/GMT+8, +48.1).
+  String latEnc = settings.lat;
+  latEnc.replace("+", "%2B");
+  String lonEnc = settings.lon;
+  lonEnc.replace("+", "%2B");
+  String tzEncoded = String(settings.tzName);
   tzEncoded.replace("/", "%2F");
+  tzEncoded.replace("+", "%2B");
   String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
-    + "latitude=" + LAT + "&longitude=" + LONG
+    + "latitude=" + latEnc + "&longitude=" + lonEnc
     + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day"
-    + "&temperature_unit=" + TEMP + "&wind_speed_unit=" + WIND
+    + "&temperature_unit=" + (settings.tempFahrenheit ? "fahrenheit" : "celsius")
+    + "&wind_speed_unit=" + (settings.windMph ? "mph" : "kmh")
     + "&timezone=" + tzEncoded;
   if (!http.begin(weatherUrl))
     return false;
@@ -1095,7 +1146,7 @@ bool fetchWeather() {
 //    "o":323.13,"pc":326.59,"t":1784664000}
 //   c  = current/last price   o  = open      h = high    l = low
 //   d  = abs change           dp = % change  pc = prev close   t = epoch
-// NOTE: STOCKKEY holds the Finnhub API token.
+// NOTE: settings.stockKey holds the Finnhub API token. Never log it.
 
 bool fetchStock() {
   if (!ensureWifi()) return false;
@@ -1105,7 +1156,9 @@ bool fetchStock() {
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  if (!http.begin(client, "https://finnhub.io/api/v1/quote?symbol=" TICKER "&token=" STOCKKEY))
+  String url = String("https://finnhub.io/api/v1/quote?symbol=") + settings.ticker
+             + "&token=" + settings.stockKey;
+  if (!http.begin(client, url))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   JsonDocument doc;
@@ -1141,7 +1194,7 @@ bool fetchGithub() {
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  String url = String("https://api.github.com/users/") + GITHUB_USER;
+  String url = String("https://api.github.com/users/") + settings.githubUser;
   if (!http.begin(client, url)) return false;
   http.addHeader("User-Agent", "ESP32-C6-Touch-LCD");
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
@@ -1322,7 +1375,7 @@ void drawEyeShape(Eye &e, bool isLeft) {
   int iy = (int)(e.y - e.h / 2.0f);
 
   int r  = (iw < 50) ? 6 : 16;
-  // Angry = red eyes (hard-coded face colour, not affected by THEME).
+  // Angry = red eyes (hard-coded face colour, not affected by the theme).
   uint16_t sclera = (faceMood == MOOD_ANGRY) ? rgb(255, 80, 90) : FG;
   gfx->fillRoundRect(ix, iy, iw, ih, r, sclera);
 
@@ -1346,7 +1399,7 @@ void drawEyeShape(Eye &e, bool isLeft) {
 
   if (faceMood == MOOD_EXCITED) {
     // Wide, shiny eyes: an oversized pupil, twin gold glints, and a gold sparkle
-    // (hard-coded face colour, not affected by THEME).
+    // (hard-coded face colour, not affected by the theme).
     uint16_t gold = rgb(255, 210, 60);
     pw = (int)(iw / 1.85f); ph = (int)(ih / 1.85f);
     int px = cx + (int)e.pupilX - pw / 2;
@@ -1622,13 +1675,13 @@ void drawWeather() {
   drawWeatherIcon(250, 66, w.code, w.isDay, COL_WICON);
   gfx->setTextSize(8); gfx->setTextColor(COL_TEMP);
   gfx->setCursor(14, 34); gfx->print(w.temp);
-  gfx->setTextSize(3); gfx->print(String(TEMP).startsWith("f") ? "F" : "C");
+  gfx->setTextSize(3); gfx->print(settings.tempFahrenheit ? "F" : "C");
   gfx->setTextSize(2); gfx->setTextColor(COL_WSUB);
   gfx->setCursor(14, 116); gfx->print(weatherCodeText(w.code));
   gfx->setTextColor(COL_LABEL);
   gfx->setCursor(14,  140); gfx->print("H "); gfx->print(w.humidity); gfx->print("%");
   // Wind, right-aligned: same 14 px gap from the right edge as humidity has from the left.
-  { String wu = String(WIND); wu.toUpperCase();
+  { String wu = settings.windMph ? "MPH" : "KMH";
     String windStr = String("W ") + w.wind + wu;
     int windW = (int)windStr.length() * 12;          // size-2 chars are 12 px wide
     gfx->setCursor(SCREEN_W - 14 - windW, 140);
@@ -1698,12 +1751,12 @@ void drawStock() {
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
   // the left column, which must end before the O/H/L block at x=150.
-  int tlen  = (int)strlen(TICKER);
+  int tlen  = (int)strlen(settings.ticker);
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
   gfx->setCursor(14, 124 - 4 * tsize);                   // keep it vertically centred
-  gfx->print(TICKER);
+  gfx->print(settings.ticker);
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
   gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
@@ -1717,8 +1770,8 @@ void drawStock() {
 void drawGithub() {
   gfx->fillScreen(BG);
   if (!githubConfigured()) {
-    centeredText("SET GITHUB_USER", 60, 3);
-    centeredText("EDIT SKETCH", 100, 2);
+    centeredText("NO GITHUB USER", 60, 3);
+    centeredText("SET IT IN THE FLASHER", 100, 2);
     drawPageDots(); return;
   }
   if (drawWifiGate()) return;
@@ -1826,6 +1879,62 @@ void maintainWifi() {
   if (wifiManager.isPortalActive()) return;
   if (!wifiConfigured()) return;          // nothing to reconnect to
   wifiManager.reintentarConexionSiNecesario();
+}
+
+// The config.h values: the defaults for anything /config.json doesn't set,
+// and everything on a board that has no /config.json (a source build).
+Settings defaultsFromConfig() {
+  Settings d{};
+  d.mountRight = MOUNT_IS_RIGHT;
+  d.theme      = THEME;
+  strlcpy(d.githubUser, GITHUB_USER, sizeof(d.githubUser));
+  strlcpy(d.tzName,     TIMEZONE,    sizeof(d.tzName));
+  if (strlen(TZ_RULE) > 0)
+    strlcpy(d.tzRule, TZ_RULE, sizeof(d.tzRule));
+  else if (!tzRuleFromOffset(TZ_OFFSET_HOURS, d.tzRule, sizeof(d.tzRule)))
+    strlcpy(d.tzRule, "UTC0", sizeof(d.tzRule));
+  strlcpy(d.ticker,   TICKER,   sizeof(d.ticker));
+  strlcpy(d.stockKey, STOCKKEY, sizeof(d.stockKey));
+  strlcpy(d.lat,      LAT,      sizeof(d.lat));
+  strlcpy(d.lon,      LONG,     sizeof(d.lon));
+  d.tempFahrenheit = TEMP[0] == 'f';
+  d.windMph        = strcmp(WIND, "mph") == 0;
+  const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
+      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB};
+  memcpy(d.pages, pages, sizeof(pages));
+  return d;
+}
+
+// settings = config.h defaults overlaid with /config.json. LittleFS must be
+// mounted. Logs what it used, but never the Finnhub key itself.
+void loadSettings() {
+  JsonDocument stored;                   // stays null without a readable file
+  bool haveFile = false;
+  if (LittleFS.exists(CONFIG_PATH)) {
+    File f = LittleFS.open(CONFIG_PATH, "r");
+    if (f) {
+      DeserializationError e = deserializeJson(stored, f);
+      f.close();
+      if (e) {
+        Serial.printf("settings: %s unreadable (%s), using config.h\n", CONFIG_PATH, e.c_str());
+        stored.clear();
+      } else {
+        haveFile = true;
+      }
+    }
+  }
+  JsonDocument invalid;
+  settingsLoad(defaultsFromConfig(), stored.as<JsonVariantConst>(), settings,
+               settingsAdded, invalid.to<JsonObject>());
+  Serial.println(haveFile ? "settings: from /config.json (config.h only fills gaps)"
+                          : "settings: config.h values (no /config.json)");
+  for (JsonPairConst kv : invalid.as<JsonObjectConst>())
+    Serial.printf("settings: ignored invalid %s (%s)\n", kv.key().c_str(),
+                  kv.value().as<const char *>());
+  for (uint8_t i = 0; i < settingsAdded.count; i++)
+    Serial.printf("settings: %s not in file, using default\n", settingsAdded.keys[i]);
+  Serial.printf("settings: tz %s, stock_key %s\n", settings.tzRule,
+                settings.stockKey[0] ? "set" : "empty");
 }
 
 void saveDisplaySettings() {
@@ -2077,15 +2186,15 @@ void netTask(void *) {
     bool ran = false, usedTls = false;
     // Weather and GitHub are paced by data age after a success (okWaitMs 0),
     // stock by STOCK_REFRESH_MS; all three back off after a failure.
-    if (SHOW_STOCK && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
+    if (settings.pages[PAGE_STOCK] && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
       runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
       ran = usedTls = true;
-    } else if (SHOW_WEATHER
+    } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
         && weatherPacer.ready(now)) {
       runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
       ran = true;
-    } else if (SHOW_GITHUB && githubConfigured()
+    } else if (settings.pages[PAGE_GITHUB] && githubConfigured()
         && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
         && githubPacer.ready(now)) {
       runFetch("github", fetchGithub, githubPacer, now, 0, GITHUB_RETRY_MAX_MS);
@@ -2129,14 +2238,23 @@ void setup() {
   // is simply dropped.
   Serial.setTxTimeoutMs(0);
   delay(150);
-  Serial.println("ESP32-C6 Monitor-Buddy starting");
+  Serial.println("ESP32-C6 Monitor-Buddy " FW_VERSION " starting");
   netMutex = xSemaphoreCreateMutex();
   if (!netMutex) Serial.println("ERROR: no memory for netMutex - network pages disabled");
-  applyTheme();   // set themed colours from THEME
+
+  // Settings first: the mounting side decides the rotation below. AWM's
+  // begin() mounts LittleFS again later; that is a no-op once mounted.
+  if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed - using config.h values");
+  loadSettings();
+  screenRotation = settings.mountRight ? 3 : 1;
+  tiltSign       = settings.mountRight ? -1.0f : 1.0f;
+  setenv("TZ", settings.tzRule, 1);
+  tzset();
+  applyTheme();   // themed colours from settings.theme
 
   if (!gfx->begin(40000000)) Serial.println("Display init failed — check wiring");
   lcdRegInit();
-  display->setRotation(ROTATION);
+  display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
   ledcWrite(LCD_BL, brightnessLevel);
   gfx->fillScreen(BG);
@@ -2144,7 +2262,7 @@ void setup() {
 
   Wire.begin(TOUCH_SDA, TOUCH_SCL);
   Wire.setClock(100000);
-  bsp_touch_init(&Wire, TOUCH_RST, TOUCH_INT, ROTATION, gfx->width(), gfx->height());
+  bsp_touch_init(&Wire, TOUCH_RST, TOUCH_INT, screenRotation, gfx->width(), gfx->height());
   touchReady = true;
   Serial.println("Touch controller initialised");
 
@@ -2160,16 +2278,12 @@ void setup() {
   leftEye.init(FACE_LEFT_CX,  FACE_EYES_CY, 90, 90);
   rightEye.init(FACE_RIGHT_CX, FACE_EYES_CY, 90, 90);
 
-  // Build the enabled-page list from the SHOW_* toggles.
+  // Build the enabled-page list from settings.pages.
   buildPageList();
-  // Seed the clock from compile time + TZ offset as a safe fallback.
-  // syncNTP() will overwrite this with an accurate value once Wi-Fi is up.
-  clockStartMillis  = millis();
-  // compileTimeSeconds() reflects __TIME__ which is UTC on the Schematik
-  // build server, so we apply TZ_OFFSET_HOURS to get the local fallback.
-  // syncNTP() will immediately replace this with an accurate getLocalTime() value.
-  clockStartSeconds = compileTimeSeconds() + (int32_t)(TZ_OFFSET_HOURS * 3600L);
-  clockStartDays    = compileDateDays();
+  // Seed the clock from the compile time as a safe fallback. syncNTP()
+  // replaces it with the real time once Wi-Fi is up.
+  clockStartMillis = millis();
+  seedClockFromCompileTime();
   nextBlink         = millis() + 1200;
   nextGlance        = millis() + 600;
   nextAutoPage      = millis() + PAGE_AUTO_INTERVAL_MS;
@@ -2288,8 +2402,8 @@ void loop() {
 
   float tx=0.0f, ty=0.0f;
   if (imuReady) {
-    tx = clampFloat(-TILT_SIGN*(filteredAy-restAy)*2.2f, -1.0f, 1.0f);
-    ty = clampFloat( TILT_SIGN*(filteredAx-restAx)*2.2f, -1.0f, 1.0f);
+    tx = clampFloat(-tiltSign*(filteredAy-restAy)*2.2f, -1.0f, 1.0f);
+    ty = clampFloat( tiltSign*(filteredAx-restAx)*2.2f, -1.0f, 1.0f);
   } else {
     tx = sin(millis()*0.0014f)*0.25f;
     ty = cos(millis()*0.0011f)*0.16f;
