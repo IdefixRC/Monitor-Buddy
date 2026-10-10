@@ -164,7 +164,7 @@ Save the file (`Ctrl+S`).
 
 Don't care about stocks? Leave `STOCKKEY` as is — the project still builds, the stock page just will not load data, and you can turn it off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
 
-**Settings saved on the board win.** From firmware 1.2.0 on, the Buddy can also keep its settings on the board itself, in `/config.json`. The web flasher saves them there, and so does `tools/mb_serial.py`. Once they're saved, `config/config.h` only fills in settings the board doesn't have, so editing it and uploading again changes nothing that's already saved. To change a saved setting, use the flasher or the tool, for example `python tools/mb_serial.py COM4 set '{"config":{"ticker":"AVGO"}}'`. The setup page's erase deletes the saved settings, and the Buddy goes back to your `config.h` values.
+**Settings saved on the board win.** From firmware 1.2.0 on, the Buddy can also keep its settings on the board itself, in `/config.json`. `tools/mb_serial.py` saves them there, and so will the web flasher (coming in a later release). Once they're saved, `config/config.h` only fills in settings the board doesn't have, so editing it and uploading again changes nothing that's already saved. To change a saved setting, use the tool, for example `python tools/mb_serial.py COM4 set ticker=AVGO` (use your board's port instead of `COM4`; `get` shows what is saved). The tool needs Python 3 and one package: `pip install pyserial`. The setup page's erase deletes the saved settings, and the Buddy goes back to your `config.h` values.
 
 Want daylight saving? Set `TZ_RULE` to a POSIX time zone rule, for example `"CET-1CEST,M3.5.0,M10.5.0/3"` for Central Europe. Left empty, the clock uses the fixed `TZ_OFFSET_HOURS`.
 
@@ -195,7 +195,7 @@ If the upload fails to start, hold the **BOOT** button on the board, click Uploa
 2. Copy your `config/config.h` from the old folder into the new one.
 3. Open the new folder and click **Upload** as in [4.7](#47-build-and-upload-the-firmware).
 
-Coming from 1.1.0 or older? Your `config.h` keeps working as it is. A `TZ_RULE` line is new and optional; without it the clock works exactly as before.
+Coming from 1.1.0 or older? Your `config.h` keeps working as it is. A `TZ_RULE` line is new and optional; without it the clock works as before, except that half-hour zones such as India (+5.5), which 1.1.0 cut down to whole hours, are now correct.
 
 Your saved Wi-Fi and brightness stay on the board, so the Buddy reconnects by itself after the update. Coming from 1.0.2 or older? The old setup page is removed on the first start, and from then on the setup page follows your phone's language.
 
@@ -227,7 +227,7 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 The board also has a **BOOT** button, next to **RESET**. Check the labels, because RESET just restarts the Buddy. BOOT only counts in a short window while the Buddy starts up, not while it is running. Unplug and plug back in, and as soon as the screen shows **CONNECTING** (or **WIFI SETUP**), press BOOT within 2 seconds:
 
 - **Hold 2 to 5 seconds**: opens the Wi-Fi setup hotspot.
-- **Hold 5 seconds or more**: forgets the saved Wi-Fi and restarts into Wi-Fi setup. Brightness and the settings saved on the board are kept; use **erase** on the setup page to reset both. The Buddy then goes back to its built-in `config.h` values.
+- **Hold 5 seconds or more**: forgets the saved Wi-Fi and restarts into Wi-Fi setup. Brightness and the settings saved on the board are kept. To erase those as well, use **erase** on the setup page; the Buddy then goes back to its built-in `config.h` values.
 
 Don't hold BOOT while plugging in: that starts the chip's download mode instead.
 
@@ -235,15 +235,15 @@ Your `config/config.h` settings are built into the firmware, so a factory reset 
 
 ### 4.11 Troubleshooting
 
-| Symptom                                     | Fix                                                                                                                                                                      |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| No port shown / Upload can't find the board | Try a different USB-C cable. Many are charge-only. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board). |
-| Upload starts then fails                    | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                              |
-| Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS`.                                                                        |
-| Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again.                                             |
-| Screen too dark to read                     | Swipe up a few times to raise the brightness, or press **erase** on the setup page (clears board settings too, back to `config.h`; see [4.10](#410-everyday-controls)).  |
-| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h`, or the symbol is not a US stock (the free Finnhub tier is US only).                                                   |
-| Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                               |
+| Symptom                                     | Fix                                                                                                                                                                                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No port shown / Upload can't find the board | Try a different USB-C cable. Many are charge-only. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board).                                                                                |
+| Upload starts then fails                    | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                                                                                                             |
+| Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS` and `TZ_RULE` in `config/config.h` and flash again. If settings are saved on the board, change them with the tool instead (e.g. `set tz_rule=<rule>`). |
+| Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again. If settings are saved on the board, change them with the tool instead (e.g. `set mount=right`).                             |
+| Screen too dark to read                     | Swipe up a few times to raise the brightness, or press **erase** on the setup page (clears board settings too, back to `config.h`; see [4.10](#410-everyday-controls)).                                                                                 |
+| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h` (if settings are saved on the board, use the tool: `set stock_key=<key>`), or the symbol is not a US stock (the free Finnhub tier is US only).                                                        |
+| Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                                                                                                              |
 
 ---
 

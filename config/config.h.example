@@ -4,11 +4,11 @@
 // ------------------------------------------------------------
 //  WHO NEEDS THIS FILE
 //
-//  Most people never touch it: the web flasher sets everything below and
-//  saves it on the board. This file is for building from source. Its
-//  values are the defaults, used for anything not saved on the board.
-//  Once settings are saved on the board (by the web flasher, or by
-//  tools/mb_serial.py), those saved values win over this file.
+//  Most people never touch it: tools/mb_serial.py (and the web flasher,
+//  coming in a later release) can set everything below and save it on
+//  the board. This file is for building from source. Its values are the
+//  defaults, used for anything not saved on the board. Once settings are
+//  saved on the board, those saved values win over this file.
 //
 //  HOW TO USE IT (source builds)
 //
