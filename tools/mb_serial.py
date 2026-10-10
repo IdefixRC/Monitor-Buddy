@@ -45,6 +45,10 @@ import serial
 BAUD = 115200
 MAX_ID = 2147483647
 ANY = object()   # read_reply: accept a reply whatever its id
+# Errors the Buddy sends without an id, because it never parsed the request's
+# argument: the line was too long, the argument was not JSON, or a restart is
+# pending and the argument did not parse.
+IDLESS_ERRORS = ("line too long", "bad json", "restarting")
 
 
 def open_port(port):
@@ -88,12 +92,15 @@ def next_id():
     return _last_id
 
 
-def read_reply(s, wait, cmd=None, rid=ANY):
+def read_reply(s, wait, cmd=None, rid=ANY, idless_errors=False):
     """The next parseable @MB reply within `wait` seconds that answers the
     request, else None. A line that is not valid JSON counts as no reply.
     cmd: the command word the reply must echo (None: any). rid: the id it
     must echo; None means it must carry no id, ANY means don't look. Replies
-    that don't match are stale answers to earlier requests and are skipped."""
+    that don't match are stale answers to earlier requests and are skipped.
+    idless_errors: for a request that had an id, also accept the error replies
+    in IDLESS_ERRORS that carry the right cmd and no id, since the Buddy can't
+    echo an id it never read. A reply with a different id is still stale."""
     end = time.time() + wait
     while time.time() < end:
         raw = read_line(s, end)
@@ -108,7 +115,10 @@ def read_reply(s, wait, cmd=None, rid=ANY):
         if cmd is not None and reply.get("cmd") != cmd:
             continue
         if rid is not ANY and reply.get("id") != rid:
-            continue
+            idless = (idless_errors and cmd is not None and "id" not in reply
+                      and reply.get("ok") is False and reply.get("error") in IDLESS_ERRORS)
+            if not idless:
+                continue
         return reply
     return None
 
@@ -125,7 +135,7 @@ def command(s, cmd, body=None, attempts=3, wait=1.5, rid=None):
     for _ in range(attempts):
         s.reset_input_buffer()
         send_raw(s, line)
-        reply = read_reply(s, wait, cmd, rid)
+        reply = read_reply(s, wait, cmd, rid, idless_errors=True)
         if reply is not None:
             return reply
     raise TimeoutError(f"no reply to {cmd}")
@@ -328,6 +338,12 @@ def selftest(port):
         check("nothing saved after rejects", command(s, "GET").get("config") == original)
         r = ask(s, "@MB SET " + "x" * 2100, "SET")
         check("line too long", r == {"ok": False, "cmd": "SET", "error": "line too long"}, r)
+        try:   # the tool's own path must show the error, not time out
+            r = command(s, "SET", {"config": {"github_user": "x" * 2100}})
+        except TimeoutError as e:
+            r = str(e)
+        check("oversize SET from command() reports line too long",
+              r == {"ok": False, "cmd": "SET", "error": "line too long"}, r)
         s.reset_input_buffer()
         send_raw(s, "hello buddy")
         check("non-protocol line ignored", read_reply(s, 1.5) is None)
