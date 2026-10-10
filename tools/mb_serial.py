@@ -9,9 +9,12 @@
     python tools/mb_serial.py COM4 set @settings.json
     python tools/mb_serial.py COM4 wifi        asks for the SSID and password
     python tools/mb_serial.py COM4 reboot
+    python tools/mb_serial.py COM4 defaults    deletes the saved settings; the
+                                               Buddy goes back to its config.h
+                                               values (Wi-Fi and brightness stay)
     python tools/mb_serial.py COM4 monitor     prints the serial log
     python tools/mb_serial.py COM4 selftest    protocol checks; restarts the
-                                               Buddy three times
+                                               Buddy five times
 
 set takes key=value pairs (theme becomes a number; true/false become
 booleans for pages.*; everything else is text), a JSON body, or @file.json.
@@ -20,9 +23,10 @@ Prefer key=value in PowerShell and cmd, which strip the quotes from JSON.
 wifi asks for the password with getpass, which can hang in Git Bash (mintty).
 Run it from PowerShell or cmd.
 
-selftest changes the ticker and restores it, and it leaves a /config.json on
-the board holding the original values. A build from source then no longer
-picks up config.h edits for those keys; change them with `set` instead.
+selftest changes the ticker, resets the settings with DEFAULTS and restores
+them, and it leaves a /config.json on the board holding the original values. A
+build from source then no longer picks up config.h edits for those keys; change
+them with `set` instead.
 
 Exit codes: 0 ok, 1 the Buddy refused or did not answer, 2 bad arguments.
 
@@ -32,12 +36,15 @@ import argparse
 import getpass
 import json
 import os
+import random
 import sys
 import time
 
 import serial
 
 BAUD = 115200
+MAX_ID = 2147483647
+ANY = object()   # read_reply: accept a reply whatever its id
 
 
 def open_port(port):
@@ -70,9 +77,23 @@ def read_line(s, end):
     return None
 
 
-def read_reply(s, wait):
-    """The next parseable @MB reply within `wait` seconds, else None. A line
-    that is not valid JSON counts as no reply."""
+_last_id = random.SystemRandom().randrange(1, 1 << 30)
+
+
+def next_id():
+    """The id for the next request. Each run starts somewhere else, so a stale
+    reply left over from an earlier run can't match."""
+    global _last_id
+    _last_id = _last_id + 1 if _last_id < MAX_ID else 0
+    return _last_id
+
+
+def read_reply(s, wait, cmd=None, rid=ANY):
+    """The next parseable @MB reply within `wait` seconds that answers the
+    request, else None. A line that is not valid JSON counts as no reply.
+    cmd: the command word the reply must echo (None: any). rid: the id it
+    must echo; None means it must carry no id, ANY means don't look. Replies
+    that don't match are stale answers to earlier requests and are skipped."""
     end = time.time() + wait
     while time.time() < end:
         raw = read_line(s, end)
@@ -82,19 +103,29 @@ def read_reply(s, wait):
             reply = json.loads(raw[4:])
         except ValueError:
             continue
-        if isinstance(reply, dict):
-            return reply
+        if not isinstance(reply, dict):
+            continue
+        if cmd is not None and reply.get("cmd") != cmd:
+            continue
+        if rid is not ANY and reply.get("id") != rid:
+            continue
+        return reply
     return None
 
 
-def command(s, cmd, body=None, attempts=3, wait=1.5):
-    line = "@MB " + cmd
+def command(s, cmd, body=None, attempts=3, wait=1.5, rid=None):
+    """Sends `cmd` with a fresh id (or `rid`) and returns the reply that echoes
+    that id and command word. For SET the id goes into the body."""
+    if rid is None:
+        rid = next_id()
+    payload = {"id": rid}
     if body is not None:
-        line += " " + json.dumps(body, separators=(",", ":"))
+        payload.update({k: v for k, v in body.items() if k != "id"})
+    line = "@MB " + cmd + " " + json.dumps(payload, separators=(",", ":"))
     for _ in range(attempts):
         s.reset_input_buffer()
         send_raw(s, line)
-        reply = read_reply(s, wait)
+        reply = read_reply(s, wait, cmd, rid)
         if reply is not None:
             return reply
     raise TimeoutError(f"no reply to {cmd}")
@@ -214,45 +245,79 @@ def selftest(port):
         results.append(bool(cond))
         print(("PASS " if cond else "FAIL ") + name + (f"  ({redact(detail)})" if detail and not cond else ""))
 
+    def ask(s, line, cmd, rid=None, wait=1.5):
+        """Sends a raw line; the reply to `cmd` that carries id `rid` (None: no id)."""
+        s.reset_input_buffer()
+        send_raw(s, line)
+        return read_reply(s, wait, cmd, rid)
+
     s = open_port(port)
-    info = command(s, "INFO")
+    rid = next_id()
+    info = command(s, "INFO", rid=rid)
     check("INFO ok", info.get("ok") is True, info)
+    check("INFO echoes cmd and id", info.get("cmd") == "INFO" and info.get("id") == rid, info)
     check("INFO has fw, cfg_v 1, mac", bool(info.get("fw")) and info.get("cfg_v") == 1
           and len(info.get("mac", "")) == 17, info)
     check("INFO wifi block", {"saved", "ssid", "connected"} <= set(info.get("wifi", {})), info)
+    r = ask(s, "@MB INFO", "INFO")
+    check("bare INFO works and the reply has no id", r is not None and r.get("ok") is True, r)
 
-    got = command(s, "GET")
+    rid = next_id()
+    got = command(s, "GET", rid=rid)
     original = got.get("config", {})
     keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
+    check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
     check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
+    check("GET has a stored flag", isinstance(got.get("stored"), bool), got.get("stored"))
+    was_stored = got.get("stored") is True
     if not original:
         s.close()
         print("\nCannot go on without the current settings.")
         return 1
 
-    def current_config(s):
-        """The Buddy's settings, reconnecting if it is mid-restart."""
+    def current_state(s):
+        """The Buddy's GET reply, reconnecting if it is mid-restart."""
         try:
             got = command(s, "GET")
             if got.get("ok"):
-                return s, got.get("config")
+                return s, got
         except (TimeoutError, OSError):
             pass
         s.close()
         time.sleep(2)
         s = reconnect(port)
-        return s, command(s, "GET").get("config")
+        return s, command(s, "GET")
 
     try:
-        r = command(s, "HELLO")
-        check("unknown command", r == {"ok": False, "error": "unknown command"}, r)
-        send_raw(s, "@MB SET {nope")
-        r = read_reply(s, 1.5)
-        check("bad json", r == {"ok": False, "error": "bad json"}, r)
-        r = command(s, "SET", {"config": {"theme": 9}})
-        check("invalid value rejected", r.get("ok") is False and "theme" in r.get("errors", {}), r)
+        rid = next_id()
+        r = ask(s, f'@MB HELLO {{"id":{rid}}}', "HELLO", rid)
+        check("unknown command", r == {"ok": False, "cmd": "HELLO", "id": rid,
+                                       "error": "unknown command"}, r)
+        r = ask(s, "@MB ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ABCDEFGHIJKLMNOP")
+        check("unknown command is cut to 16 characters in cmd",
+              r == {"ok": False, "cmd": "ABCDEFGHIJKLMNOP", "error": "unknown command"}, r)
+        r = ask(s, "@MB INFO {bad", "INFO")
+        check("INFO with bad json", r == {"ok": False, "cmd": "INFO", "error": "bad json"}, r)
+        r = ask(s, "@MB GET [1]", "GET")
+        check("GET with a non-object argument", r == {"ok": False, "cmd": "GET", "error": "bad json"}, r)
+        r = ask(s, '@MB INFO {"id":"x"}', "INFO")
+        check("INFO with a bad id", r == {"ok": False, "cmd": "INFO", "error": "bad id"}, r)
+        r = ask(s, '@MB GET {"id":-1}', "GET")
+        check("GET with a negative id", r == {"ok": False, "cmd": "GET", "error": "bad id"}, r)
+        r = ask(s, '@MB INFO {"id":2147483648}', "INFO")
+        check("INFO with an id out of range", r == {"ok": False, "cmd": "INFO", "error": "bad id"}, r)
+        r = ask(s, "@MB SET {nope", "SET")
+        check("bad json", r == {"ok": False, "cmd": "SET", "error": "bad json"}, r)
+        r = ask(s, "@MB SET", "SET")
+        check("SET without a body", r == {"ok": False, "cmd": "SET", "error": "bad json"}, r)
+        r = ask(s, '@MB SET {"id":"x","config":{"theme":2}}', "SET")
+        check("SET with a bad id saves nothing", r == {"ok": False, "cmd": "SET", "error": "bad id"}, r)
+        rid = next_id()
+        r = command(s, "SET", {"config": {"theme": 9}}, rid=rid)
+        check("invalid value rejected", r.get("ok") is False and r.get("cmd") == "SET"
+              and r.get("id") == rid and "theme" in r.get("errors", {}), r)
         r = command(s, "SET", {"wifi": {"ssid": "", "password": "x"}})
         check("invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
         r = command(s, "SET", {"wifi": {"ssid": "selftest"}})
@@ -261,46 +326,85 @@ def selftest(port):
         r = command(s, "SET", {"config": {"ticker": "ZZZZ"}, "wifi": {"ssid": "", "password": "x"}})
         check("valid config + invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
         check("nothing saved after rejects", command(s, "GET").get("config") == original)
-        send_raw(s, "@MB SET " + "x" * 2100)
-        r = read_reply(s, 1.5)
-        check("line too long", r == {"ok": False, "error": "line too long"}, r)
+        r = ask(s, "@MB SET " + "x" * 2100, "SET")
+        check("line too long", r == {"ok": False, "cmd": "SET", "error": "line too long"}, r)
         s.reset_input_buffer()
         send_raw(s, "hello buddy")
         check("non-protocol line ignored", read_reply(s, 1.5) is None)
 
         # GET only shows the settings loaded at boot, so restart to prove that no
         # rejected SET wrote anything to flash.
-        r = command(s, "REBOOT")
-        check("reboot ok", r == {"ok": True}, r)
+        rid = next_id()
+        r = command(s, "REBOOT", rid=rid)
+        check("reboot ok", r == {"ok": True, "cmd": "REBOOT", "id": rid}, r)
         s = restart_and_reconnect(s, port)
-        check("rejected SETs saved no config", command(s, "GET").get("config") == original)
+        after = command(s, "GET")
+        check("rejected SETs saved no config", after.get("config") == original)
+        check("rejected SETs left the stored flag", after.get("stored") is was_stored, after.get("stored"))
         after_wifi = command(s, "INFO").get("wifi", {})
         check("rejected SETs left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
 
         new_ticker = "MSFT" if original.get("ticker") != "MSFT" else "AVGO"
-        r = command(s, "SET", {"config": {"ticker": new_ticker}})
-        check("partial SET ok", r == {"ok": True}, r)
+        rid = next_id()
+        r = command(s, "SET", {"config": {"ticker": new_ticker}}, rid=rid)
+        check("partial SET ok", r == {"ok": True, "cmd": "SET", "id": rid}, r)
         # The Buddy restarts 300 ms after that reply. Until then it must refuse
         # commands: a second SET would merge into stale settings, and a GET
-        # would report values that are about to change.
-        send_raw(s, "@MB GET")
-        r = read_reply(s, 1.5)
-        check("GET in the restart window is refused", r == {"ok": False, "error": "restarting"}, r)
+        # would report values that are about to change. Both probes go out
+        # before either reply is read, so the 300 ms can't run out in between.
+        rid = next_id()
+        s.reset_input_buffer()
+        send_raw(s, f'@MB GET {{"id":{rid}}}')
+        send_raw(s, "@MB GET {bad")
+        r = read_reply(s, 1.5, "GET", rid)
+        check("GET in the restart window is refused",
+              r == {"ok": False, "cmd": "GET", "id": rid, "error": "restarting"}, r)
+        r = read_reply(s, 1.5, "GET", None)
+        check("restart window: an argument that doesn't parse gets no id",
+              r == {"ok": False, "cmd": "GET", "error": "restarting"}, r)
         s = restart_and_reconnect(s, port)
         after = command(s, "GET")
         expected = dict(original, ticker=new_ticker)
         check("partial SET kept the other keys", after.get("config") == expected, after.get("config"))
         check("added empty after a save", after.get("added") == [], after.get("added"))
+        check("stored after a save", after.get("stored") is True, after.get("stored"))
+
+        # DEFAULTS deletes /config.json; the next boot uses the config.h values.
+        rid = next_id()
+        r = command(s, "DEFAULTS", rid=rid)
+        check("DEFAULTS ok", r == {"ok": True, "cmd": "DEFAULTS", "id": rid}, r)
+        s = restart_and_reconnect(s, port)
+        after = command(s, "GET")
+        check("DEFAULTS cleared the stored flag", after.get("stored") is False, after.get("stored"))
+        check("added empty with no file", after.get("added") == [], after.get("added"))
+        # The config now holds the config.h values, which in general differ from
+        # `original`, so they are not compared.
+        after_wifi = command(s, "INFO").get("wifi", {})
+        check("DEFAULTS left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
+        r = command(s, "DEFAULTS")
+        check("DEFAULTS with no file is still ok", r.get("ok") is True and r.get("cmd") == "DEFAULTS", r)
+        s = restart_and_reconnect(s, port)
+        check("second DEFAULTS left stored false", command(s, "GET").get("stored") is False)
+
+        r = command(s, "SET", {"config": original})
+        check("SET original ok", r.get("ok") is True and r.get("cmd") == "SET", r)
+        s = restart_and_reconnect(s, port)
+        after = command(s, "GET")
+        check("SET after DEFAULTS stored the config", after.get("stored") is True, after.get("stored"))
+        check("config is the original again", after.get("config") == original, after.get("config"))
     finally:
-        # Put the original settings back, also when a check above blew up.
+        # Put the original settings back, also when a check above blew up, and
+        # also when it blew up between DEFAULTS and the restore.
         try:
-            s, now = current_config(s)
-            if now != original:
+            s, got = current_state(s)
+            now = got.get("config")
+            if now != original or (was_stored and got.get("stored") is not True):
                 r = command(s, "SET", {"config": original})
-                check("restore SET ok", r == {"ok": True}, r)
+                check("restore SET ok", r.get("ok") is True, r)
                 s = restart_and_reconnect(s, port)
-                now = command(s, "GET").get("config")
-            check("settings restored", now == original)
+                got = command(s, "GET")
+                now = got.get("config")
+            check("settings restored", now == original and (not was_stored or got.get("stored") is True))
         except Exception as e:  # keep the original error, if there is one
             results.append(False)
             print(f"FAIL could not restore the original settings ({e}); check them with `get`")
@@ -360,6 +464,16 @@ def run(a, parser):
         r = command(s, "SET", body)
         print(r)
         return 0 if r.get("ok") else 1
+    elif a.action == "defaults":
+        r = command(s, "DEFAULTS")
+        print(r)
+        if not r.get("ok"):
+            return 1
+        s = restart_and_reconnect(s, a.port)
+        r = command(s, "GET")
+        print(json.dumps(redact(r), indent=2))
+        s.close()
+        return 0 if r.get("ok") else 1
     elif a.action == "wifi":
         if os.environ.get("MSYSTEM"):
             print("Git Bash can hang at the password prompt. If it does, press Ctrl+C "
@@ -390,7 +504,7 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("port")
-    p.add_argument("action", choices=["info", "get", "set", "wifi", "reboot", "monitor", "selftest"])
+    p.add_argument("action", choices=["info", "get", "set", "wifi", "reboot", "defaults", "monitor", "selftest"])
     p.add_argument("args", nargs="*", help="for set: key=value pairs, a JSON body, or @file.json")
     p.add_argument("--show-key", action="store_true", help="get: print stock_key instead of hiding it")
     a = p.parse_args()
