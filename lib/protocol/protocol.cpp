@@ -28,8 +28,34 @@ MbCommand mbParse(const char *line, const char **arg) {
   size_t n = space ? (size_t)(space - cmd) : strlen(cmd);
   if (space) *arg = space + 1;
   static const struct { const char *name; MbCommand id; } COMMANDS[] = {
-    {"INFO", MB_INFO}, {"GET", MB_GET}, {"SET", MB_SET}, {"REBOOT", MB_REBOOT}};
+    {"INFO", MB_INFO}, {"GET", MB_GET}, {"SET", MB_SET}, {"REBOOT", MB_REBOOT},
+    {"DEFAULTS", MB_DEFAULTS}};
   for (const auto &c : COMMANDS)
     if (strlen(c.name) == n && strncmp(cmd, c.name, n) == 0) return c.id;
   return MB_UNKNOWN;
+}
+
+void mbCommandWord(const char *line, char *out, size_t outLen) {
+  if (outLen == 0) return;
+  out[0] = '\0';
+  if (strncmp(line, MB_PREFIX, PREFIX_LEN) != 0) return;
+  const char *word = line + PREFIX_LEN;
+  size_t n = 0;
+  while (word[n] != '\0' && word[n] != ' ') n++;
+  if (n > 16) n = 16;
+  if (n > outLen - 1) n = outLen - 1;
+  memcpy(out, word, n);
+  out[n] = '\0';
+}
+
+MbArgResult mbParseArg(const char *arg, JsonDocument &body, bool &hasId, int32_t &id) {
+  hasId = false;
+  if (arg[0] == '\0') return MB_ARG_OK;
+  if (deserializeJson(body, arg) || !body.is<JsonObject>()) return MB_ARG_BAD_JSON;
+  JsonVariantConst v = body["id"];
+  if (!v.is<JsonVariantConst>()) return MB_ARG_OK;       // no "id" key
+  if (!v.is<int32_t>() || v.as<int32_t>() < 0) return MB_ARG_BAD_ID;
+  id = v.as<int32_t>();
+  hasId = true;
+  return MB_ARG_OK;
 }
