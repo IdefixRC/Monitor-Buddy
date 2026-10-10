@@ -1980,7 +1980,22 @@ void mbReply(bool ok, JsonDocument &fields) {
   memcpy(out, MB_PREFIX, 4);
   size_t n = serializeJson(doc, out + 4, sizeof(out) - 5);
   out[4 + n] = '\n';
-  Serial.write((const uint8_t *)out, 5 + n);
+  // HWCDC::write() takes a TX lock and, because of setTxTimeoutMs(0) in setup(),
+  // returns 0 at once if another task (netTask, mid Serial.print) holds it. A
+  // single write would then drop the whole reply. Retry the unwritten rest,
+  // yielding 1 ms so that task can finish and release the lock. A short write
+  // under host backpressure advances by what went out. Give up after about
+  // 100 ms (host not reading) so the loop never stalls for long (#12).
+  const uint8_t *p = (const uint8_t *)out;
+  size_t left = 5 + n;
+  const uint32_t start = millis();
+  while (left > 0) {
+    size_t w = Serial.write(p, left);
+    p += w;
+    left -= w;
+    if (left == 0 || millis() - start >= 100) break;
+    if (w == 0) delay(1);
+  }
 }
 
 void mbOk() {
