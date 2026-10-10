@@ -158,10 +158,15 @@ Open `config/config.h` and change these `#define` lines:
 | `LAT` / `LONG`                 | your latitude and longitude for weather                                                                                       |
 | `TEMP` / `WIND`                | `"celsius"` or `"fahrenheit"`, `"kmh"` or `"mph"`                                                                             |
 | `SHOW_FACE`, `SHOW_CLOCK`, ... | `true` or `false` to enable or disable each page                                                                              |
+| `TZ_RULE`                      | optional, a POSIX time zone rule with daylight saving; `""` uses `TZ_OFFSET_HOURS`                                            |
 
 Save the file (`Ctrl+S`).
 
 Don't care about stocks? Leave `STOCKKEY` as is — the project still builds, the stock page just will not load data, and you can turn it off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
+
+**Settings saved on the board win.** From firmware 1.2.0 on, the Buddy can also keep its settings on the board itself, in `/config.json`. The web flasher saves them there, and so does `tools/mb_serial.py`. Once they're saved, `config/config.h` only fills in settings the board doesn't have, so editing it and uploading again changes nothing that's already saved. To change a saved setting, use the flasher or the tool, for example `python tools/mb_serial.py COM4 set '{"config":{"ticker":"AVGO"}}'`. The setup page's erase deletes the saved settings, and the Buddy goes back to your `config.h` values.
+
+Want daylight saving? Set `TZ_RULE` to a POSIX time zone rule, for example `"CET-1CEST,M3.5.0,M10.5.0/3"` for Central Europe. Left empty, the clock uses the fixed `TZ_OFFSET_HOURS`.
 
 ### 4.6 Plug in the board
 
@@ -189,6 +194,8 @@ If the upload fails to start, hold the **BOOT** button on the board, click Uploa
 1. Download and extract the new release as in [4.3](#43-get-the-monitor-buddy-code), into a new folder.
 2. Copy your `config/config.h` from the old folder into the new one.
 3. Open the new folder and click **Upload** as in [4.7](#47-build-and-upload-the-firmware).
+
+Coming from 1.1.0 or older? Your `config.h` keeps working as it is. A `TZ_RULE` line is new and optional; without it the clock works exactly as before.
 
 Your saved Wi-Fi and brightness stay on the board, so the Buddy reconnects by itself after the update. Coming from 1.0.2 or older? The old setup page is removed on the first start, and from then on the setup page follows your phone's language.
 
