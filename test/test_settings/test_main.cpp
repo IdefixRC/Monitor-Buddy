@@ -205,6 +205,41 @@ static void test_merge_accepts_empty_github_user_and_ignores_unknown() {
   TEST_ASSERT_EQUAL(0, errs.size());
 }
 
+static void test_merge_rejects_non_decimal_coordinates() {
+  const char *bad[] = {" 48", "\n48", "0x1A", "1e1"};
+  for (const char *v : bad) {
+    JsonDocument patch;
+    patch.to<JsonObject>()["lat"] = v;
+    Settings out; JsonDocument errs;
+    TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+    TEST_ASSERT_FALSE(errs["lat"].isNull());
+  }
+}
+
+static void test_merge_rejects_nan_inf_and_out_of_range_coordinates() {
+  const char *badLat[] = {"nan", "inf", "91"};
+  for (const char *v : badLat) {
+    JsonDocument patch;
+    patch.to<JsonObject>()["lat"] = v;
+    Settings out; JsonDocument errs;
+    TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+    TEST_ASSERT_FALSE(errs["lat"].isNull());
+  }
+  JsonDocument patch;
+  patch.to<JsonObject>()["lon"] = "-181";
+  Settings out; JsonDocument errs;
+  TEST_ASSERT_FALSE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_FALSE(errs["lon"].isNull());
+}
+
+static void test_merge_accepts_etc_gmt_tz_name() {
+  JsonDocument patch;
+  deserializeJson(patch, "{\"tz_name\":\"Etc/GMT+8\"}");
+  Settings out; JsonDocument errs;
+  TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL_STRING("Etc/GMT+8", out.tzName);
+}
+
 static void test_merge_rejects_url_breaking_characters() {
   JsonDocument patch;
   deserializeJson(patch, "{\"stock_key\":\"abc&symbol=X\",\"github_user\":\"a/b\"}");
@@ -321,6 +356,9 @@ int main(int, char **) {
   RUN_TEST(test_merge_rejects_bad_values_with_errors);
   RUN_TEST(test_merge_rejects_non_object);
   RUN_TEST(test_merge_accepts_empty_github_user_and_ignores_unknown);
+  RUN_TEST(test_merge_rejects_non_decimal_coordinates);
+  RUN_TEST(test_merge_rejects_nan_inf_and_out_of_range_coordinates);
+  RUN_TEST(test_merge_accepts_etc_gmt_tz_name);
   RUN_TEST(test_merge_rejects_url_breaking_characters);
   RUN_TEST(test_round_trip_through_json);
   RUN_TEST(test_wifi_valid);

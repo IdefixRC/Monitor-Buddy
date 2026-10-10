@@ -87,6 +87,10 @@ bool applyCoordinate(JsonVariantConst v, char *dst, size_t size, double limit,
   const char *str = v.as<const char *>();
   size_t n = strlen(str);
   if (n < 1 || n > size - 1) return false;
+  // Plain decimal only. strtod would also take leading whitespace, hex and
+  // exponents, and the value goes verbatim into the weather URL.
+  for (size_t i = 0; i < n; i++)
+    if (strchr("0123456789.+-", str[i]) == nullptr) return false;
   char *end = nullptr;
   double d = strtod(str, &end);
   if (end == str || *end != '\0' || !(d >= -limit && d <= limit)) return false;  // also rejects NaN
