@@ -3,18 +3,35 @@
 
     python tools/mb_serial.py COM4 info
     python tools/mb_serial.py COM4 get
+    python tools/mb_serial.py COM4 get --show-key   also prints stock_key
+    python tools/mb_serial.py COM4 set ticker=AVGO theme=3 pages.stock=false
     python tools/mb_serial.py COM4 set '{"config":{"ticker":"AVGO"}}'
+    python tools/mb_serial.py COM4 set @settings.json
     python tools/mb_serial.py COM4 wifi        asks for the SSID and password
     python tools/mb_serial.py COM4 reboot
     python tools/mb_serial.py COM4 monitor     prints the serial log
     python tools/mb_serial.py COM4 selftest    protocol checks; restarts the
-                                               Buddy twice, restores settings
+                                               Buddy three times
+
+set takes key=value pairs (theme becomes a number; true/false become
+booleans for pages.*; everything else is text), a JSON body, or @file.json.
+Prefer key=value in PowerShell and cmd, which strip the quotes from JSON.
+
+wifi asks for the password with getpass, which can hang in Git Bash (mintty).
+Run it from PowerShell or cmd.
+
+selftest changes the ticker and restores it, and it leaves a /config.json on
+the board holding the original values. A build from source then no longer
+picks up config.h edits for those keys; change them with `set` instead.
+
+Exit codes: 0 ok, 1 the Buddy refused or did not answer, 2 bad arguments.
 
 Needs pyserial:  pip install pyserial
 """
 import argparse
 import getpass
 import json
+import os
 import sys
 import time
 
@@ -39,12 +56,34 @@ def send_raw(s, text):
     s.write((text + "\n").encode("utf-8"))
 
 
+def read_line(s, end):
+    """One full line, or None at the deadline. readline() with a 0.1 s port
+    timeout can return half a line, so collect bytes until the newline."""
+    buf = bytearray()
+    while time.time() < end:
+        c = s.read(1)   # one byte at a time, so nothing after the newline is lost
+        if not c:
+            continue
+        if c == b"\n":
+            return buf.decode("utf-8", "replace").strip()
+        buf += c
+    return None
+
+
 def read_reply(s, wait):
+    """The next parseable @MB reply within `wait` seconds, else None. A line
+    that is not valid JSON counts as no reply."""
     end = time.time() + wait
     while time.time() < end:
-        raw = s.readline().decode("utf-8", "replace").strip()
-        if raw.startswith("@MB "):
-            return json.loads(raw[4:])
+        raw = read_line(s, end)
+        if raw is None or not raw.startswith("@MB "):
+            continue
+        try:
+            reply = json.loads(raw[4:])
+        except ValueError:
+            continue
+        if isinstance(reply, dict):
+            return reply
     return None
 
 
@@ -98,12 +137,82 @@ def restart_and_reconnect(s, port):
     return reconnect(port)
 
 
+
+REDACTED = "<redacted>"
+CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+               "stock_key", "lat", "lon", "temp_unit", "wind_unit"]
+PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"]
+
+
+def redact(obj):
+    """A copy of obj that is safe to print: a non-empty stock_key is hidden."""
+    if isinstance(obj, dict):
+        return {k: (REDACTED if k == "stock_key" and v else redact(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [redact(v) for v in obj]
+    return obj
+
+
+def parse_json_body(text, where):
+    try:
+        body = json.loads(text)
+    except ValueError as e:
+        raise ValueError(
+            f"{where} is not valid JSON ({e}). PowerShell and cmd strip the quotes "
+            "from JSON on the command line; use key=value pairs instead, "
+            "e.g. set ticker=AVGO") from None
+    if not isinstance(body, dict):
+        raise ValueError(f"{where} must be a JSON object, e.g. {{\"config\":{{\"theme\":1}}}}")
+    return body
+
+
+def parse_set_args(args):
+    """The SET body for `set`: key=value pairs, a JSON body, or @file.json.
+    Raises ValueError with a readable message."""
+    if not args:
+        raise ValueError("set needs key=value pairs, a JSON body or @file.json")
+    if len(args) == 1 and args[0].startswith("@"):
+        path = args[0][1:]
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                text = f.read()
+        except OSError as e:
+            raise ValueError(f"cannot read {path}: {e.strerror}") from None
+        return parse_json_body(text, path)
+    if args[0].lstrip().startswith("{"):
+        return parse_json_body(" ".join(args), "the SET body")
+    config = {}
+    for arg in args:
+        key, sep, value = arg.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ValueError(f"'{arg}' is not key=value")
+        if key.startswith("pages."):
+            page = key[len("pages."):]
+            if page not in PAGE_KEYS:
+                raise ValueError(f"unknown page '{page}' (use one of: {', '.join(PAGE_KEYS)})")
+            if value.lower() not in ("true", "false"):
+                raise ValueError(f"{key} must be true or false")
+            config.setdefault("pages", {})[page] = value.lower() == "true"
+        elif key == "theme":
+            try:
+                config[key] = int(value)
+            except ValueError:
+                raise ValueError("theme must be a whole number (0-4)") from None
+        elif key in CONFIG_KEYS:
+            config[key] = value
+        else:
+            raise ValueError(f"unknown setting '{key}' (use one of: "
+                             f"{', '.join(CONFIG_KEYS)}, pages.<name>)")
+    return {"config": config}
+
+
 def selftest(port):
     results = []
 
     def check(name, cond, detail=""):
-        results.append(cond)
-        print(("PASS " if cond else "FAIL ") + name + (f"  ({detail})" if detail and not cond else ""))
+        results.append(bool(cond))
+        print(("PASS " if cond else "FAIL ") + name + (f"  ({redact(detail)})" if detail and not cond else ""))
 
     s = open_port(port)
     info = command(s, "INFO")
@@ -118,100 +227,178 @@ def selftest(port):
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
     check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
+    if not original:
+        s.close()
+        print("\nCannot go on without the current settings.")
+        return 1
 
-    r = command(s, "HELLO")
-    check("unknown command", r == {"ok": False, "error": "unknown command"}, r)
-    send_raw(s, "@MB SET {nope")
-    r = read_reply(s, 1.5)
-    check("bad json", r == {"ok": False, "error": "bad json"}, r)
-    r = command(s, "SET", {"config": {"theme": 9}})
-    check("invalid value rejected", r.get("ok") is False and "theme" in r.get("errors", {}), r)
-    r = command(s, "SET", {"wifi": {"ssid": "", "password": "x"}})
-    check("invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
-    r = command(s, "SET", {"config": {"ticker": "ZZZZ"}, "wifi": {"ssid": "", "password": "x"}})
-    check("valid config + invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
-    check("nothing saved after rejects", command(s, "GET").get("config") == original)
-    send_raw(s, "@MB SET " + "x" * 2100)
-    r = read_reply(s, 1.5)
-    check("line too long", r == {"ok": False, "error": "line too long"}, r)
-    s.reset_input_buffer()
-    send_raw(s, "hello buddy")
-    check("non-protocol line ignored", read_reply(s, 1.5) is None)
+    def current_config(s):
+        """The Buddy's settings, reconnecting if it is mid-restart."""
+        try:
+            got = command(s, "GET")
+            if got.get("ok"):
+                return s, got.get("config")
+        except (TimeoutError, OSError):
+            pass
+        s.close()
+        time.sleep(2)
+        s = reconnect(port)
+        return s, command(s, "GET").get("config")
 
-    # GET only shows the settings loaded at boot, so restart to prove that no
-    # rejected SET wrote anything to flash.
-    r = command(s, "REBOOT")
-    check("reboot ok", r == {"ok": True}, r)
-    s = restart_and_reconnect(s, port)
-    check("rejected SETs saved no config", command(s, "GET").get("config") == original)
-    after_wifi = command(s, "INFO").get("wifi", {})
-    check("rejected SETs left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
+    try:
+        r = command(s, "HELLO")
+        check("unknown command", r == {"ok": False, "error": "unknown command"}, r)
+        send_raw(s, "@MB SET {nope")
+        r = read_reply(s, 1.5)
+        check("bad json", r == {"ok": False, "error": "bad json"}, r)
+        r = command(s, "SET", {"config": {"theme": 9}})
+        check("invalid value rejected", r.get("ok") is False and "theme" in r.get("errors", {}), r)
+        r = command(s, "SET", {"wifi": {"ssid": "", "password": "x"}})
+        check("invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
+        r = command(s, "SET", {"wifi": {"ssid": "selftest"}})
+        check("wifi without a password rejected",
+              r.get("ok") is False and "wifi.password" in r.get("errors", {}), r)
+        r = command(s, "SET", {"config": {"ticker": "ZZZZ"}, "wifi": {"ssid": "", "password": "x"}})
+        check("valid config + invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
+        check("nothing saved after rejects", command(s, "GET").get("config") == original)
+        send_raw(s, "@MB SET " + "x" * 2100)
+        r = read_reply(s, 1.5)
+        check("line too long", r == {"ok": False, "error": "line too long"}, r)
+        s.reset_input_buffer()
+        send_raw(s, "hello buddy")
+        check("non-protocol line ignored", read_reply(s, 1.5) is None)
 
-    new_ticker = "MSFT" if original.get("ticker") != "MSFT" else "AVGO"
-    r = command(s, "SET", {"config": {"ticker": new_ticker}})
-    check("partial SET ok", r == {"ok": True}, r)
-    s = restart_and_reconnect(s, port)
-    after = command(s, "GET")
-    expected = dict(original, ticker=new_ticker)
-    check("partial SET kept the other keys", after.get("config") == expected, after.get("config"))
-    check("added empty after a save", after.get("added") == [], after.get("added"))
+        # GET only shows the settings loaded at boot, so restart to prove that no
+        # rejected SET wrote anything to flash.
+        r = command(s, "REBOOT")
+        check("reboot ok", r == {"ok": True}, r)
+        s = restart_and_reconnect(s, port)
+        check("rejected SETs saved no config", command(s, "GET").get("config") == original)
+        after_wifi = command(s, "INFO").get("wifi", {})
+        check("rejected SETs left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
 
-    r = command(s, "SET", {"config": original})
-    check("restore SET ok", r == {"ok": True}, r)
-    s = restart_and_reconnect(s, port)
-    check("settings restored", command(s, "GET").get("config") == original)
-    s.close()
+        new_ticker = "MSFT" if original.get("ticker") != "MSFT" else "AVGO"
+        r = command(s, "SET", {"config": {"ticker": new_ticker}})
+        check("partial SET ok", r == {"ok": True}, r)
+        # The Buddy restarts 300 ms after that reply. Until then it must refuse
+        # commands: a second SET would merge into stale settings, and a GET
+        # would report values that are about to change.
+        send_raw(s, "@MB GET")
+        r = read_reply(s, 1.5)
+        check("GET in the restart window is refused", r == {"ok": False, "error": "restarting"}, r)
+        s = restart_and_reconnect(s, port)
+        after = command(s, "GET")
+        expected = dict(original, ticker=new_ticker)
+        check("partial SET kept the other keys", after.get("config") == expected, after.get("config"))
+        check("added empty after a save", after.get("added") == [], after.get("added"))
+    finally:
+        # Put the original settings back, also when a check above blew up.
+        try:
+            s, now = current_config(s)
+            if now != original:
+                r = command(s, "SET", {"config": original})
+                check("restore SET ok", r == {"ok": True}, r)
+                s = restart_and_reconnect(s, port)
+                now = command(s, "GET").get("config")
+            check("settings restored", now == original)
+        except Exception as e:  # keep the original error, if there is one
+            results.append(False)
+            print(f"FAIL could not restore the original settings ({e}); check them with `get`")
+        try:
+            s.close()
+        except Exception:
+            pass
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} checks passed")
     return 0 if passed == len(results) else 1
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("port")
-    p.add_argument("action", choices=["info", "get", "set", "wifi", "reboot", "monitor", "selftest"])
-    p.add_argument("json", nargs="?", help="the SET body, e.g. '{\"config\":{\"theme\":1}}'")
-    a = p.parse_args()
+def monitor(s):
+    buf = bytearray()
+    try:
+        while True:
+            buf += s.read(s.in_waiting or 1)
+            while b"\n" in buf:
+                line, _, rest = bytes(buf).partition(b"\n")
+                buf = bytearray(rest)
+                line = line.decode("utf-8", "replace").rstrip()
+                if line:
+                    print(line, flush=True)
+    except KeyboardInterrupt:
+        return 0
 
+
+def run(a, parser):
     if a.action == "selftest":
         return selftest(a.port)
+
+    body = None
+    if a.action == "set":
+        try:
+            body = parse_set_args(a.args)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+    elif a.args:
+        parser.error(f"{a.action} takes no extra arguments")
+
     s = open_port(a.port)
     if a.action == "monitor":
-        try:
-            while True:
-                line = s.readline().decode("utf-8", "replace").rstrip()
-                if line:
-                    print(line)
-        except KeyboardInterrupt:
-            return 0
+        return monitor(s)
     if a.action == "info":
         print(json.dumps(command(s, "INFO"), indent=2))
     elif a.action == "get":
-        print(json.dumps(command(s, "GET"), indent=2))
+        r = command(s, "GET")
+        print(json.dumps(r if a.show_key else redact(r), indent=2))
+        return 0 if r.get("ok") else 1
     elif a.action == "reboot":
-        print(command(s, "REBOOT"))
+        r = command(s, "REBOOT")
+        print(r)
+        return 0 if r.get("ok") else 1
     elif a.action == "set":
-        if not a.json:
-            p.error("set needs a JSON body")
-        print(command(s, "SET", json.loads(a.json)))
+        r = command(s, "SET", body)
+        print(r)
+        return 0 if r.get("ok") else 1
     elif a.action == "wifi":
+        if os.environ.get("MSYSTEM"):
+            print("Git Bash can hang at the password prompt. If it does, press Ctrl+C "
+                  "and run this from PowerShell or cmd.")
         ssid = input("Wi-Fi name (SSID): ").strip()
         password = getpass.getpass("Wi-Fi password (empty for an open network): ")
         r = command(s, "SET", {"wifi": {"ssid": ssid, "password": password}})
         print(r)
-        if r.get("ok"):
-            s = restart_and_reconnect(s, a.port)
-            for _ in range(30):
-                w = command(s, "INFO")["wifi"]
-                if w.get("connected"):
-                    print(f"Connected to {w.get('ssid')} (RSSI {w.get('rssi')})")
-                    return 0
-                time.sleep(1)
-            print("Not connected after 30 s. Check the password; the setup hotspot may be open.")
+        if not r.get("ok"):
             return 1
+        s = restart_and_reconnect(s, a.port)
+        for _ in range(30):
+            w = command(s, "INFO")["wifi"]
+            if w.get("connected"):
+                print(f"Connected to {w.get('ssid')} (RSSI {w.get('rssi')})")
+                return 0
+            time.sleep(1)
+        print("Not connected after 30 s. Check the password; the setup hotspot may be open.")
+        return 1
     s.close()
     return 0
+
+
+def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            # AWM logs emoji; a cp1252 console would crash on them.
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("port")
+    p.add_argument("action", choices=["info", "get", "set", "wifi", "reboot", "monitor", "selftest"])
+    p.add_argument("args", nargs="*", help="for set: key=value pairs, a JSON body, or @file.json")
+    p.add_argument("--show-key", action="store_true", help="get: print stock_key instead of hiding it")
+    a = p.parse_args()
+    try:
+        return run(a, p)
+    except (TimeoutError, OSError) as e:   # includes serial.SerialException
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
