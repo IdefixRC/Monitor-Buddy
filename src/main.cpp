@@ -617,6 +617,7 @@ float   tiltSign       = 1.0f;
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
+bool settingsStored = false;   // booted from a readable /config.json; GET "stored"
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
@@ -1935,6 +1936,7 @@ void loadSettings() {
       }
     }
   }
+  settingsStored = haveFile;
   JsonDocument invalid;
   settingsLoad(defaultsFromConfig(), stored.as<JsonVariantConst>(), settings,
                settingsAdded, invalid.to<JsonObject>());
@@ -1957,8 +1959,23 @@ static const char *const WIFI_PATH = "/wifi.json";
 LineReader mbReader;
 uint32_t   restartAtMs = 0;    // non-zero: restart once millis() reaches it
 
-// One write per reply, so other output can't land inside the line.
-void mbReply(JsonDocument &doc) {
+// The request being answered. Set once per command in serviceProtocol();
+// mbReply() reads it, so no handler can leave "cmd" or "id" out.
+struct MbRequest {
+  char    cmd[17];                // the command word as sent, up to 16 characters
+  bool    hasId;
+  int32_t id;
+};
+MbRequest mbReq = {"", false, 0};
+
+// Sends {"ok":ok,"cmd":...,["id":...,] ...fields}, in that order. One write per
+// reply, so other output can't land inside the line.
+void mbReply(bool ok, JsonDocument &fields) {
+  JsonDocument doc;
+  doc["ok"]  = ok;
+  doc["cmd"] = (const char *)mbReq.cmd;
+  if (mbReq.hasId) doc["id"] = mbReq.id;
+  for (JsonPair kv : fields.as<JsonObject>()) doc[kv.key()] = kv.value();
   static char out[LineReader::CAPACITY];
   memcpy(out, MB_PREFIX, 4);
   size_t n = serializeJson(doc, out + 4, sizeof(out) - 5);
@@ -1966,11 +1983,15 @@ void mbReply(JsonDocument &doc) {
   Serial.write((const uint8_t *)out, 5 + n);
 }
 
+void mbOk() {
+  JsonDocument none;
+  mbReply(true, none);
+}
+
 void mbError(const char *message) {
-  JsonDocument doc;
-  doc["ok"]    = false;
-  doc["error"] = message;
-  mbReply(doc);
+  JsonDocument fields;
+  fields["error"] = message;
+  mbReply(false, fields);
 }
 
 void scheduleRestart() {
@@ -2009,7 +2030,6 @@ void readSavedSsid(char *ssid, size_t len) {
 
 void mbInfo() {
   JsonDocument doc;
-  doc["ok"]    = true;
   doc["fw"]    = FW_VERSION;
   doc["cfg_v"] = CONFIG_VERSION;
   uint8_t mac[6];
@@ -2026,24 +2046,24 @@ void mbInfo() {
   bool up = !wifiManager.isPortalActive() && wifiManager.isConnected();
   w["connected"] = up;
   if (up) w["rssi"] = wifiManager.getSignalStrength();
-  mbReply(doc);
+  mbReply(true, doc);
 }
 
 void mbGet() {
   JsonDocument doc;
-  doc["ok"] = true;
-  doc["v"]  = CONFIG_VERSION;
+  doc["v"]      = CONFIG_VERSION;
+  doc["stored"] = settingsStored;
   settingsToJson(settings, doc["config"].to<JsonObject>());
   JsonArray added = doc["added"].to<JsonArray>();
   for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
-  mbReply(doc);
+  mbReply(true, doc);
 }
 
-// {"config":{...partial...}, "wifi":{"ssid","password"}}, both optional.
-// Everything is validated before anything is written; then a restart.
-void mbSet(const char *arg) {
-  JsonDocument req;
-  if (deserializeJson(req, arg) || !req.is<JsonObject>()) { mbError("bad json"); return; }
+// {"config":{...partial...}, "wifi":{"ssid","password"}}, both optional (plus
+// the request "id"). Everything is validated before anything is written; then
+// a restart. `req` is the argument mbParseArg() already parsed.
+void mbSet(JsonDocument &req) {
+  if (!req.is<JsonObject>()) { mbError("bad json"); return; }   // SET needs a body
   JsonVariantConst cfg  = req["config"];
   JsonVariantConst wifi = req["wifi"];
 
@@ -2054,7 +2074,7 @@ void mbSet(const char *arg) {
   bool ok = true;
   if (!cfg.isNull() && !settingsMerge(settings, cfg, next, errors)) ok = false;
   if (!wifi.isNull() && !wifiValidate(wifi, ssid, sizeof(ssid), pass, sizeof(pass), errors)) ok = false;
-  if (!ok) { res["ok"] = false; mbReply(res); return; }
+  if (!ok) { mbReply(false, res); return; }
 
   if (!cfg.isNull()) {
     JsonDocument file;
@@ -2067,41 +2087,59 @@ void mbSet(const char *arg) {
     file["password"] = (const char *)pass;
     if (!writeJsonAtomic(WIFI_PATH, file)) { mbError("could not save wifi"); return; }
   }
-  JsonDocument done;
-  done["ok"] = true;
-  mbReply(done);
+  mbOk();
   Serial.printf("settings: saved%s%s, restarting\n",
                 cfg.isNull() ? "" : " config", wifi.isNull() ? "" : " wifi");
+  scheduleRestart();
+}
+
+// Deletes the saved settings, so the next boot uses the config.h values.
+// Wi-Fi (/wifi.json) and brightness (/display.json) stay. With no file it is
+// still ok and still restarts, which keeps the command idempotent.
+void mbDefaults() {
+  const String tmp = String(CONFIG_PATH) + ".tmp";
+  if (LittleFS.exists(tmp)) LittleFS.remove(tmp);       // a leftover from a failed save
+  if (LittleFS.exists(CONFIG_PATH) && !LittleFS.remove(CONFIG_PATH)) {
+    mbError("could not reset settings");
+    return;
+  }
+  mbOk();
+  Serial.println("settings: reset to config.h values, restarting");
   scheduleRestart();
 }
 
 void serviceProtocol() {
   while (Serial.available() > 0) {
     LineReader::Result r = mbReader.feed((char)Serial.read());
-    // A restart is pending: answer "restarting" instead of acting. A second
-    // SET would merge into the stale boot-time settings and lose the first
-    // one's changes; a GET would report values that are about to change.
     if (r == LineReader::TOO_LONG) {
+      // Too long to parse, so no id; "cmd" is the first word of the line.
+      mbReq.hasId = false;
+      mbCommandWord(mbReader.line(), mbReq.cmd, sizeof(mbReq.cmd));
       mbError(restartAtMs != 0 ? "restarting" : "line too long");
       continue;
     }
     if (r != LineReader::LINE) continue;
     const char *arg = "";
     MbCommand cmd = mbParse(mbReader.line(), &arg);
-    if (cmd != MB_NONE && restartAtMs != 0) { mbError("restarting"); continue; }
+    if (cmd == MB_NONE) continue;
+
+    mbCommandWord(mbReader.line(), mbReq.cmd, sizeof(mbReq.cmd));
+    JsonDocument body;                    // the parsed argument, null when empty
+    MbArgResult parsed = mbParseArg(arg, body, mbReq.hasId, mbReq.id);
+    // A restart is pending: answer "restarting" instead of acting. A second
+    // SET would merge into the stale boot-time settings and lose the first
+    // one's changes; a GET would report values that are about to change.
+    // The id is echoed only if the argument parsed and held a valid one.
+    if (restartAtMs != 0) { mbError("restarting"); continue; }
+    if (parsed == MB_ARG_BAD_JSON) { mbError("bad json"); continue; }
+    if (parsed == MB_ARG_BAD_ID)   { mbError("bad id"); continue; }
     switch (cmd) {
-      case MB_NONE:    break;
-      case MB_INFO:    mbInfo(); break;
-      case MB_GET:     mbGet(); break;
-      case MB_SET:     mbSet(arg); break;
-      case MB_REBOOT: {
-        JsonDocument d;
-        d["ok"] = true;
-        mbReply(d);
-        scheduleRestart();
-        break;
-      }
-      default:         mbError("unknown command"); break;
+      case MB_INFO:     mbInfo(); break;
+      case MB_GET:      mbGet(); break;
+      case MB_SET:      mbSet(body); break;
+      case MB_REBOOT:   mbOk(); scheduleRestart(); break;
+      case MB_DEFAULTS: mbDefaults(); break;
+      default:          mbError("unknown command"); break;
     }
   }
   if (restartAtMs != 0 && (int32_t)(millis() - restartAtMs) >= 0) {
