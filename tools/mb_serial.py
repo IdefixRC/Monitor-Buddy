@@ -28,6 +28,12 @@ them, and it leaves a /config.json on the board holding the original values. A
 build from source then no longer picks up config.h edits for those keys; change
 them with `set` instead.
 
+set, wifi, defaults and reboot send their command once and wait up to 3 s. If
+the reply never comes, the Buddy may still have saved the change and restarted,
+so the tool reconnects and checks (GET or INFO) instead of resending: success
+with a note when the change is there, an error when it is not. info and get
+only read, so they are retried.
+
 Exit codes: 0 ok, 1 the Buddy refused or did not answer, 2 bad arguments.
 
 Needs pyserial:  pip install pyserial
@@ -49,6 +55,9 @@ ANY = object()   # read_reply: accept a reply whatever its id
 # argument: the line was too long, the argument was not JSON, or a restart is
 # pending and the argument did not parse.
 IDLESS_ERRORS = ("line too long", "bad json", "restarting")
+# Commands that change the board. They are never resent (see command()).
+CHANGING = ("SET", "DEFAULTS", "REBOOT")
+CHANGE_WAIT = 3.0
 
 
 def open_port(port):
@@ -123,9 +132,20 @@ def read_reply(s, wait, cmd=None, rid=ANY, idless_errors=False):
     return None
 
 
-def command(s, cmd, body=None, attempts=3, wait=1.5, rid=None):
+def command(s, cmd, body=None, attempts=None, wait=None, rid=None):
     """Sends `cmd` with a fresh id (or `rid`) and returns the reply that echoes
-    that id and command word. For SET the id goes into the body."""
+    that id and command word. For SET the id goes into the body.
+
+    INFO and GET only read, so they are sent up to 3 times, 1.5 s apart. SET,
+    DEFAULTS and REBOOT change the board, so they are sent ONCE and given 3 s:
+    the Buddy may have acted on the first copy and lost only its reply, and a
+    second copy would hit a board that is restarting. Raises TimeoutError when
+    no reply comes; use change() to find out what happened to the board."""
+    changing = cmd in CHANGING
+    if attempts is None:
+        attempts = 1 if changing else 3
+    if wait is None:
+        wait = CHANGE_WAIT if changing else 1.5
     if rid is None:
         rid = next_id()
     payload = {"id": rid}
@@ -176,6 +196,108 @@ def restart_and_reconnect(s, port):
     time.sleep(1.5)   # the Buddy restarts 300 ms after its reply
     s.close()
     return reconnect(port)
+
+
+def _same(want, got):
+    return want == got or (got is not None and str(want) == str(got))
+
+
+def _read_ok(s, cmd):
+    """GET or INFO as a reply with ok:true, or None. These only read, so a few
+    tries are fine; the first may land in a restart window."""
+    for _ in range(3):
+        try:
+            r = command(s, cmd)
+        except (TimeoutError, OSError):
+            return None
+        if r.get("ok"):
+            return r
+        time.sleep(1)
+    return None
+
+
+def verify_change(s, cmd, body):
+    """After a reply was lost: does the board show the change `cmd` asked for?
+    Returns (ok, detail). Wi-Fi can't be checked by value (the password is
+    write-only), so a SET with wifi is judged by INFO.wifi.ssid alone."""
+    if cmd == "REBOOT":
+        # Reconnecting after the port went away (reconnect() got INFO) is the
+        # evidence; there is nothing else to compare.
+        return True, "the Buddy answered again after the port was reopened"
+    if cmd == "DEFAULTS":
+        got = _read_ok(s, "GET")
+        if got is None:
+            return False, "GET did not answer"
+        if got.get("stored") is False:
+            return True, "the saved settings are gone (stored:false)"
+        return False, "the saved settings are still there (stored:true)"
+    # SET
+    want = (body or {}).get("config") or {}
+    if want:
+        got = _read_ok(s, "GET")
+        if got is None:
+            return False, "GET did not answer"
+        have = got.get("config") or {}
+        for key, value in want.items():
+            if key == "pages" and isinstance(value, dict):
+                for page, on in value.items():
+                    if (have.get("pages") or {}).get(page) is not on:
+                        return False, f"pages.{page} is not {str(on).lower()} on the board"
+            elif not _same(value, have.get(key)):
+                return False, f"{key} is not the requested value on the board"
+    wifi = (body or {}).get("wifi")
+    if isinstance(wifi, dict):
+        got = _read_ok(s, "INFO")
+        if got is None:
+            return False, "INFO did not answer"
+        if (got.get("wifi") or {}).get("ssid") != wifi.get("ssid"):
+            return False, "the saved Wi-Fi name is not the requested one"
+    return True, "every requested value is on the board"
+
+
+class Change:
+    """The outcome of change(): the open port `s`, whether the change took
+    effect (`ok`), the board's `reply` (None when it was lost), a `note` to show
+    the user, and `restarted` (True when `s` is already a fresh connection)."""
+    def __init__(self, s, ok, reply, note="", restarted=False):
+        self.s, self.ok, self.reply, self.note, self.restarted = s, ok, reply, note, restarted
+
+
+def change(s, port, cmd, body=None, wait_restart=False):
+    """Sends SET, DEFAULTS or REBOOT once. If the reply arrives, that is the
+    answer. If not, the board may still have done it, so reopen the port and
+    check (verify_change) instead of resending. Never resends.
+
+    wait_restart: after an ok reply, also wait for the restart and reconnect.
+    The returned Change.s is the port to use from here on."""
+    reply = None
+    try:
+        reply = command(s, cmd, body)
+    except (TimeoutError, OSError):
+        pass
+    if reply is not None:
+        if reply.get("ok") and wait_restart:
+            s = restart_and_reconnect(s, port)
+            return Change(s, True, reply, restarted=True)
+        return Change(s, bool(reply.get("ok")), reply)
+    # No reply. The board probably restarted 300 ms after answering.
+    try:
+        s.close()
+    except OSError:
+        pass
+    time.sleep(1.5)
+    try:
+        s = reconnect(port)
+    except (TimeoutError, OSError):
+        return Change(s, False, None,
+                      f"no reply to {cmd} and the Buddy did not come back; check it with `info`")
+    ok, detail = verify_change(s, cmd, body)
+    if ok:
+        return Change(s, True, None,
+                      f"the reply to {cmd} was lost, but the change is on the board ({detail})",
+                      restarted=True)
+    return Change(s, False, None, f"no reply to {cmd}, and it did not take effect ({detail})",
+                  restarted=True)
 
 
 
@@ -348,12 +470,22 @@ def selftest(port):
         send_raw(s, "hello buddy")
         check("non-protocol line ignored", read_reply(s, 1.5) is None)
 
+        # Lock contention: with no delay between commands, the Buddy's reply
+        # often meets another task mid-print. Every reply must still arrive.
+        missing = []
+        for i in range(30):
+            rid = next_id()
+            send_raw(s, f'@MB INFO {{"id":{rid}}}')
+            r = read_reply(s, 3.0, "INFO", rid)
+            if r is None or r.get("ok") is not True:
+                missing.append(i)
+        check("30 INFO back to back, all answered", not missing, f"no reply to {missing}")
+
         # GET only shows the settings loaded at boot, so restart to prove that no
         # rejected SET wrote anything to flash.
-        rid = next_id()
-        r = command(s, "REBOOT", rid=rid)
-        check("reboot ok", r == {"ok": True, "cmd": "REBOOT", "id": rid}, r)
-        s = restart_and_reconnect(s, port)
+        c = change(s, port, "REBOOT", wait_restart=True)
+        s = c.s
+        check("reboot ok", c.ok and (c.reply is None or c.reply.get("cmd") == "REBOOT"), c.reply or c.note)
         after = command(s, "GET")
         check("rejected SETs saved no config", after.get("config") == original)
         check("rejected SETs left the stored flag", after.get("stored") is was_stored, after.get("stored"))
@@ -386,10 +518,9 @@ def selftest(port):
         check("stored after a save", after.get("stored") is True, after.get("stored"))
 
         # DEFAULTS deletes /config.json; the next boot uses the config.h values.
-        rid = next_id()
-        r = command(s, "DEFAULTS", rid=rid)
-        check("DEFAULTS ok", r == {"ok": True, "cmd": "DEFAULTS", "id": rid}, r)
-        s = restart_and_reconnect(s, port)
+        c = change(s, port, "DEFAULTS", wait_restart=True)
+        s = c.s
+        check("DEFAULTS ok", c.ok and (c.reply is None or c.reply.get("cmd") == "DEFAULTS"), c.reply or c.note)
         after = command(s, "GET")
         check("DEFAULTS cleared the stored flag", after.get("stored") is False, after.get("stored"))
         check("added empty with no file", after.get("added") == [], after.get("added"))
@@ -397,14 +528,14 @@ def selftest(port):
         # `original`, so they are not compared.
         after_wifi = command(s, "INFO").get("wifi", {})
         check("DEFAULTS left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
-        r = command(s, "DEFAULTS")
-        check("DEFAULTS with no file is still ok", r.get("ok") is True and r.get("cmd") == "DEFAULTS", r)
-        s = restart_and_reconnect(s, port)
+        c = change(s, port, "DEFAULTS", wait_restart=True)
+        s = c.s
+        check("DEFAULTS with no file is still ok", c.ok, c.reply or c.note)
         check("second DEFAULTS left stored false", command(s, "GET").get("stored") is False)
 
-        r = command(s, "SET", {"config": original})
-        check("SET original ok", r.get("ok") is True and r.get("cmd") == "SET", r)
-        s = restart_and_reconnect(s, port)
+        c = change(s, port, "SET", {"config": original}, wait_restart=True)
+        s = c.s
+        check("SET original ok", c.ok and (c.reply is None or c.reply.get("cmd") == "SET"), c.reply or c.note)
         after = command(s, "GET")
         check("SET after DEFAULTS stored the config", after.get("stored") is True, after.get("stored"))
         check("config is the original again", after.get("config") == original, after.get("config"))
@@ -415,9 +546,9 @@ def selftest(port):
             s, got = current_state(s)
             now = got.get("config")
             if now != original or (was_stored and got.get("stored") is not True):
-                r = command(s, "SET", {"config": original})
-                check("restore SET ok", r.get("ok") is True, r)
-                s = restart_and_reconnect(s, port)
+                c = change(s, port, "SET", {"config": original}, wait_restart=True)
+                s = c.s
+                check("restore SET ok", c.ok, c.reply or c.note)
                 got = command(s, "GET")
                 now = got.get("config")
             check("settings restored", now == original and (not was_stored or got.get("stored") is True))
@@ -449,6 +580,18 @@ def monitor(s):
         return 0
 
 
+def report(c):
+    """Prints a Change: the board's reply, or what we found out instead.
+    Returns the exit code."""
+    if c.reply is not None:
+        print(c.reply)
+    elif c.ok:
+        print("ok: " + c.note)
+    else:
+        print("error: " + c.note, file=sys.stderr)
+    return 0 if c.ok else 1
+
+
 def run(a, parser):
     if a.action == "selftest":
         return selftest(a.port)
@@ -473,19 +616,14 @@ def run(a, parser):
         print(json.dumps(r if a.show_key else redact(r), indent=2))
         return 0 if r.get("ok") else 1
     elif a.action == "reboot":
-        r = command(s, "REBOOT")
-        print(r)
-        return 0 if r.get("ok") else 1
+        return report(change(s, a.port, "REBOOT"))
     elif a.action == "set":
-        r = command(s, "SET", body)
-        print(r)
-        return 0 if r.get("ok") else 1
+        return report(change(s, a.port, "SET", body))
     elif a.action == "defaults":
-        r = command(s, "DEFAULTS")
-        print(r)
-        if not r.get("ok"):
+        c = change(s, a.port, "DEFAULTS", wait_restart=True)
+        if report(c):
             return 1
-        s = restart_and_reconnect(s, a.port)
+        s = c.s
         r = command(s, "GET")
         print(json.dumps(redact(r), indent=2))
         s.close()
@@ -496,11 +634,11 @@ def run(a, parser):
                   "and run this from PowerShell or cmd.")
         ssid = input("Wi-Fi name (SSID): ").strip()
         password = getpass.getpass("Wi-Fi password (empty for an open network): ")
-        r = command(s, "SET", {"wifi": {"ssid": ssid, "password": password}})
-        print(r)
-        if not r.get("ok"):
+        c = change(s, a.port, "SET", {"wifi": {"ssid": ssid, "password": password}},
+                   wait_restart=True)
+        if report(c):
             return 1
-        s = restart_and_reconnect(s, a.port)
+        s = c.s
         for _ in range(30):
             w = command(s, "INFO")["wifi"]
             if w.get("connected"):
