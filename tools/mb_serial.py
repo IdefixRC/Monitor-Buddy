@@ -128,6 +128,8 @@ def selftest(port):
     check("invalid value rejected", r.get("ok") is False and "theme" in r.get("errors", {}), r)
     r = command(s, "SET", {"wifi": {"ssid": "", "password": "x"}})
     check("invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
+    r = command(s, "SET", {"config": {"ticker": "ZZZZ"}, "wifi": {"ssid": "", "password": "x"}})
+    check("valid config + invalid wifi rejected", r.get("ok") is False and "wifi.ssid" in r.get("errors", {}), r)
     check("nothing saved after rejects", command(s, "GET").get("config") == original)
     send_raw(s, "@MB SET " + "x" * 2100)
     r = read_reply(s, 1.5)
@@ -135,6 +137,15 @@ def selftest(port):
     s.reset_input_buffer()
     send_raw(s, "hello buddy")
     check("non-protocol line ignored", read_reply(s, 1.5) is None)
+
+    # GET only shows the settings loaded at boot, so restart to prove that no
+    # rejected SET wrote anything to flash.
+    r = command(s, "REBOOT")
+    check("reboot ok", r == {"ok": True}, r)
+    s = restart_and_reconnect(s, port)
+    check("rejected SETs saved no config", command(s, "GET").get("config") == original)
+    after_wifi = command(s, "INFO").get("wifi", {})
+    check("rejected SETs left the saved wifi", after_wifi.get("ssid") == info.get("wifi", {}).get("ssid"), after_wifi)
 
     new_ticker = "MSFT" if original.get("ticker") != "MSFT" else "AVGO"
     r = command(s, "SET", {"config": {"ticker": new_ticker}})
