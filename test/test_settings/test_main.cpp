@@ -283,8 +283,17 @@ static void test_wifi_open_network() {
   char ssid[33], pass[64]; JsonDocument errs;
   TEST_ASSERT_TRUE(runWifi("{\"ssid\":\"Cafe\",\"password\":\"\"}", ssid, pass, errs));
   TEST_ASSERT_EQUAL_STRING("", pass);
-  TEST_ASSERT_TRUE(runWifi("{\"ssid\":\"Cafe\"}", ssid, pass, errs));
-  TEST_ASSERT_EQUAL_STRING("", pass);
+}
+
+static void test_wifi_password_is_required() {
+  char ssid[33], pass[64]; JsonDocument errs;
+  TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"Cafe\"}", ssid, pass, errs));
+  TEST_ASSERT_EQUAL_STRING("must be text (empty for an open network)", errs["wifi.password"] | "");
+  TEST_ASSERT_TRUE(errs["wifi.ssid"].isNull());
+  TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"Cafe\",\"password\":null}", ssid, pass, errs));
+  TEST_ASSERT_EQUAL_STRING("must be text (empty for an open network)", errs["wifi.password"] | "");
+  TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"Cafe\",\"password\":12345678}", ssid, pass, errs));
+  TEST_ASSERT_FALSE(errs["wifi.password"].isNull());
 }
 
 static void test_wifi_rejects_bad_input() {
@@ -293,7 +302,7 @@ static void test_wifi_rejects_bad_input() {
   TEST_ASSERT_FALSE(errs["wifi.ssid"].isNull());
   TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"Home\",\"password\":\"short77\"}", ssid, pass, errs));
   TEST_ASSERT_FALSE(errs["wifi.password"].isNull());
-  TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"123456789012345678901234567890123\"}", ssid, pass, errs));
+  TEST_ASSERT_FALSE(runWifi("{\"ssid\":\"123456789012345678901234567890123\",\"password\":\"\"}", ssid, pass, errs));
   TEST_ASSERT_FALSE(errs["wifi.ssid"].isNull());
   TEST_ASSERT_FALSE(runWifi("\"Home\"", ssid, pass, errs));
   TEST_ASSERT_FALSE(errs["wifi"].isNull());
@@ -363,6 +372,7 @@ int main(int, char **) {
   RUN_TEST(test_round_trip_through_json);
   RUN_TEST(test_wifi_valid);
   RUN_TEST(test_wifi_open_network);
+  RUN_TEST(test_wifi_password_is_required);
   RUN_TEST(test_wifi_rejects_bad_input);
   return UNITY_END();
 }

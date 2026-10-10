@@ -227,9 +227,13 @@ bool wifiValidate(JsonVariantConst wifi, char *ssid, size_t ssidLen,
     ok = false;
   }
   JsonVariantConst p = obj["password"];
-  const char *pv = p.isNull() ? "" : (p.is<const char *>() ? p.as<const char *>() : nullptr);
+  const char *pv = p.is<const char *>() ? p.as<const char *>() : nullptr;
   size_t pn = pv ? strlen(pv) : 0;
-  if (!pv || (pn != 0 && (pn < 8 || pn > 63)) || pn >= passLen) {
+  if (!pv) {
+    // Required, so a client can't save an open network by forgetting the field.
+    errors["wifi.password"] = "must be text (empty for an open network)";
+    ok = false;
+  } else if ((pn != 0 && (pn < 8 || pn > 63)) || pn >= passLen) {
     errors["wifi.password"] = "must be empty or 8-63 characters";
     ok = false;
   }

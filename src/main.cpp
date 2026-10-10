@@ -621,6 +621,8 @@ AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
               PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
+static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
+              "settings.pages[] needs one entry per page");
 
 Arduino_DataBus *bus     = new Arduino_HWSPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI);
 Arduino_GFX    *display  = new Arduino_ST7789(bus, LCD_RST, 0, false, 172, 320, 34, 0, 34, 0);
@@ -964,8 +966,11 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 // never left blank.
 void buildPageList() {
   pageCount = 0;
-  for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++)
-    if (settings.pages[i]) pageOrder[pageCount++] = i;
+  for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
+    if (!settings.pages[i]) continue;
+    if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
+    pageOrder[pageCount++] = i;
+  }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
   if (currentPageIdx >= pageCount) currentPageIdx = 0;
   currentApp = pageOrder[currentPageIdx];
@@ -1038,9 +1043,15 @@ void syncNTP() {
     configTzTime(settings.tzRule, "pool.ntp.org", "time.cloudflare.com");
   }
 
+  // The system clock survives esp_restart() and flashing, so a plausible year
+  // proves nothing. Only trust it once SNTP reports a completed sync. The
+  // status is read-and-clear: it reports COMPLETED once, which is enough here
+  // because we stop asking after that. configTzTime() above starts SNTP over,
+  // so the status is pending again after every (re)start.
   struct tm ti;
   memset(&ti, 0, sizeof(ti));
-  if (!getLocalTime(&ti, 0) || ti.tm_year <= 100) {
+  if (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED
+      || !getLocalTime(&ti, 0) || ti.tm_year <= 100) {
     if (startOrRetry) Serial.println("NTP: pending — using compile-time seed");
     return;
   }
@@ -1772,7 +1783,7 @@ void drawGithub() {
   gfx->fillScreen(BG);
   if (!githubConfigured()) {
     centeredText("NO GITHUB USER", 60, 3);
-    centeredText("SET IT IN THE FLASHER", 100, 2);
+    centeredText("SET GITHUB USER", 100, 2);
     drawPageDots(); return;
   }
   if (drawWifiGate()) return;
@@ -1975,7 +1986,7 @@ bool writeJsonAtomic(const char *path, JsonDocument &doc) {
   if (!f) return false;
   size_t n = serializeJson(doc, f);
   f.close();
-  if (n == 0) { LittleFS.remove(tmp); return false; }
+  if (n == 0 || n != measureJson(doc)) { LittleFS.remove(tmp); return false; }  // short write
   if (LittleFS.rename(tmp, path)) return true;
   // Fallback in case the filesystem won't rename over an existing file.
   LittleFS.remove(path);
@@ -1983,9 +1994,11 @@ bool writeJsonAtomic(const char *path, JsonDocument &doc) {
 }
 
 // The saved SSID from AWM's /wifi.json (plain format: {"ssid","password"}).
-// Empty if there is none, or if the file is in AWM's encrypted format.
+// Empty if there is none, or if the file can't be read as plain JSON.
+// (AWM's encryption is never enabled here.)
 void readSavedSsid(char *ssid, size_t len) {
   ssid[0] = '\0';
+  if (!LittleFS.exists(WIFI_PATH)) return;   // no VFS error log on every INFO
   File f = LittleFS.open(WIFI_PATH, "r");
   if (!f) return;
   JsonDocument doc;
@@ -2065,10 +2078,18 @@ void mbSet(const char *arg) {
 void serviceProtocol() {
   while (Serial.available() > 0) {
     LineReader::Result r = mbReader.feed((char)Serial.read());
-    if (r == LineReader::TOO_LONG) { mbError("line too long"); continue; }
+    // A restart is pending: answer "restarting" instead of acting. A second
+    // SET would merge into the stale boot-time settings and lose the first
+    // one's changes; a GET would report values that are about to change.
+    if (r == LineReader::TOO_LONG) {
+      mbError(restartAtMs != 0 ? "restarting" : "line too long");
+      continue;
+    }
     if (r != LineReader::LINE) continue;
     const char *arg = "";
-    switch (mbParse(mbReader.line(), &arg)) {
+    MbCommand cmd = mbParse(mbReader.line(), &arg);
+    if (cmd != MB_NONE && restartAtMs != 0) { mbError("restarting"); continue; }
+    switch (cmd) {
       case MB_NONE:    break;
       case MB_INFO:    mbInfo(); break;
       case MB_GET:     mbGet(); break;

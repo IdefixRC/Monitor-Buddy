@@ -57,7 +57,8 @@ bool settingsMerge(const Settings &current, JsonVariantConst patch,
 // Every key, plus "v" = CONFIG_VERSION.
 void settingsToJson(const Settings &s, JsonObject out);
 
-// {"ssid": 1-32 chars, "password": empty or 8-63 chars, may be missing}.
+// {"ssid": 1-32 chars, "password": required; "" for an open network, else
+// 8-63 chars}.
 // ssidLen must be >= 33 and passLen >= 64.
 bool wifiValidate(JsonVariantConst wifi, char *ssid, size_t ssidLen,
                   char *pass, size_t passLen, JsonObject errors);
