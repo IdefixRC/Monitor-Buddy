@@ -317,6 +317,7 @@ void calibrateNeutral();
 void loadDisplaySettings();
 Settings defaultsFromConfig();
 void loadSettings();
+void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
@@ -1937,6 +1938,157 @@ void loadSettings() {
                 settings.stockKey[0] ? "set" : "empty");
 }
 
+// ── Serial settings protocol (the web flasher) ────────────
+// "@MB <COMMAND>[ <json>]" in, "@MB <json>" out; see lib/protocol and the
+// design spec. Serviced at the top of loop(), so it also answers while the
+// setup hotspot is open. Nothing answers while setup() is still running.
+static const char *const WIFI_PATH = "/wifi.json";
+LineReader mbReader;
+uint32_t   restartAtMs = 0;    // non-zero: restart once millis() reaches it
+
+// One write per reply, so other output can't land inside the line.
+void mbReply(JsonDocument &doc) {
+  static char out[LineReader::CAPACITY];
+  memcpy(out, MB_PREFIX, 4);
+  size_t n = serializeJson(doc, out + 4, sizeof(out) - 5);
+  out[4 + n] = '\n';
+  Serial.write((const uint8_t *)out, 5 + n);
+}
+
+void mbError(const char *message) {
+  JsonDocument doc;
+  doc["ok"]    = false;
+  doc["error"] = message;
+  mbReply(doc);
+}
+
+void scheduleRestart() {
+  restartAtMs = millis() + 300;           // time for the reply to leave
+  if (restartAtMs == 0) restartAtMs = 1;
+}
+
+// Writes to path.tmp, then renames it over path, so a power cut leaves either
+// the old file or the new one.
+bool writeJsonAtomic(const char *path, JsonDocument &doc) {
+  String tmp = String(path) + ".tmp";
+  File f = LittleFS.open(tmp, "w");
+  if (!f) return false;
+  size_t n = serializeJson(doc, f);
+  f.close();
+  if (n == 0) { LittleFS.remove(tmp); return false; }
+  if (LittleFS.rename(tmp, path)) return true;
+  // Fallback in case the filesystem won't rename over an existing file.
+  LittleFS.remove(path);
+  return LittleFS.rename(tmp, path);
+}
+
+// The saved SSID from AWM's /wifi.json (plain format: {"ssid","password"}).
+// Empty if there is none, or if the file is in AWM's encrypted format.
+void readSavedSsid(char *ssid, size_t len) {
+  ssid[0] = '\0';
+  File f = LittleFS.open(WIFI_PATH, "r");
+  if (!f) return;
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, f);
+  f.close();
+  if (!e && doc["ssid"].is<const char *>()) strlcpy(ssid, doc["ssid"], len);
+}
+
+void mbInfo() {
+  JsonDocument doc;
+  doc["ok"]    = true;
+  doc["fw"]    = FW_VERSION;
+  doc["cfg_v"] = CONFIG_VERSION;
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  doc["mac"] = macStr;
+  JsonObject w = doc["wifi"].to<JsonObject>();
+  char ssid[33];
+  readSavedSsid(ssid, sizeof(ssid));
+  w["saved"] = wifiManager.tieneCredenciales();
+  w["ssid"]  = (const char *)ssid;
+  bool up = !wifiManager.isPortalActive() && wifiManager.isConnected();
+  w["connected"] = up;
+  if (up) w["rssi"] = wifiManager.getSignalStrength();
+  mbReply(doc);
+}
+
+void mbGet() {
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["v"]  = CONFIG_VERSION;
+  settingsToJson(settings, doc["config"].to<JsonObject>());
+  JsonArray added = doc["added"].to<JsonArray>();
+  for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
+  mbReply(doc);
+}
+
+// {"config":{...partial...}, "wifi":{"ssid","password"}}, both optional.
+// Everything is validated before anything is written; then a restart.
+void mbSet(const char *arg) {
+  JsonDocument req;
+  if (deserializeJson(req, arg) || !req.is<JsonObject>()) { mbError("bad json"); return; }
+  JsonVariantConst cfg  = req["config"];
+  JsonVariantConst wifi = req["wifi"];
+
+  JsonDocument res;
+  JsonObject errors = res["errors"].to<JsonObject>();
+  Settings next = settings;
+  char ssid[33], pass[64];
+  bool ok = true;
+  if (!cfg.isNull() && !settingsMerge(settings, cfg, next, errors)) ok = false;
+  if (!wifi.isNull() && !wifiValidate(wifi, ssid, sizeof(ssid), pass, sizeof(pass), errors)) ok = false;
+  if (!ok) { res["ok"] = false; mbReply(res); return; }
+
+  if (!cfg.isNull()) {
+    JsonDocument file;
+    settingsToJson(next, file.to<JsonObject>());
+    if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
+  }
+  if (!wifi.isNull()) {
+    JsonDocument file;                    // AWM's plain format
+    file["ssid"]     = (const char *)ssid;
+    file["password"] = (const char *)pass;
+    if (!writeJsonAtomic(WIFI_PATH, file)) { mbError("could not save wifi"); return; }
+  }
+  JsonDocument done;
+  done["ok"] = true;
+  mbReply(done);
+  Serial.printf("settings: saved%s%s, restarting\n",
+                cfg.isNull() ? "" : " config", wifi.isNull() ? "" : " wifi");
+  scheduleRestart();
+}
+
+void serviceProtocol() {
+  while (Serial.available() > 0) {
+    LineReader::Result r = mbReader.feed((char)Serial.read());
+    if (r == LineReader::TOO_LONG) { mbError("line too long"); continue; }
+    if (r != LineReader::LINE) continue;
+    const char *arg = "";
+    switch (mbParse(mbReader.line(), &arg)) {
+      case MB_NONE:    break;
+      case MB_INFO:    mbInfo(); break;
+      case MB_GET:     mbGet(); break;
+      case MB_SET:     mbSet(arg); break;
+      case MB_REBOOT: {
+        JsonDocument d;
+        d["ok"] = true;
+        mbReply(d);
+        scheduleRestart();
+        break;
+      }
+      default:         mbError("unknown command"); break;
+    }
+  }
+  if (restartAtMs != 0 && (int32_t)(millis() - restartAtMs) >= 0) {
+    flushBrightnessSave(true);            // don't lose a just-swiped brightness
+    ESP.restart();
+  }
+}
+
 void saveDisplaySettings() {
   JsonDocument doc;
   doc["brightness"] = brightnessLevel;
@@ -2230,6 +2382,13 @@ void calibrateNeutral() {
 // ── Arduino entry points ──────────────────────────────────
 
 void setup() {
+  // TX: room for a whole protocol line (2 KB), so a GET reply is never cut
+  // short by setTxTimeoutMs(0) below. RX: twice that, so an over-long line
+  // that arrives in one burst still fits whole, newline included, and gets
+  // its "line too long" reply instead of being truncated by the driver.
+  // Both must be set before begin().
+  Serial.setRxBufferSize(2 * LineReader::CAPACITY);
+  Serial.setTxBufferSize(LineReader::CAPACITY);
   Serial.begin(115200);
   // Never wait on the USB serial. Once a serial monitor has read the port,
   // the core treats it as connected; when the monitor closes, every print
@@ -2368,6 +2527,10 @@ void setup() {
 }
 
 void loop() {
+  // The web flasher's serial protocol. First, so it also answers while the
+  // setup hotspot is open.
+  serviceProtocol();
+
   // ── Captive-portal mode takes over the whole loop ───────
   // AWM must service DNS + HTTP promptly, and the network pages are
   // meaningless while the radio is in AP mode.
