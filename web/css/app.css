@@ -1,5 +1,6 @@
 /* Design tokens. Dark is the default; light follows the system setting. */
 :root {
+  color-scheme: dark light;
   --bg: #0b0b0d;
   --fg: #ececec;
   --muted: #9a9aa0;
@@ -8,6 +9,13 @@
   --accent: #1d9e75;
   --danger: #e24b4a;
   --ok: #5dcaa5;
+  /* The printed holder and the monitor beside it in the preview. The holder
+     is black PLA; on a dark page it gets a lighter rim so it still reads. */
+  --holder: #222226;
+  --holder-rim: #3b3b44;
+  --holder-glass: #050506;
+  --monitor-bezel: #18181c;
+  --monitor-panel: #263445;
 }
 
 @media (prefers-color-scheme: light) {
@@ -20,7 +28,17 @@
     --accent: #0f6e56;
     --danger: #a32d2d;
     --ok: #0f6e56;
+    --holder: #232327;
+    --holder-rim: #46464e;
+    --holder-glass: #050506;
+    --monitor-bezel: #2b2b30;
+    --monitor-panel: #dbe4ee;
   }
+}
+
+/* No horizontal overflow: borders inside widths, long words wrap. */
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
 body {
@@ -28,6 +46,11 @@ body {
   color: var(--fg);
   font-family: system-ui, sans-serif;
   margin: 0;
+  overflow-wrap: break-word;
+}
+
+img, svg, video, canvas {
+  max-width: 100%;
 }
 
 .page {
@@ -35,3 +58,62 @@ body {
   margin: 0 auto;
   padding: 0 16px;
 }
+
+/* Flex and grid children may shrink below their content's width. */
+.page > *, .row > * {
+  min-width: 0;
+}
+
+/* The Buddy's face (face.js). The screen keeps its 320x172 shape at any width. */
+.buddy-face {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 320 / 172;
+}
+
+/* The device preview (preview.js). */
+.buddy-preview {
+  margin: 0;
+  width: 100%;
+  max-width: 26rem;
+  min-width: 0;
+}
+
+.buddy-preview__device {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+}
+
+.buddy-preview__device:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.buddy-preview__device svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 460 / 252;
+}
+
+.buddy-preview__caption {
+  min-height: 1.5em; /* one line reserved, so changing pages never moves the layout */
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.buddy-preview .bp-body { fill: var(--holder); }
+.buddy-preview .bp-rim { fill: none; stroke: var(--holder-rim); stroke-width: 1; }
+.buddy-preview .bp-port { fill: var(--holder-glass); }
+.buddy-preview .bp-glass { fill: var(--holder-glass); stroke: #2c2c33; stroke-width: 1; }
+.buddy-preview .bp-bezel { fill: var(--monitor-bezel); stroke: var(--holder-rim); stroke-width: 1; }
+.buddy-preview .bp-panel { fill: var(--monitor-panel); }
