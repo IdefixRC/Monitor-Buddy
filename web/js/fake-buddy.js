@@ -1,0 +1,183 @@
+// A pretend Buddy for checking the screens without hardware. app.js loads it
+// only when the page is opened with ?fake=a (a 1.2+ Buddy that answers) or
+// ?fake=b (one that doesn't). It never touches navigator.serial.
+//
+// Extra switches, all optional:
+//   cancel           the port picker is cancelled
+//   busy             opening the port fails as if another program held it
+//   boot             the Buddy prints boot lines for a few seconds before it answers
+//   flashfail=connect|write   the first flash fails at that stage
+//   added=key,key    keys the new firmware reports in GET's "added"
+//   lost=SET         the reply to SET is lost (change() then verifies)
+//   seterror=key     SET refuses with an error on that key
+//   nowifi           the board has no saved Wi-Fi
+//   fw=1.1.9         the firmware version INFO reports (to see the update ribbon)
+// A Wi-Fi password of "wrongpass" never connects.
+import { NoReply } from "./serial.js";
+import { FlashError } from "./flasher.js";
+import { DEFAULTS } from "./form.js";
+import { mergeConfig, validateConfig, validateWifi } from "./settings.js";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function fakeDevice(params) {
+  const answers = params.get("fake") !== "b";
+  const board = {
+    answers,
+    fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
+    cfg_v: 1,
+    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755" }),
+    stored: true,
+    added: [],
+    wifi: params.has("nowifi") ? { saved: false, ssid: "", password: "" } : { saved: true, ssid: "HomeNet", password: "secret123" },
+    restarting: false,
+    booting: params.has("boot"),
+  };
+  const failOnce = new Set(params.get("flashfail") ? [params.get("flashfail")] : []);
+  const loseOnce = new Set(params.get("lost") ? [params.get("lost")] : []);
+
+  const info = () => ({
+    ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: "b0:a6:04:00:00:01",
+    wifi: {
+      saved: board.wifi.saved, ssid: board.wifi.ssid,
+      connected: board.wifi.saved && board.wifi.password !== "wrongpass",
+      ...(board.wifi.saved && board.wifi.password !== "wrongpass" ? { rssi: -58 } : {}),
+    },
+  });
+
+  class FakeBuddyPort {
+    static supported() { return true; }
+    static async pick() {
+      await sleep(200);
+      if (params.has("cancel")) throw new DOMException("No port selected by the user.", "NotFoundError");
+      return new FakeBuddyPort();
+    }
+    constructor() {
+      this.port = { fake: true };
+      this.isOpen = false;
+      this.lost = false;
+      this.listeners = [];
+      this.errorListeners = [];
+    }
+    onLine(fn) { this.listeners.push(fn); }
+    onError(fn) { this.errorListeners.push(fn); }
+    _emit(line, dir) { for (const fn of this.listeners) fn(line, dir); }
+    async open() {
+      if (this.isOpen) return;
+      await sleep(150);
+      if (params.has("busy")) throw new DOMException("Failed to open serial port.", "NetworkError");
+      this.isOpen = true;
+      if (board.booting) {
+        board.booting = false;
+        let n = 0;
+        const t = setInterval(() => {
+          this._emit(n === 0 ? `ESP32-C6 Monitor-Buddy ${board.fw} starting` : `[wifi] connecting (${n})`, "rx");
+          if (++n > 6) { clearInterval(t); board.awake = true; }
+        }, 700);
+        board.awake = false;
+      } else {
+        board.awake = true;
+      }
+    }
+    async close() { this.isOpen = false; }
+    async drain() { await sleep(100); }
+    async command(cmd, body = null) {
+      if (!this.isOpen) throw new Error("the port is not open");
+      const id = Math.floor(Math.random() * 1e6);
+      this._emit(`@MB ${cmd} ${JSON.stringify({ id, ...(body || {}) })}`, "tx");
+      await sleep(120);
+      const silent = !board.answers || board.awake === false;
+      if (silent) {
+        if (board.fw === null) this._emit("app=0 mood=0 wifi=up up=812s rst=1", "rx");
+        await sleep(900);
+        throw new NoReply(`no reply to ${cmd}`);
+      }
+      const reply = this._answer(cmd, body);
+      this._emit(`@MB ${JSON.stringify({ ...reply, id })}`, "rx");
+      if (loseOnce.has(cmd)) { loseOnce.delete(cmd); await sleep(3000); throw new NoReply(`no reply to ${cmd}`); }
+      return { ...reply, id };
+    }
+    _answer(cmd, body) {
+      if (board.restarting) return { ok: false, cmd, error: "restarting" };
+      switch (cmd) {
+        case "INFO": return info();
+        case "GET":
+          return { ok: true, cmd, v: board.cfg_v, stored: board.stored, config: structuredClone(board.config), added: [...board.added] };
+        case "SET": {
+          const errors = {};
+          if (params.get("seterror")) errors[params.get("seterror")] = "rejected by the fake Buddy";
+          if (body.config) Object.assign(errors, validateConfig(body.config).errors);
+          if (body.wifi) Object.assign(errors, validateWifi(body.wifi).errors);
+          if (Object.keys(errors).length) return { ok: false, cmd, errors };
+          if (body.config) { board.config = mergeConfig(board.config, body.config); board.stored = true; board.added = []; }
+          if (body.wifi) board.wifi = { saved: true, ssid: body.wifi.ssid, password: body.wifi.password };
+          this._restart();
+          return { ok: true, cmd };
+        }
+        case "DEFAULTS":
+          board.config = mergeConfig(DEFAULTS, {});
+          board.stored = false;
+          this._restart();
+          return { ok: true, cmd };
+        case "REBOOT":
+          this._restart();
+          return { ok: true, cmd };
+        default:
+          return { ok: false, cmd, error: "unknown command" };
+      }
+    }
+    _restart() {
+      board.restarting = true;
+      setTimeout(() => { board.restarting = false; this.isOpen = false; this.lost = true; }, 300);
+    }
+    async reconnect(timeoutMs = 40000) {
+      this.isOpen = false;
+      await sleep(Math.min(2500, timeoutMs));
+      if (!board.answers) throw new NoReply("the Buddy did not come back");
+      this.isOpen = true;
+      this.lost = false;
+      board.awake = true;
+      this._emit(`ESP32-C6 Monitor-Buddy ${board.fw} starting`, "rx");
+      return info();
+    }
+  }
+
+  async function flashImage(_port, image, { erase = false, onProgress, onStage, log } = {}) {
+    const say = (t) => { if (log) log(t); };
+    onStage?.("connect");
+    say("Connecting...");
+    await sleep(900);
+    if (failOnce.has("connect")) {
+      failOnce.delete("connect");
+      throw new FlashError("connect", new Error("Failed to connect with the device"));
+    }
+    say("Chip is ESP32-C6 (fake)");
+    if (erase) {
+      onStage?.("erase");
+      say("Erasing flash (this may take a while)...");
+      await sleep(2500);
+      board.config = mergeConfig(DEFAULTS, {});
+      board.stored = false;
+      board.wifi = { saved: false, ssid: "", password: "" };
+    }
+    onStage?.("write");
+    for (let i = 0; i <= 25; i++) {
+      onProgress?.(i / 25);
+      if (i === 12 && failOnce.has("write")) {
+        failOnce.delete("write");
+        throw new FlashError("write", new Error("Timed out waiting for packet header"));
+      }
+      await sleep(110);
+    }
+    say(`Wrote ${image.length} bytes`);
+    onStage?.("reset");
+    say("Restarting the Buddy");
+    board.answers = true;
+    board.fw = params.get("newfw") || "1.2.0-rc1";
+    board.added = (params.get("added") || "").split(",").filter(Boolean);
+    if (board.added.length) board.cfg_v = 2;
+    await sleep(300);
+  }
+
+  return { BuddyPort: FakeBuddyPort, flashImage };
+}

@@ -3,28 +3,29 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
   <title>Monitor Buddy flasher</title>
-  <style>
-    :root { color-scheme: dark light; }
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto;
-           padding: 0 16px; background: #111; color: #eee; line-height: 1.6; }
-    @media (prefers-color-scheme: light) { body { background: #fafafa; color: #222; } }
-    a { color: #1d9e75; }
-  </style>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Crect x='6' y='9' width='8' height='14' rx='3' fill='%23fff'/%3E%3Crect x='18' y='9' width='8' height='14' rx='3' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="modulepreload" href="js/app.js">
 </head>
 <body>
-  <h1>Monitor Buddy web flasher</h1>
-  <p>The web flasher is coming with firmware 1.2.0. Until then, install Monitor Buddy from
-     source as described in the <a href="https://github.com/IdefixRC/Monitor-Buddy#4-flashing-the-board">README</a>.</p>
-  <p id="firmware"></p>
-  <script type="module">
-    try {
-      const r = await fetch("firmware/releases.json", { cache: "no-store" });
-      const j = await r.json();
-      const list = j.releases.map(x => x.version + (x.prerelease ? " (pre-release)" : ""));
-      document.getElementById("firmware").textContent =
-        "Firmware mirrored here: " + (list.length ? list.join(", ") : "none yet") + ".";
-    } catch (e) { /* no manifest yet */ }
-  </script>
+  <a id="skip" class="skip" href="#main"></a>
+  <header class="top">
+    <div class="top__inner">
+      <span class="logo" aria-hidden="true"><i></i><i></i></span>
+      <span class="top__text">
+        <span id="app-name" class="top__name"></span>
+        <span id="app-tagline" class="top__tagline"></span>
+      </span>
+      <span id="beta" class="pill pill--beta" hidden></span>
+    </div>
+  </header>
+  <main id="main" class="page" tabindex="-1"></main>
+  <footer class="foot">
+    <div id="about" class="page about"></div>
+  </footer>
+  <noscript><p class="page">This page needs JavaScript.</p></noscript>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
