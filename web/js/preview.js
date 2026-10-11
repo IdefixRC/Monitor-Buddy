@@ -307,8 +307,15 @@ export function createPreview(container) {
   button.type = "button";
   button.className = "buddy-preview__device";
   button.setAttribute("aria-label", S.previewLabel);
-  const caption = document.createElement("figcaption");
+  const bar = document.createElement("figcaption");
+  bar.className = "buddy-preview__bar";
+  const caption = document.createElement("span");
   caption.className = "buddy-preview__caption";
+  // WCAG 2.2.2: the automatic page cycle can be paused.
+  const pause = document.createElement("button");
+  pause.type = "button";
+  pause.className = "buddy-preview__pause";
+  bar.append(caption, pause);
 
   const svg = el("svg", { viewBox: `0 0 ${VIEW_W} ${VIEW_H}`, "aria-hidden": "true", focusable: "false" });
   const defs = el("defs", {}, svg);
@@ -338,7 +345,7 @@ export function createPreview(container) {
   el("rect", { x: 28, y: 28, width: 344, height: 196, rx: 24, fill: `url(#${id}-glare)`, "pointer-events": "none" }, body);
 
   button.appendChild(svg);
-  figure.append(button, caption);
+  figure.append(button, bar);
   container.appendChild(figure);
 
   let config = DEFAULT_CONFIG;
@@ -348,6 +355,7 @@ export function createPreview(container) {
   let face = null;
   let cycle = 0;
   let tick = 0;
+  let paused = false;
 
   const mq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
   const reduced = () => !!(mq && mq.matches);
@@ -390,12 +398,19 @@ export function createPreview(container) {
     caption.textContent = text;
   }
 
+  function syncPause() {
+    pause.hidden = pages.length < 2 || reduced();
+    pause.textContent = paused ? S.previewPlay : S.previewPause;
+    pause.dataset.paused = String(paused);
+  }
+
   function restartCycle() {
     clearInterval(cycle);
     cycle = 0;
-    if (pages.length > 1 && !reduced()) {
+    if (pages.length > 1 && !reduced() && !paused) {
       cycle = setInterval(() => { index = (index + 1) % pages.length; draw(); }, CYCLE_MS);
     }
+    syncPause();
   }
 
   // The clock's seconds and colon change every second.
@@ -407,6 +422,8 @@ export function createPreview(container) {
     restartCycle();
   };
   button.addEventListener("click", next);
+  const togglePause = () => { paused = !paused; restartCycle(); };
+  pause.addEventListener("click", togglePause);
   const onMotion = () => { restartCycle(); draw(); };
   if (mq) mq.addEventListener("change", onMotion);
 
@@ -424,6 +441,7 @@ export function createPreview(container) {
     }
     layout();
     draw();
+    syncPause();
   }
 
   update(DEFAULT_CONFIG);
@@ -436,6 +454,7 @@ export function createPreview(container) {
       if (face) face.destroy();
       if (mq) mq.removeEventListener("change", onMotion);
       button.removeEventListener("click", next);
+      pause.removeEventListener("click", togglePause);
       figure.remove();
     },
   };

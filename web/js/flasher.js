@@ -29,7 +29,8 @@ const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart
 
 // entry: one element of releases.json's "releases" ({ file, size, sha256, ... }).
 // siteRoot: the URL the entry's relative `file` is resolved against.
-export async function fetchImage(entry, siteRoot) {
+// onStage("check") is called once the download is complete.
+export async function fetchImage(entry, siteRoot, { onStage } = {}) {
   const url = new URL(entry.file, siteRoot);
   let response;
   try {
@@ -39,6 +40,7 @@ export async function fetchImage(entry, siteRoot) {
   }
   if (!response.ok) throw new DownloadError(`could not download ${url.pathname}: HTTP ${response.status}`);
   const data = new Uint8Array(await response.arrayBuffer());
+  if (onStage) onStage("check");
   if (data.length !== entry.size) {
     throw new ImageMismatch(`the image is ${data.length} bytes, expected ${entry.size}`);
   }
@@ -65,23 +67,26 @@ export async function resetToFirmware(port) {
 // Writes `image` at address 0. `serialPort` must be CLOSED: esptool-js opens
 // it itself (so close the BuddyPort first). It is closed again on return, and
 // the board is hard-reset, so it drops off USB and comes back as a new port.
-// opts: { erase, onProgress(fraction 0..1), log(text), resetMode }
+// opts: { erase, onProgress(fraction 0..1), onStage(stage), log(text), resetMode }
+// onStage gets "connect", "erase", "write" and "reset" as each one starts.
 // resetMode is esptool-js's `main()` mode; "default_reset" unless the spike
 // finds that "usb_reset" is what the C6's USB-serial/JTAG needs.
-export async function flashImage(serialPort, image, { erase = false, onProgress, log, resetMode = "default_reset" } = {}) {
+export async function flashImage(serialPort, image, { erase = false, onProgress, onStage, log, resetMode = "default_reset" } = {}) {
   const say = (text) => { if (log) log(String(text)); };
+  const enter = (name) => { stage = name; if (onStage) onStage(name); };
   const terminal = { clean() {}, write: say, writeLine: say };
   let transport = null;
   let stage = "connect";
   try {
+    enter("connect");
     transport = new Transport(serialPort);
     const loader = new ESPLoader({ transport, baudrate: 115200, terminal });
     await loader.main(resetMode);
     if (erase) {
-      stage = "erase";
+      enter("erase");
       await loader.eraseFlash();
     }
-    stage = "write";
+    enter("write");
     await loader.writeFlash({
       fileArray: [{ data: image, address: 0 }],
       flashMode: "keep",
@@ -93,7 +98,7 @@ export async function flashImage(serialPort, image, { erase = false, onProgress,
         if (onProgress) onProgress(total > 0 ? Math.min(1, written / total) : 0);
       },
     });
-    stage = "reset";
+    enter("reset");
     say("Restarting the Buddy");
     await resetToFirmware(transport.device ?? serialPort);
   } catch (e) {

@@ -190,7 +190,8 @@ function makeEye(cx, parent) {
 // lookAt(null) hands the gaze back to the pointer.
 export function createFace(container) {
   const inSvg = container instanceof SVGElement;
-  const svg = el("svg", { viewBox: `0 0 ${SCREEN_W} ${SCREEN_H}`, class: "buddy-face" });
+  // Nested in the preview it gets its own class: .buddy-face sizes a page-level face.
+  const svg = el("svg", { viewBox: `0 0 ${SCREEN_W} ${SCREEN_H}`, class: inSvg ? "buddy-preview__face" : "buddy-face" });
   if (inSvg) {
     set(svg, { width: SCREEN_W, height: SCREEN_H, "aria-hidden": "true" });
   } else {
