@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 
 import release_image as ri
@@ -39,7 +41,8 @@ class CheckLayout(unittest.TestCase):
         self.assertTrue(any("expected" in p for p in problems), problems)
 
     def test_usage(self):
-        self.assertEqual(ri.main(["release_image.py"]), 2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ri.main(["release_image.py"]), 2)
 
 
 if __name__ == "__main__":
