@@ -56,10 +56,14 @@
   const status = (text) => { $("status").textContent = text; log(text, "* "); };
   const show = (obj) => log(JSON.stringify(obj));
 
-  function setOpen(open) {
-    for (const id of ["info", "get", "reboot", "reconnect", "close"]) $(id).disabled = !open;
-    $("pick").disabled = open;
-    $("flash").disabled = !releases.length;
+  // Buttons follow the real state: bp.isOpen, whether we hold a port, a flash running.
+  let busy = false;
+  function sync() {
+    const open = !!(bp && bp.isOpen);
+    for (const id of ["info", "get", "reboot", "close"]) $(id).disabled = busy || !open;
+    $("reconnect").disabled = busy || !bp;
+    $("pick").disabled = busy || open || !BuddyPort.supported();
+    $("flash").disabled = busy || !releases.length;
   }
 
   // Run one action: log its start, its result, or its error.
@@ -72,6 +76,8 @@
     } catch (e) {
       status(`${name}: failed (${e.name}: ${e.message})`);
       if (e.stage) log(`stage: ${e.stage}`, "* ");
+    } finally {
+      sync();
     }
   }
 
@@ -82,7 +88,6 @@
 
   if (!BuddyPort.supported()) {
     status("This browser has no Web Serial. Use Chrome or Edge on a computer.");
-    $("pick").disabled = true;
   }
 
   $("pick").onclick = () => run("Pick and open", async () => {
@@ -91,7 +96,6 @@
     await bp.open();
     const info = JSON.stringify(bp.port.getInfo());
     log(`port ${info}`, "* ");
-    setOpen(true);
   });
 
   $("info").onclick = () => run("INFO", async () => show(await bp.command("INFO")));
@@ -109,7 +113,6 @@
 
   $("close").onclick = () => run("Close", async () => {
     await bp.close();
-    setOpen(false);
   });
 
   // The mirror's release list: every entry, newest first as published.
@@ -130,21 +133,22 @@
       sel.add(new Option("no release list", ""));
       log(`could not load firmware/releases.json: ${e.message}`, "* ");
     }
-    $("flash").disabled = !releases.length;
+    sync();
   }
 
   $("flash").onclick = () => run("Flash", async () => {
     const entry = releases.find((e) => e.version === $("version").value);
     if (!entry) throw new Error("pick a firmware version");
-    const siteRoot = new URL("./", location.href);
+    busy = true;
+    sync();
+    // The port picker needs the click's user activation, which expires after a
+    // few seconds, so pick (or keep) the port BEFORE the download.
+    if (!bp) { bp = await BuddyPort.pick(); attach(bp); }
     status(`downloading ${entry.version}`);
-    const image = await fetchImage(entry, siteRoot);
+    const image = await fetchImage(entry, new URL("./", location.href));
     log(`image ok: ${image.length} bytes, SHA-256 matches`, "* ");
-    // esptool-js opens the port itself, so it has to be closed here. If the
-    // user never picked a port, ask for one now.
-    if (bp) await bp.close();
-    else { bp = await BuddyPort.pick(); attach(bp); }
-    setOpen(false);
+    // esptool-js opens the port itself, so it has to be closed here.
+    await bp.close();
     const bar = $("progress");
     bar.hidden = false;
     bar.value = 0;
@@ -158,10 +162,9 @@
       bar.hidden = true;
     }
     status("Flashed. The Buddy restarts; press Reconnect once it is back.");
-    $("reconnect").disabled = false;
-    $("pick").disabled = false;
-  });
+  }).finally(() => { busy = false; sync(); });
 
+  sync();
   loadReleases();
 </script>
 </body>

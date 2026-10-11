@@ -44,6 +44,7 @@ export class BuddyPort {
     this.nextId = makeIdSource();
     this.lastRx = Date.now();
     this.isOpen = false;
+    this.lost = false; // the reader ended or failed while open: the device is gone
   }
 
   static supported() {
@@ -75,6 +76,7 @@ export class BuddyPort {
       throw e;
     }
     this.isOpen = true;
+    this.lost = false;
     this.lastRx = Date.now();
     this.writer = this.port.writable.getWriter();
     this.reader = this.port.readable.getReader();
@@ -93,8 +95,12 @@ export class BuddyPort {
         for (const line of splitter.push(decoder.decode(value, { stream: true }))) this._handleLine(line);
       }
     } catch (e) {
-      if (this.isOpen) for (const fn of this.errorListeners) { try { fn(e); } catch { /* ignore */ } }
+      if (this.isOpen && this.reader === reader) {
+        this.lost = true;
+        for (const fn of this.errorListeners) { try { fn(e); } catch { /* ignore */ } }
+      }
     } finally {
+      if (this.isOpen && this.reader === reader) this.lost = true; // ended without close()
       try { reader.releaseLock(); } catch { /* already released */ }
     }
   }
@@ -118,7 +124,10 @@ export class BuddyPort {
     const writer = this.writer;
     const readDone = this.readDone;
     this.reader = this.writer = this.readDone = null;
+    // Settle pending commands so they end now with NoReply instead of at their timeout.
+    const pending = this.waiters;
     this.waiters = [];
+    for (const w of pending) w.resolve(null);
     if (reader) { try { await reader.cancel(); } catch { /* port already gone */ } }
     if (readDone) { try { await readDone; } catch { /* the loop reports its own errors */ } }
     if (writer) {
@@ -147,13 +156,16 @@ export class BuddyPort {
     this.waiters.push(waiter);
     try {
       for (let i = 0; i < attempts; i++) {
+        const writer = this.writer;
+        if (!this.isOpen || !writer) throw new NoReply(`${cmd}: the port was closed`);
         this._emit(line.trimEnd(), "tx");
-        await this.writer.write(new TextEncoder().encode(line));
+        await writer.write(new TextEncoder().encode(line));
         let timer;
         const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), wait); });
         const reply = await Promise.race([replied, timeout]);
         clearTimeout(timer);
         if (reply) return reply;
+        if (!this.isOpen || this.writer !== writer) throw new NoReply(`${cmd}: the port was closed`);
       }
     } finally {
       const i = this.waiters.indexOf(waiter);
@@ -180,17 +192,23 @@ export class BuddyPort {
     const end = Date.now() + timeoutMs;
     await this.close();
     while (Date.now() < end) {
-      let port = null;
-      try { port = await this._findPort(); } catch { /* try again */ }
-      if (!port) { await sleep(500); continue; }
-      this.port = port;
-      try {
-        await this.open();
-      } catch {
-        await this.close();
-        await sleep(500);
-        continue;
+      if (this.isOpen && this.lost) await this.close(); // the device vanished: find it again
+      if (!this.isOpen) {
+        let port = null;
+        try { port = await this._findPort(); } catch { /* try again */ }
+        if (!port) { await sleep(500); continue; }
+        this.port = port;
+        try {
+          await this.open();
+        } catch {
+          await this.close();
+          await sleep(500);
+          continue;
+        }
       }
+      // Connected. Keep this connection and ask again until the deadline:
+      // setup() can block for ~18 s, and reopening the port on every miss could
+      // reset the board each time (if open-then-lower-DTR/RTS resets it).
       try {
         const info = await this.command("INFO", null, { attempts: 1, wait: READ_WAIT_MS });
         if (info.ok !== false) {
@@ -199,9 +217,12 @@ export class BuddyPort {
           await this.drain(500);
           return info;
         }
-      } catch { /* not answering yet */ }
-      await this.close();
-      await sleep(1000);
+        await sleep(1000); // "restarting": still on its way
+      } catch (e) {
+        if (e instanceof NoReply && this.isOpen && !this.lost) continue; // just silent so far
+        await this.close(); // write failed or the port went away: reopen
+        await sleep(500);
+      }
     }
     throw new NoReply("the Buddy did not come back");
   }

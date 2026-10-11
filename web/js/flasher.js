@@ -82,10 +82,15 @@ export async function flashImage(serialPort, image, { erase = false, onProgress,
     });
     stage = "reset";
     await loader.after("hard_reset");
-    await transport.disconnect();
-    transport = null;
   } catch (e) {
     if (transport) { try { await transport.disconnect(); } catch { /* leave the port as it is */ } }
     throw new FlashError(stage, e);
+  }
+  // The flash is done and the board restarted. It re-enumerates on USB, so
+  // closing the old port handle may fail; that is not a failed flash.
+  try {
+    await transport.disconnect();
+  } catch (e) {
+    say(`(the port was already gone when closing it: ${e && e.message ? e.message : e})`);
   }
 }
