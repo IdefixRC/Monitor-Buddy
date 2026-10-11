@@ -1,8 +1,9 @@
 name: Release firmware
 
 # On every published release (pre-releases too): build the firmware with the
-# release's version, check the merged image, build and check the source ZIP,
-# attach both to the release, then rebuild the Pages mirror.
+# release's version, check the merged image, build and check the source ZIP
+# (job build, read-only token), then attach both to the release and rebuild
+# the Pages mirror (job publish, the only job with a write token).
 on:
   release:
     types: [published]
@@ -12,36 +13,43 @@ on:
         description: "Release tag to (re)build, e.g. v1.2.0-rc1"
         required: true
 
-permissions:
-  contents: write   # upload release assets
-  actions: write    # start pages.yml
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
+          persist-credentials: false
       - name: Version from the tag
         id: ver
         run: |
-          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$'; then
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
             echo "::error::not a release tag: $TAG"; exit 1
           fi
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: The release must exist, and a release candidate must be a pre-release
+        run: |
+          # public API, no token: the build job has none
+          if ! JSON=$(curl -fsS "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG"); then
+            echo "::error::no published release for tag $TAG"; exit 1
+          fi
+          PRE=$(echo "$JSON" | jq -r '.prerelease')
+          if [[ "$TAG" == *-rc* && "$PRE" != "true" ]]; then
+            echo "::error::$TAG is a release candidate but the release is not marked pre-release"; exit 1
+          fi
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.platformio
-            ~/.cache/pip
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
       - name: Install PlatformIO
         run: pip install platformio
       - name: Unit tests
@@ -53,24 +61,52 @@ jobs:
           PLATFORMIO_BUILD_FLAGS: -DFW_VERSION=\"${{ steps.ver.outputs.version }}\"
         run: pio run -e esp32-c6
       - name: Check the image and name it
+        env:
+          V: ${{ steps.ver.outputs.version }}
         run: |
-          V=${{ steps.ver.outputs.version }}
           B=.pio/build/esp32-c6
-          BOOT_APP0=$(ls ~/.platformio/packages/framework-arduinoespressif32*/tools/partitions/boot_app0.bin | head -1)
-          python tools/release_image.py $B/firmware.factory.bin $B/bootloader.bin $B/partitions.bin "$BOOT_APP0" $B/firmware.bin
-          grep -a -q "Monitor-Buddy $V starting" $B/firmware.factory.bin || { echo "::error::FW_VERSION $V not in the image"; exit 1; }
-          cp $B/firmware.factory.bin "monitor-buddy-$V.bin"
+          shopt -s nullglob
+          BOOT=(~/.platformio/packages/framework-arduinoespressif32*/tools/partitions/boot_app0.bin)
+          if [ "${#BOOT[@]}" -ne 1 ]; then
+            echo "::error::expected one boot_app0.bin, found ${#BOOT[@]}"; exit 1
+          fi
+          python tools/release_image.py $B/firmware.factory.bin $B/bootloader.bin $B/partitions.bin "${BOOT[0]}" $B/firmware.bin
+          grep -aqF "Monitor-Buddy $V starting" $B/firmware.factory.bin || { echo "::error::FW_VERSION $V not in the image"; exit 1; }
+          mkdir -p dist
+          cp $B/firmware.factory.bin "dist/monitor-buddy-$V.bin"
       - name: Source ZIP, and check it builds
+        env:
+          V: ${{ steps.ver.outputs.version }}
         run: |
-          V=${{ steps.ver.outputs.version }}
-          git archive --format=zip --prefix=Monitor-Buddy/ -o "Monitor-Buddy-$V.zip" "$TAG" \
-            .vscode/extensions.json LICENSE README.md config/config.h.example platformio.ini src/main.cpp lib tools
+          git archive --format=zip --prefix=Monitor-Buddy/ -o "dist/Monitor-Buddy-$V.zip" "$TAG" \
+            .vscode/extensions.json LICENSE README.md config/config.h.example platformio.ini src/main.cpp lib tools/mb_serial.py
           rm -rf /tmp/zipcheck && mkdir /tmp/zipcheck
-          unzip -q "Monitor-Buddy-$V.zip" -d /tmp/zipcheck
+          unzip -q "dist/Monitor-Buddy-$V.zip" -d /tmp/zipcheck
           pio run -d /tmp/zipcheck/Monitor-Buddy -e esp32-c6
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: |
+            dist/monitor-buddy-*.bin
+            dist/Monitor-Buddy-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # upload release assets
+      actions: write    # start pages.yml
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: dist
       - name: Attach to the release
-        run: |
-          V=${{ steps.ver.outputs.version }}
-          gh release upload "$TAG" "monitor-buddy-$V.bin" "Monitor-Buddy-$V.zip" --clobber
+        run: gh release upload "$TAG" dist/monitor-buddy-*.bin dist/Monitor-Buddy-*.zip --clobber --repo ${{ github.repository }}
       - name: Rebuild the Pages mirror
-        run: gh workflow run pages.yml --ref main
+        run: gh workflow run pages.yml --ref main --repo ${{ github.repository }}
