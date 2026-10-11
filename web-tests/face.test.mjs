@@ -54,10 +54,19 @@ test("eyelids: none for normal, a slanted band for sad, a squint for suspicious"
   assert.equal(eyelidPoints("normal", 60, 35, 90, 90, true), "");
   assert.equal(eyelidPoints("happy", 60, 35, 90, 90, true), "");
   const pts = (s) => s.split(" ").map((p) => p.split(",").map(Number));
-  // Sad, left eye: the band is higher on the outer (left) side by 0.167 * width.
+  // Sad, left eye: the lid droops at the outer (left) corner, so the band's top
+  // edge is higher on the inner (nose, right) side by 0.167 * width.
   const sad = pts(eyelidPoints("sad", 60, 35, 90, 90, true));
-  assert.ok(Math.abs((sad[1][1] - sad[0][1]) - 90 * 0.167) < 0.01);
+  assert.ok(Math.abs((sad[1][1] - sad[0][1]) + 90 * 0.167) < 0.01);
   assert.ok(Math.abs((sad[3][1] - sad[0][1]) - 90 * 0.44) < 0.01);
+  // Angry, left eye: the lid is lowered towards the nose, so the top edge is
+  // lower on the inner (right) side. The right eye mirrors it.
+  const angry = pts(eyelidPoints("angry", 60, 35, 90, 90, true));
+  assert.ok(Math.abs((angry[1][1] - angry[0][1]) - 90 * 0.167) < 0.01);
+  const angryR = pts(eyelidPoints("angry", 60, 35, 90, 90, false));
+  assert.ok(Math.abs((angryR[1][1] - angryR[0][1]) + 90 * 0.167) < 0.01);
+  const sadR = pts(eyelidPoints("sad", 60, 35, 90, 90, false));
+  assert.ok(Math.abs((sadR[1][1] - sadR[0][1]) - 90 * 0.167) < 0.01);
   // Suspicious: the left lid covers the top half less 5; the right has a lower lid.
   const left = pts(eyelidPoints("suspicious", 60, 55, 90, 50, true));
   assert.equal(left[2][1], 55 + 50 / 2 - 5);

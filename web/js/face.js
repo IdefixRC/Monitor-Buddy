@@ -125,10 +125,10 @@ export function eyelidPoints(mood, ix, iy, iw, ih, isLeft) {
     `${f(x0)},${f(yl)} ${f(x1)},${f(yr)} ${f(x1)},${f(yr + b)} ${f(x0)},${f(yl + b)}`;
   const rect = (y, h) => quad(y, y, h);
   switch (mood) {
-    case "angry": // brows angled in
-      return isLeft ? quad(iy, iy - slant, band) : quad(iy - slant, iy, band);
-    case "sad":   // brows angled out (the inverse)
+    case "angry": // lids lowered towards the nose (a frown): inner side is ix + iw on the left eye
       return isLeft ? quad(iy - slant, iy, band) : quad(iy, iy - slant, band);
+    case "sad":   // lids lowered at the outer corners (a droop)
+      return isLeft ? quad(iy, iy - slant, band) : quad(iy - slant, iy, band);
     case "sleepy":
       return rect(iy - 1, ih / 2 + 6);
     case "suspicious": // one squint, one wide with a lower lid

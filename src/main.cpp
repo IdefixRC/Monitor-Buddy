@@ -1367,14 +1367,14 @@ void drawBitmapScaled(int x, int y, const uint8_t *bmp, int w, int h, int scale,
 void drawEyelidMask(int ix, int iy, int iw, int ih, uint8_t mood, bool isLeft) {
   int slant = (int)(iw * 0.167f);
   int band  = (int)(ih * 0.44f);
-  if (mood == MOOD_ANGRY) {                       // brows angled in
-    for (int i = 0; i < band; i++)
-      if (isLeft) gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
-      else        gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
-  } else if (mood == MOOD_SAD) {                  // brows angled out (inverse)
+  if (mood == MOOD_ANGRY) {                       // angry: lids lowered towards the nose (a frown)
     for (int i = 0; i < band; i++)
       if (isLeft) gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
       else        gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
+  } else if (mood == MOOD_SAD) {                  // sad: lids lowered at the outer corners (a droop)
+    for (int i = 0; i < band; i++)
+      if (isLeft) gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
+      else        gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
   } else if (mood == MOOD_SLEEPY) {               // heavy top lids
     gfx->fillRect(ix, iy, iw, ih / 2 + 5, BG);
   } else if (mood == MOOD_SUSPICIOUS) {           // one squint, one wide
