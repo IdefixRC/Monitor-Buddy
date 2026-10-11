@@ -6,14 +6,14 @@ import { validateConfig, validateWifi } from "./settings.js";
 import { ruleForZone } from "./tz.js";
 
 // The firmware's built-in values: config/config.h.example, which the release
-// builds use, with the template's placeholder Finnhub key as empty (the stock
-// page stays hidden) and tz_rule from the zone table. The form starts here
+// builds use (an empty GitHub user and Finnhub key hide those pages), with
+// tz_rule from the zone table. The form starts here
 // when there is no board to ask (path B). KEEP IN SYNC with config.h.example;
 // form.test.mjs compares the two.
 export const DEFAULTS = Object.freeze({
   mount: "left",
   theme: 2,
-  github_user: "IdefixRC",
+  github_user: "",
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",
   ticker: "AAPL",
@@ -35,10 +35,11 @@ export const FLOWS = Object.freeze({
   install: { flash: true, erase: true },   // path B, a new board
 });
 
-const PLACEHOLDER_KEY = "xxxxxxx"; // config.h.example's STOCKKEY
+const PLACEHOLDER_KEY = "xxxxxxx"; // STOCKKEY in config.h.example before 1.2
 
-// A board's GET config as the form shows it. A release build without a saved
-// key reports the template's placeholder, which is no key at all.
+// A board's GET config as the form shows it. A board running an older release
+// build without a saved key reports the old template's placeholder, which is no
+// key at all.
 export function fromBoard(config) {
   const out = structuredClone(config || {});
   if (out.stock_key === PLACEHOLDER_KEY) out.stock_key = "";

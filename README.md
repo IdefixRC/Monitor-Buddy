@@ -151,11 +151,11 @@ Open `config/config.h` and change these `#define` lines:
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | `MOUNTING_LOCATION`            | `LEFT` or `RIGHT`, the side of the monitor your Buddy is mounted on                                                           |
 | `THEME`                        | `0` to `4`, see the comments above the line                                                                                   |
-| `GITHUB_USER`                  | your GitHub username                                                                                                          |
+| `GITHUB_USER`                  | your GitHub username to show the GitHub page; `""` (the default) hides it                                                     |
 | `TIMEZONE`                     | your IANA timezone name, for example `"Europe/Berlin"` ([list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
 | `TZ_OFFSET_HOURS`              | your offset from UTC in hours, for example `1` for CET, `-5` for US Eastern                                                   |
 | `TICKER`                       | a US stock symbol, for example `"AAPL"`                                                                                       |
-| `STOCKKEY`                     | your free Finnhub API key from <https://finnhub.io/> — replace `xxxxxxx`                                                      |
+| `STOCKKEY`                     | your free Finnhub API key from <https://finnhub.io/> to show the stock page; `""` (the default) hides it                      |
 | `LAT` / `LONG`                 | your latitude and longitude for weather                                                                                       |
 | `TEMP` / `WIND`                | `"celsius"` or `"fahrenheit"`, `"kmh"` or `"mph"`                                                                             |
 | `SHOW_FACE`, `SHOW_CLOCK`, ... | `true` or `false` to enable or disable each page                                                                              |
@@ -163,7 +163,7 @@ Open `config/config.h` and change these `#define` lines:
 
 Save the file (`Ctrl+S`).
 
-Don't care about stocks? Leave `STOCKKEY` as is — the project still builds, the stock page just will not load data, and you can turn it off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
+Don't care about stocks? Leave `STOCKKEY` as `""` — the stock page stays hidden. Enter your key to show it. The same goes for `GITHUB_USER`: empty hides the GitHub page. You can also switch the page off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
 
 **Settings saved on the board win.** From firmware 1.2.0 on, the Buddy can also keep its settings on the board itself, in `/config.json`. `tools/mb_serial.py` saves them there, and so will the web flasher (coming in a later release). Once they're saved, `config/config.h` only fills in settings the board doesn't have, so editing it and uploading again changes nothing that's already saved. To change a saved setting, use the tool, for example `python tools/mb_serial.py COM4 set ticker=AVGO` (use your board's port instead of `COM4`; `get` shows what is saved). To delete the saved settings, run `python tools/mb_serial.py COM4 defaults`: the Buddy restarts on your `config.h` values and keeps its Wi-Fi and brightness. The tool needs Python 3 and one package: `pip install pyserial`. The setup page's erase also deletes the saved settings, and the Buddy goes back to your `config.h` values, but it clears the Wi-Fi and brightness too.
 
@@ -243,7 +243,7 @@ Your `config/config.h` settings are built into the firmware, so a factory reset 
 | Clock or weather never updates              | Wi-Fi did not connect. Hold the screen for 3 seconds and redo the setup. Check `TZ_OFFSET_HOURS` and `TZ_RULE` in `config/config.h` and flash again. If settings are saved on the board, change them with the tool instead (e.g. `set tz_rule=<rule>`). |
 | Screen is upside down                       | Your Buddy is mounted on the other side. Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again. If settings are saved on the board, change them with the tool instead (e.g. `set mount=right`).                             |
 | Screen too dark to read                     | Swipe up a few times to raise the brightness, or press **erase** on the setup page (clears board settings too, back to `config.h`; see [4.10](#410-everyday-controls)).                                                                                 |
-| Stock page is blank                         | Missing or wrong Finnhub key in `config/config.h` (if settings are saved on the board, use the tool: `set stock_key=<key>`), or the symbol is not a US stock (the free Finnhub tier is US only).                                                        |
+| Stock page is missing or blank              | No stock page: an empty `STOCKKEY` hides it, so enter your Finnhub key in `config/config.h` (if settings are saved on the board, use the tool: `set stock_key=<key>`). Blank page: wrong key, or not a US stock (free Finnhub tier is US only).         |
 | Build fails mentioning `ArduinoJson`        | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                                                                                                              |
 
 ---
