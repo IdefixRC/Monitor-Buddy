@@ -1,0 +1,45 @@
+name: Pages
+
+# Rebuilds the whole site from web/ and the GitHub releases (see
+# tools/pages_site.py). release-firmware.yml starts it after each release.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "tools/pages_site.py"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # all tags: pages_site.py reads settings.h at each tag
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Assemble the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/pages_site.py _site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

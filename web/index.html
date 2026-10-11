@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monitor Buddy flasher</title>
+  <style>
+    :root { color-scheme: dark light; }
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto;
+           padding: 0 16px; background: #111; color: #eee; line-height: 1.6; }
+    @media (prefers-color-scheme: light) { body { background: #fafafa; color: #222; } }
+    a { color: #1d9e75; }
+  </style>
+</head>
+<body>
+  <h1>Monitor Buddy web flasher</h1>
+  <p>The web flasher is coming with firmware 1.2.0. Until then, install Monitor Buddy from
+     source as described in the <a href="https://github.com/IdefixRC/Monitor-Buddy#4-flashing-the-board">README</a>.</p>
+  <p id="firmware"></p>
+  <script type="module">
+    try {
+      const r = await fetch("firmware/releases.json", { cache: "no-store" });
+      const j = await r.json();
+      const list = j.releases.map(x => x.version + (x.prerelease ? " (pre-release)" : ""));
+      document.getElementById("firmware").textContent =
+        "Firmware mirrored here: " + (list.length ? list.join(", ") : "none yet") + ".";
+    } catch (e) { /* no manifest yet */ }
+  </script>
+</body>
+</html>
