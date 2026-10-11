@@ -63,14 +63,41 @@ export function wifiChoices(info, path) {
 }
 
 // A fresh form: the given config, Wi-Fi on with the default choice.
-export function newFormState(config, { flow, info = null, added = [], imported = [] } = {}) {
+// location: the location keys ("lat", "lon", "tz_name") the user has given
+// (picked, typed, imported); see locationMissing.
+export function newFormState(config, { flow, info = null, added = [], imported = [], location = [] } = {}) {
   return {
     flow,
     config: structuredClone(config),
     wifi: { configure: true, choice: wifiChoices(info, flow)[0].value, ssid: "", password: "" },
     added: [...added],
     imported: [...imported],
+    location: [...location],
   };
+}
+
+// The keys that make up the location.
+export const LOCATION_KEYS = Object.freeze(["lat", "lon", "tz_name"]);
+
+// A fresh install (one that erases) must never write the firmware's built-in
+// location without the user choosing it (Eric, 2026-10-11): the place has to
+// come from the city search, from typing all three values, or from an import.
+// Upgrades and settings changes keep the board's location.
+export function locationMissing(state) {
+  const flow = FLOWS[state.flow];
+  if (!flow || !flow.erase) return false;
+  const given = state.location || [];
+  return !LOCATION_KEYS.every((k) => given.includes(k));
+}
+
+// The location keys a board's saved settings count as given for a fresh
+// install that starts from them: only when the board has saved settings
+// (stored) and its place isn't the built-in one.
+export function boardLocation(got) {
+  if (!got || got.stored !== true || !got.config) return [];
+  const c = got.config;
+  const builtIn = LOCATION_KEYS.every((k) => String(c[k]) === String(DEFAULTS[k]));
+  return builtIn ? [] : [...LOCATION_KEYS];
 }
 
 // -> { config, wifi? }, the body of SET. wifi is left out when "Configure
@@ -128,6 +155,7 @@ export function formErrors(state, zones) {
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }
+  if (locationMissing(state)) out.location = S.errors.location;
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") {
     for (const [key, raw] of Object.entries(validateWifi({ ssid: w.ssid, password: w.password }).errors)) {
@@ -159,10 +187,75 @@ export function githubMessage(res) {
   return S.check.github[res.status] || S.check.github.network;
 }
 
+// How long the result screen waits for the Buddy to join the Wi-Fi, counted
+// from when it answers again after the restart.
+export const WIFI_WAIT_MS = 30000;
+
+// INFO shows the Buddy on the network the request asked for.
+export function joinedWifi(info, ssid) {
+  return !!(info && info.wifi && info.wifi.connected && info.wifi.ssid === ssid);
+}
+
+// The result screen after a SET (spec §4): "connected" or "wifiFailed" when
+// Wi-Fi was sent; "hotspot" when none was sent and none is saved; else "saved".
+export function resultKind(req, info) {
+  const w = (info && info.wifi) || {};
+  if (req && req.wifi) return joinedWifi(info, req.wifi.ssid) ? "connected" : "wifiFailed";
+  if (!w.saved) return "hotspot";
+  return "saved";
+}
+
 // True when the release's settings format is newer than the board's, so the
 // update brings settings this form can't show yet.
 export function addsSettings(entry, info) {
   if (!entry || !info) return false;
   const a = Number(entry.cfg_v), b = Number(info.cfg_v);
   return Number.isFinite(a) && Number.isFinite(b) && a > b;
+}
+
+// ── The light markup of strings.js ────────────────────────
+// **bold**, `code` and [text](https://link). A backslash makes the next
+// character literal, so escapeRich() turns any text (an SSID, a firmware
+// version, a file's contents) into plain text inside a marked-up string.
+
+export function escapeRich(text) {
+  return String(text).replace(/[\\*`[\]]/g, (c) => `\\${c}`);
+}
+
+// -> [{ type: "text" | "strong" | "code" | "link", text, href? }]
+export function parseRich(text) {
+  const s = String(text);
+  const out = [];
+  let buf = "";
+  const flush = () => { if (buf) { out.push({ type: "text", text: buf }); buf = ""; } };
+  // The text up to `delim` (escapes resolved) and the index after it, or null.
+  const until = (i, delim) => {
+    let v = "";
+    while (i < s.length) {
+      if (s[i] === "\\" && i + 1 < s.length) { v += s[i + 1]; i += 2; continue; }
+      if (s.startsWith(delim, i)) return [v, i + delim.length];
+      v += s[i++];
+    }
+    return null;
+  };
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "\\" && i + 1 < s.length) { buf += s[i + 1]; i += 2; continue; }
+    if (s.startsWith("**", i)) {
+      const r = until(i + 2, "**");
+      if (r && r[0]) { flush(); out.push({ type: "strong", text: r[0] }); i = r[1]; continue; }
+    } else if (c === "`") {
+      const r = until(i + 1, "`");
+      if (r && r[0]) { flush(); out.push({ type: "code", text: r[0] }); i = r[1]; continue; }
+    } else if (c === "[") {
+      const r = until(i + 1, "]");
+      const m = r && /^\((https:\/\/[^)\s]+)\)/.exec(s.slice(r[1]));
+      if (m && r[0]) { flush(); out.push({ type: "link", text: r[0], href: m[1] }); i = r[1] + m[0].length; continue; }
+    }
+    buf += c;
+    i++;
+  }
+  flush();
+  return out;
 }

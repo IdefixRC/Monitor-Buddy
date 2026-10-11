@@ -8,6 +8,7 @@ export const S = {
   connect: "Connect your Buddy",
   skipLink: "Skip to the content",
   beta: "Beta: showing pre-releases",
+  fake: "Simulated Buddy: nothing is connected (test mode).",
 
   // The face and the device preview (face.js, preview.js).
   faceLabel: "Your Buddy's face",
@@ -117,26 +118,29 @@ export const S = {
     startLegend: "The settings form",
     saved: (name) => `Saved **${name}**. It includes your Finnhub key, so keep it private.`,
     warning: "The backup includes your Finnhub key, so keep the file private. It never includes the Wi-Fi password.",
-    failed: "I couldn't read my settings for the backup. Try again.",
   },
 
   reset: {
     say: "Sure? I'll forget the settings you saved and go back to the values I was built with. Wi-Fi and brightness stay as they are.",
     confirm: "Reset to defaults",
     working: "Resetting. I'll restart and be back in a few seconds.",
+    refused: "I couldn't reset my settings, so nothing changed. Try again, or unplug me and plug me back in first.",
+    unconfirmed: "I couldn't confirm the reset. Connect again and check my settings with Change settings.",
+    noComeBack: "I took the reset, but I haven't come back after the restart. Unplug me and plug me back in, then try again.",
   },
 
   form: {
     say: {
       change: "Here's how I'm set up. Change what you like and I'll show it on my screen.",
       update: "Want to change anything while I update? Pick the version at the bottom.",
-      fresh: "Let's set me up from scratch. Fill in what you like; the rest keeps my defaults.",
-      install: "Let's set me up. Fill in what you like; the rest keeps my defaults.",
+      fresh: "Let's set me up from scratch. First tell me where I am, with the city search; then change what you like.",
+      install: "Let's set me up. First tell me where I am, with the city search; then change what you like.",
       upgrade: "Bring your old settings across: import your config.h, then check them here.",
       review: "I learned some new settings. Have a look at the ones marked New, then save.",
     },
     setErrors: "I didn't save anything: some values aren't right. They're marked below.",
     invalid: "Some values need fixing first. They're marked below.",
+    needLocation: "I need to know where I am for the weather and the clock. Pick your town in the city search, or enter latitude, longitude and time zone.",
     summary: "Fix the marked fields first.",
     submit: {
       change: "Save settings",
@@ -279,6 +283,7 @@ export const S = {
     github_user: "Up to 39 letters, digits and dashes.",
     tz_name: "Pick a time zone from the list, like Europe/Berlin.",
     tzUnknown: "I don't know this time zone. Pick one from the list, like Europe/Berlin.",
+    location: "Pick your town from the list, or enter latitude, longitude and time zone yourself.",
     tz_rule: "Up to 64 characters of a POSIX rule, like CET-1CEST,M3.5.0,M10.5.0/3.",
     ticker: "1 to 10 characters: A to Z, 0 to 9, dot and dash, like AAPL.",
     stock_key: "Up to 64 letters, digits, underscores and dashes.",
@@ -338,12 +343,14 @@ export const S = {
     bootLabel: "BOOT",
     resetLabel: "RESET",
     writeFailed: "The update didn't finish. Nothing is lost; try again.",
+    eraseFailed: "The erase didn't finish, so my settings and Wi-Fi may already be gone. Run the fresh install again.",
     resetHint: "The firmware is written, but I didn't restart by myself. Press RESET on the board.",
     noComeBack: "I haven't come back after the restart. Unplug me and plug me back in, or press RESET, then try again. Your settings are still in the form.",
   },
 
   saving: {
     say: "Saving my settings. I'll restart and be back in a few seconds.",
+    waiting: "Waiting for me to come back after the restart.",
     joining: (ssid) => `Joining ${ssid}. This can take up to 30 seconds.`,
     failed: "I couldn't confirm that the settings were saved. Check them with Change settings.",
   },

@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   DEFAULTS, formToRequest, badgesFor, helpFor, wifiChoices, formErrors, fromBoard,
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
+  locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
+  joinedWifi, resultKind, WIFI_WAIT_MS,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -140,7 +142,7 @@ test("formErrors: a time zone not in the table is a field error", () => {
 });
 
 test("formErrors: Wi-Fi is checked only when new credentials are chosen", () => {
-  const f = newFormState(DEFAULTS, { flow: "install", info: null });
+  const f = newFormState(DEFAULTS, { flow: "install", info: null, location: ["lat", "lon", "tz_name"] });
   f.wifi = { configure: true, choice: "new", ssid: "", password: "short" };
   assert.deepEqual(Object.keys(formErrors(f, zones)).sort(), ["wifi.password", "wifi.ssid"]);
   f.wifi.configure = false;
@@ -197,4 +199,85 @@ test("copy: no exclamation marks, no please, simply or just", () => {
     assert.doesNotMatch(t, /!/, `${path} has an exclamation mark`);
     assert.doesNotMatch(t, /\b(please|simply|just)\b/i, `${path}: "${t}"`);
   }
+});
+
+// ── A fresh install needs a location (Eric, 2026-10-11) ───
+
+test("a fresh install can't go ahead on the built-in location", () => {
+  for (const flow of ["fresh", "install"]) {
+    const f = newFormState(DEFAULTS, { flow, info: null });
+    assert.equal(locationMissing(f), true, flow);
+    assert.equal(formErrors(f, zones).location, S.errors.location);
+  }
+});
+
+test("picking a place, typing all three values, or importing them is enough", () => {
+  const f = newFormState(DEFAULTS, { flow: "install", info: null });
+  f.location = ["lat", "lon"];
+  assert.equal(locationMissing(f), true, "the time zone is still missing");
+  f.location = [...LOCATION_KEYS];
+  assert.equal(locationMissing(f), false);
+  assert.equal("location" in formErrors(f, zones), false);
+});
+
+test("upgrades and settings changes keep the board's location", () => {
+  for (const flow of ["change", "review", "update", "upgrade"]) {
+    assert.equal(locationMissing(newFormState(DEFAULTS, { flow, info: INFO_SAVED })), false, flow);
+  }
+});
+
+test("a board's saved, non-default location counts; defaults or unsaved don't", () => {
+  const mine = { ...DEFAULTS, lat: "48.1374", lon: "11.5755", tz_name: "Europe/Berlin" };
+  assert.deepEqual(boardLocation({ stored: true, config: mine }), [...LOCATION_KEYS]);
+  assert.deepEqual(boardLocation({ stored: false, config: mine }), []);
+  assert.deepEqual(boardLocation({ stored: true, config: { ...DEFAULTS } }), []);
+  assert.deepEqual(boardLocation(null), []);
+});
+
+// ── Markup and escaping ───────────────────────────────────
+
+test("parseRich reads bold, code and https links", () => {
+  assert.deepEqual(parseRich("Join **Monitor-Buddy-Setup**, use `AAPL`, see [docs](https://x.io/a)."), [
+    { type: "text", text: "Join " },
+    { type: "strong", text: "Monitor-Buddy-Setup" },
+    { type: "text", text: ", use " },
+    { type: "code", text: "AAPL" },
+    { type: "text", text: ", see " },
+    { type: "link", text: "docs", href: "https://x.io/a" },
+    { type: "text", text: "." },
+  ]);
+  assert.deepEqual(parseRich("[no](http://insecure.example)"), [{ type: "text", text: "[no](http://insecure.example)" }]);
+});
+
+test("escaped board data stays plain text", () => {
+  const ssid = "**x** [a](https://evil.example) `c` back\slash";
+  const tokens = parseRich(S.result.connected(escapeRich(ssid)));
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].type, "text");
+  assert.equal(tokens[0].text, S.result.connected(ssid));
+});
+
+test("every help text parses, and the Finnhub link survives", () => {
+  for (const [key, text] of Object.entries(S.help)) {
+    const tokens = parseRich(text);
+    assert.ok(tokens.length > 0, key);
+    assert.ok(tokens.every((t) => !t.text.includes("**")), `${key} has unparsed bold`);
+  }
+  assert.ok(parseRich(S.help.stock_key).some((t) => t.type === "link" && t.href === "https://finnhub.io/register"));
+});
+
+// ── The result after a save ───────────────────────────────
+
+test("the result follows spec §4", () => {
+  const up = { wifi: { saved: true, ssid: "Home", connected: true } };
+  const down = { wifi: { saved: true, ssid: "Home", connected: false } };
+  const none = { wifi: { saved: false, ssid: "", connected: false } };
+  const sent = { config: {}, wifi: { ssid: "Home", password: "secret123" } };
+  assert.equal(resultKind(sent, up), "connected");
+  assert.equal(resultKind(sent, down), "wifiFailed");
+  assert.equal(resultKind(sent, { wifi: { saved: true, ssid: "Other", connected: true } }), "wifiFailed");
+  assert.equal(resultKind({ config: {} }, none), "hotspot");
+  assert.equal(resultKind({ config: {} }, up), "saved");
+  assert.equal(joinedWifi(null, "Home"), false);
+  assert.equal(WIFI_WAIT_MS, 30000);
 });

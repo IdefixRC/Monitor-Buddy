@@ -1530,8 +1530,9 @@ select.input {
   bottom: 0;
   z-index: 5;
   margin: 0.5rem -0.5rem 0;
-  padding: 0.25rem 0.5rem 0.5rem;
-  background: linear-gradient(transparent, var(--bg) 35%);
+  padding: 1rem 0.5rem 0.5rem;
+  /* Fades in above, solid behind the buttons and the error line. */
+  background: linear-gradient(transparent, var(--bg) 1rem);
 }
 
 .form-foot .actions {
@@ -1542,6 +1543,30 @@ select.input {
   margin: 0.5rem 0 0;
   color: var(--danger);
   font-weight: 600;
+}
+
+.form-summary p,
+.form-summary ul {
+  margin: 0;
+}
+
+.form-summary ul {
+  padding-left: 1.25rem;
+  font-weight: 500;
+}
+
+/* ?fake: a pretend Buddy. Loud and always on top, so it can't pass for real. */
+.fake-banner {
+  position: sticky;
+  top: 0;
+  z-index: 150;
+  padding: 0.55rem 16px;
+  background: repeating-linear-gradient(-45deg, #ffd25a 0 14px, #f2c33c 14px 28px);
+  color: #2a1f00;
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-align: center;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 
 /* The device preview (preview.js). */

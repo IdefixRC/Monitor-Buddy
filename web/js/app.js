@@ -15,6 +15,7 @@ import { createPreview, THEMES } from "./preview.js";
 import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
+  LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -59,21 +60,13 @@ function h(tag, attrs = {}, ...kids) {
   return e;
 }
 
-// strings.js markup -> nodes: **bold**, `code`, [text](https://...).
-const RICH = /\*\*(.+?)\*\*|`(.+?)`|\[(.+?)\]\((https:\/\/[^)\s]+)\)/g;
+// strings.js markup -> nodes, through form.js's parseRich. Values from the
+// board or a file go in through escapeRich, so they always stay plain text.
 function rich(text) {
-  const out = [];
-  let at = 0;
-  const s = String(text);
-  for (const m of s.matchAll(RICH)) {
-    if (m.index > at) out.push(s.slice(at, m.index));
-    if (m[1] !== undefined) out.push(h("strong", {}, m[1]));
-    else if (m[2] !== undefined) out.push(h("code", {}, m[2]));
-    else out.push(h("a", { href: m[4], target: "_blank", rel: "noopener" }, m[3]));
-    at = m.index + m[0].length;
-  }
-  if (at < s.length) out.push(s.slice(at));
-  return out;
+  return parseRich(text).map((t) => (t.type === "text" ? t.text
+    : t.type === "strong" ? h("strong", {}, t.text)
+    : t.type === "code" ? h("code", {}, t.text)
+    : h("a", { href: t.href, target: "_blank", rel: "noopener" }, t.text)));
 }
 
 let uidCount = 0;
@@ -242,7 +235,10 @@ function attach(bp) {
   });
 }
 
+let picking = false;
 async function connect() {
+  if (picking) return; // a double click opens one picker
+  picking = true;
   let bp;
   try {
     bp = await dev.BuddyPort.pick();
@@ -253,6 +249,8 @@ async function connect() {
       return;
     }
     return showProblem(S.connecting.openFailed, e);
+  } finally {
+    picking = false;
   }
   if (app.bp && app.bp !== bp) {
     try { await app.bp.close(); } catch { /* already gone */ }
@@ -263,7 +261,18 @@ async function connect() {
 }
 
 // Opens the port and asks INFO: an answer is path A, none is path B.
+let probing = false;
 async function probeAndRoute() {
+  if (probing) return;
+  probing = true;
+  try {
+    await probeAndRouteOnce();
+  } finally {
+    probing = false;
+  }
+}
+
+async function probeAndRouteOnce() {
   const bp = app.bp;
   let g;
   screen(S.titles.connecting, (m) => {
@@ -328,7 +337,7 @@ async function readGet() {
     if (r && r.ok && r.config) return r;
     throw new Error(r && r.error ? r.error : "GET failed");
   } catch (e) {
-    showProblem(S.connecting.readFailed, e, { retry: showHome, retryLabel: S.backup.back });
+    showProblem(S.connecting.readFailed, e, { retry: backHome, retryLabel: S.backup.back });
     return null;
   }
 }
@@ -340,7 +349,7 @@ function showHome() {
   if (!info) return showPathB();
   const upd = app.manifest ? updateFor(info.fw, app.manifest, BETA) : null;
   screen(S.titles.home, (m) => {
-    const g = guide(m, { mood: "happy", say: S.home.say(info.fw) });
+    const g = guide(m, { mood: "happy", say: S.home.say(escapeRich(info.fw)) });
     if (!installable()) g.add(installOff(), "error");
     const w = info.wifi || {};
     const wifiText = !w.saved ? S.home.wifiNone : w.connected ? S.home.wifiUp(w.ssid) : S.home.wifiDown(w.ssid);
@@ -390,9 +399,9 @@ async function startFlashFlow(flow) {
 async function startBackup() {
   const got = await readGet();
   if (!got) return;
-  const name = downloadBackup(got.config);
+  const name = downloadBackup(fromBoard(got.config));
   showHome();
-  G.add(S.backup.saved(name));
+  G.add(S.backup.saved(escapeRich(name)));
 }
 
 function downloadBackup(config) {
@@ -426,7 +435,7 @@ function showBackupOffer({ say, config, choice, next }) {
     m.append(
       h("p", { class: "hint" }, S.backup.warning),
       actions(
-        btn(S.backup.download, () => { g.add(S.backup.saved(downloadBackup(config))); }),
+        btn(S.backup.download, () => { g.add(S.backup.saved(escapeRich(downloadBackup(config)))); }),
         btn(S.backup.continue, () => next(empty), { kind: "primary" }),
         btn(S.backup.back, showHome, { kind: "link" })));
   });
@@ -437,10 +446,11 @@ async function startFresh() {
   if (!got) return;
   showBackupOffer({
     say: S.backup.freshSay,
-    config: got.config,
+    config: fromBoard(got.config),
     choice: true,
     next: (empty) => {
-      app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config), { flow: "fresh", info: app.info });
+      app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
+        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got) });
       app.form.version = app.releases[0].version;
       showForm();
     },
@@ -450,7 +460,7 @@ async function startFresh() {
 async function startReset() {
   const got = await readGet();
   if (!got) return;
-  showBackupOffer({ say: S.backup.resetSay, config: got.config, choice: false, next: showResetConfirm });
+  showBackupOffer({ say: S.backup.resetSay, config: fromBoard(got.config), choice: false, next: showResetConfirm });
 }
 
 function showResetConfirm() {
@@ -472,18 +482,40 @@ async function doReset() {
   try {
     res = await change(app.bp, "DEFAULTS", null, { waitRestart: true });
   } catch (e) {
+    // DEFAULTS answered ok, so the reset happened; only the reconnect failed.
     report(e);
-    res = { ok: false, note: e.message };
-  }
-  if (!res.ok) {
     app.expectDrop = false;
+    return showProblem(S.reset.noComeBack, null, { retry: () => backHome(), retryLabel: S.problem.retry });
+  }
+  app.expectDrop = false;
+  if (!res.ok) {
     if (res.note) log(res.note, "* ");
-    return showProblem(S.saving.failed, null, { retry: showHome, retryLabel: S.backup.back });
+    if (res.reply && res.reply.error) log(`DEFAULTS: ${res.reply.error}`, "* ");
+    // A refusal means nothing changed; no reply at all means we can't tell.
+    const text = res.reply ? S.reset.refused : S.reset.unconfirmed;
+    return showProblem(text, null, { retry: () => backHome(), retryLabel: S.backup.back });
   }
   const info = await infoOnce();
-  app.expectDrop = false;
   if (info) app.info = info;
   showResult("reset");
+}
+
+// Home with fresh INFO: after a restart the old one is stale. Reconnects
+// first when the port went away.
+async function backHome() {
+  screen(S.titles.connecting, (m) => {
+    guide(m, { mood: "curious", say: S.connecting.say });
+    m.append(spinner());
+  });
+  app.expectDrop = true;
+  let info = await infoOnce();
+  if (!info) {
+    try { info = await app.bp.reconnect(20000); } catch (e) { report(e); }
+  }
+  app.expectDrop = false;
+  if (!info) return showProblem(S.connecting.lost, null, { retry: connect, retryLabel: S.connect });
+  app.info = info;
+  showHome();
 }
 
 // ── Path B ────────────────────────────────────────────────
@@ -614,8 +646,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   let currentErrors = {};
   let preview;
   let bubble;
+  // False once this drawing of the form is gone (redrawn or left), so a check
+  // or an import that finishes late doesn't touch a destroyed preview.
+  let alive = true;
+  f.location = f.location || [];
 
   const touch = (key) => { f.touched.add(key); delete f.serverErrors[key]; };
+  const gave = (...keys) => { f.location = [...new Set([...f.location, ...keys])]; touch("location"); };
   const changed = (key) => { if (key) touch(key); refresh(); };
 
   // A label row: the label, its help button and its badges.
@@ -636,9 +673,10 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const id = uid("f");
     const hintEl = hint ? h("p", { class: "field__hint", id: uid("hint") }, rich(hint)) : null;
     const input = h("input", {
-      id, type, class: "input", value: value ?? "", autocomplete: "off", spellcheck: "false",
+      id, type, class: "input", autocomplete: "off", spellcheck: "false",
       autocapitalize: "off", "aria-describedby": hintEl ? hintEl.id : null, ...attrs,
     });
+    input.value = value ?? ""; // a property: the password and the key never land in the DOM's attributes
     input.addEventListener("input", () => { set(input.value, input); changed(key); });
     const error = errorSlot(key, [input]);
     const control = extra ? h("div", { class: "input-row" }, input, extra) : input;
@@ -679,7 +717,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const form = h("form", { class: "settings", novalidate: true });
     m.append(h("div", { class: "form-layout" }, side, form));
     preview = createPreview(previewBox);
-    cleanups.push(() => preview.destroy());
+    cleanups.push(() => { alive = false; preview.destroy(); });
     const say = (text, t = "") => bubble.replaceChildren(h("p", { class: t ? `bubble__line bubble__line--${t}` : "bubble__line" }, rich(text)));
     say(message || S.form.say[f.flow], tone);
 
@@ -695,7 +733,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       h("div", { class: "tools__buttons" },
         btn(S.form.importConfig, () => fileConfig.click(), { kind: upgrade ? "primary" : "secondary" }),
         btn(S.form.importBackup, () => fileBackup.click()),
-        btn(S.form.exportBackup, () => { status.replaceChildren(...rich(S.backup.saved(downloadBackup(f.config)))); })),
+        btn(S.form.exportBackup, () => { status.replaceChildren(...rich(S.backup.saved(escapeRich(downloadBackup(f.config))))); })),
       fileConfig, fileBackup, status));
 
     // 1. Wi-Fi.
@@ -782,6 +820,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       tz.input.value = r.tz;
       tzRule.input.value = f.config.tz_rule;
       for (const k of ["lat", "lon", "tz_name", "tz_rule"]) touch(k);
+      gave(...LOCATION_KEYS);
       results.hidden = true;
       cityStatus.textContent = S.form.picked(r.label);
       cityInput.focus();
@@ -789,15 +828,17 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
     const cityField = h("div", { class: "field" },
       head(h("label", { for: cityId }, S.form.city), S.form.city, "city"),
-      h("div", { class: "input-row" }, cityInput, searchBtn), cityStatus, results);
+      h("div", { class: "input-row" }, cityInput, searchBtn), cityStatus, results,
+      errorSlot("location", [cityInput])); // a fresh install needs a place
     const coord = (v) => v.trim();
-    const lat = textField({ key: "lat", label: S.form.lat, help: "lat", value: f.config.lat, set: (v) => { f.config.lat = coord(v); }, attrs: { inputmode: "decimal" } });
-    const lon = textField({ key: "lon", label: S.form.lon, help: "lon", value: f.config.lon, set: (v) => { f.config.lon = coord(v); }, attrs: { inputmode: "decimal" } });
+    const lat = textField({ key: "lat", label: S.form.lat, help: "lat", value: f.config.lat, set: (v) => { f.config.lat = coord(v); gave("lat"); }, attrs: { inputmode: "decimal" } });
+    const lon = textField({ key: "lon", label: S.form.lon, help: "lon", value: f.config.lon, set: (v) => { f.config.lon = coord(v); gave("lon"); }, attrs: { inputmode: "decimal" } });
     const zonesList = h("datalist", { id: uid("zones") }, Object.keys(app.zones || {}).map((z) => h("option", { value: z })));
     const tz = textField({
       key: "tz_name", label: S.form.tz, help: "tz_name", value: f.config.tz_name, attrs: { list: zonesList.id },
       set: (v) => {
         f.config.tz_name = v.trim();
+        gave("tz_name");
         const rule = app.zones ? ruleForZone(app.zones, f.config.tz_name) : null;
         if (rule) { f.config.tz_rule = rule; tzRule.input.value = rule; }
       },
@@ -841,7 +882,10 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       stockResult.textContent = S.check.checking;
       stockResult.dataset.state = "";
       stockCheck.disabled = true;
-      const res = await checkStock(window.fetch.bind(window), f.config.ticker, f.config.stock_key);
+      const asked = [f.config.ticker, f.config.stock_key];
+      const res = await checkStock(window.fetch.bind(window), ...asked);
+      // Gone, or the ticker or key changed while it ran: the answer is stale.
+      if (!alive || asked[0] !== f.config.ticker || asked[1] !== f.config.stock_key) return;
       stockCheck.disabled = false;
       stockResult.textContent = stockMessage(res, f.config.ticker);
       stockResult.dataset.state = res.status === "ok" ? "ok" : "bad";
@@ -882,7 +926,9 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       ghResult.textContent = S.check.checking;
       ghResult.dataset.state = "";
       ghCheck.disabled = true;
-      const res = await checkGithub(window.fetch.bind(window), f.config.github_user);
+      const asked = f.config.github_user;
+      const res = await checkGithub(window.fetch.bind(window), asked);
+      if (!alive || asked !== f.config.github_user) return;
       ghCheck.disabled = false;
       ghResult.textContent = githubMessage(res);
       ghResult.dataset.state = res.status === "ok" ? "ok" : "bad";
@@ -943,7 +989,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
 
     // The buttons.
-    const summary = h("p", { class: "form-summary", role: "alert", hidden: true }, S.form.summary);
+    const summary = h("div", { class: "form-summary", role: "alert", hidden: true });
     const backTo = f.flow === "review" ? null : (app.info ? showHome : showPathB);
     form.append(h("div", { class: "form-foot" }, summary,
       h("div", { class: "actions" },
@@ -954,14 +1000,18 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       submit();
     });
     refreshers.push(() => {
+      // Errors with no field of their own (a SET error on "wifi", say) are listed here.
+      const orphans = Object.entries(currentErrors).filter(([k]) => !slots.has(k)).map(([, msg]) => msg);
       summary.hidden = !(f.submitted && Object.keys(currentErrors).length);
+      summary.replaceChildren(h("p", {}, S.form.summary));
+      if (orphans.length) summary.append(h("ul", {}, orphans.map((o) => h("li", {}, o))));
     });
 
     function submit() {
       f.submitted = true;
       refresh();
       if (Object.keys(currentErrors).length) {
-        say(S.form.invalid, "error");
+        say(currentErrors.location ? S.form.needLocation : S.form.invalid, "error");
         const first = [...form.querySelectorAll('[aria-invalid="true"]')][0];
         if (first) first.focus();
         return;
@@ -976,6 +1026,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   });
 
   function refresh() {
+    if (!alive) return;
     const errs = formErrors(f, app.zones);
     for (const [k, raw] of Object.entries(f.serverErrors)) errs[k] = fieldMessage(k, raw);
     currentErrors = errs;
@@ -1002,6 +1053,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     let res;
     try {
       res = parseConfigH(await file.text(), app.zones || {});
+      if (!alive) return;
     } catch (e) {
       report(e);
       return showForm({ say: S.form.badFile, tone: "error" });
@@ -1010,8 +1062,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
-    if (res.defaulted.length) lines.push(S.form.defaulted(res.defaulted.map(label).join(", ")));
-    if (res.skipped.length) lines.push(S.form.skipped(res.skipped.join(", ")));
+    if (res.defaulted.length) lines.push(S.form.defaulted(escapeRich(res.defaulted.map(label).join(", "))));
+    if (res.skipped.length) lines.push(S.form.skipped(escapeRich(res.skipped.join(", "))));
     showForm({ say: lines.join(" ") });
   }
 
@@ -1022,6 +1074,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     let cfg;
     try {
       cfg = readBackup(JSON.parse(await file.text()));
+      if (!alive) return;
     } catch (e) {
       report(e);
       return showForm({ say: e instanceof BadBackup ? S.form.badBackup : S.form.badFile, tone: "error" });
@@ -1033,6 +1086,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
 
   function markImported(keys) {
     f.imported = [...new Set([...f.imported, ...keys])];
+    const place = LOCATION_KEYS.filter((k) => keys.includes(k));
+    if (place.length) gave(...place);
     for (const k of keys) {
       if (k === "pages") PAGE_KEYS.forEach((p) => touch(`pages.${p}`));
       touch(k);
@@ -1051,7 +1106,6 @@ async function saveSettings() {
     m.append(spinner(), logPanel());
   });
   app.expectDrop = true;
-  const t0 = Date.now();
   let res;
   try {
     res = await change(app.bp, "SET", req, { waitRestart: true });
@@ -1059,7 +1113,7 @@ async function saveSettings() {
     // The Buddy took the settings but hasn't come back (reconnect gave up).
     report(e);
     app.expectDrop = false;
-    return showProblem(S.flash.noComeBack, null, { retry: () => finishSave(req, Date.now()) });
+    return showProblem(S.flash.noComeBack, null, { retry: () => finishSave(req, { redraw: true }) });
   }
   if (!res.ok) {
     app.expectDrop = false;
@@ -1072,35 +1126,47 @@ async function saveSettings() {
     return showProblem(S.saving.failed, null, { retry: () => showForm(), retryLabel: S.form.back });
   }
   if (res.note) log(res.note, "* ");
-  if (req.wifi) { g.say(S.saving.joining(req.wifi.ssid)); g.mood("excited"); }
-  await finishSave(req, t0);
+  if (req.wifi) { g.say(S.saving.joining(escapeRich(req.wifi.ssid))); g.mood("excited"); }
+  await finishSave(req);
 }
 
-// After the restart: poll INFO for up to 30 s, then show the result.
-async function finishSave(req, t0) {
-  app.expectDrop = true;
-  let info = await infoOnce();
-  if (!info) {
-    try { info = await app.bp.reconnect(30000); } catch (e) { report(e); }
-  }
-  if (req.wifi) {
-    const joined = (i) => i && i.wifi && i.wifi.connected && i.wifi.ssid === req.wifi.ssid;
-    while (!joined(info) && Date.now() - t0 < 30000) {
-      await sleep(2000);
-      info = (await infoOnce()) || info;
+// After the restart: poll INFO for up to 30 s, then show the result. The 30 s
+// count from when the Buddy is back (change() returns after the restart), so
+// joining the Wi-Fi gets the whole window. One at a time: a retry button
+// pressed twice must not start two reconnect loops on the same port.
+let finishing = false;
+async function finishSave(req, { redraw = false } = {}) {
+  if (finishing) return;
+  finishing = true;
+  try {
+    if (redraw) {
+      screen(S.titles.saving, (m) => {
+        guide(m, { mood: "curious", say: req.wifi ? S.saving.joining(escapeRich(req.wifi.ssid)) : S.saving.waiting });
+        m.append(spinner(), logPanel());
+      });
     }
+    app.expectDrop = true;
+    let info = await infoOnce();
+    if (!info) {
+      try { info = await app.bp.reconnect(30000); } catch (e) { report(e); }
+    }
+    const t0 = Date.now();
+    if (req.wifi) {
+      while (!joinedWifi(info, req.wifi.ssid) && Date.now() - t0 < WIFI_WAIT_MS) {
+        await sleep(2000);
+        info = (await infoOnce()) || info;
+      }
+    }
+    app.expectDrop = false;
+    if (!info) return showProblem(S.flash.noComeBack, null, { retry: () => finishSave(req, { redraw: true }) });
+    app.info = info;
+    const installed = app.form.installed;
+    app.form.installed = null;
+    const w = info.wifi || {};
+    showResult(resultKind(req, info), { ssid: req.wifi ? req.wifi.ssid : w.ssid, installed });
+  } finally {
+    finishing = false;
   }
-  app.expectDrop = false;
-  if (!info) return showProblem(S.flash.noComeBack, null, { retry: () => finishSave(req, Date.now()) });
-  app.info = info;
-  const w = info.wifi || {};
-  const installed = app.form.installed;
-  app.form.installed = null;
-  let kind;
-  if (req.wifi) kind = w.connected && w.ssid === req.wifi.ssid ? "connected" : "wifiFailed";
-  else if (!w.saved) kind = "hotspot";
-  else kind = "saved";
-  showResult(kind, { ssid: req.wifi ? req.wifi.ssid : w.ssid, installed });
 }
 
 // ── Flashing ──────────────────────────────────────────────
@@ -1197,7 +1263,8 @@ async function writeImage(entry, image, ui) {
       leaveGuard(false);
       app.expectDrop = false;
       if (e instanceof FlashError && e.stage === "connect") return showBootHelper(() => writeImage(entry, image));
-      return showProblem(S.flash.writeFailed, null, { retry: () => writeImage(entry, image) });
+      const text = e instanceof FlashError && e.stage === "erase" ? S.flash.eraseFailed : S.flash.writeFailed;
+      return showProblem(text, null, { retry: () => writeImage(entry, image) });
     }
   }
   ui.stage("restart");
@@ -1281,27 +1348,27 @@ function showBootHelper(retry) {
 
 function showResult(kind, { ssid = "", installed = null } = {}) {
   screen(S.titles.result, (m) => {
-    const done = btn(S.result.done, showHome, { kind: "primary" });
+    const done = btn(S.result.done, backHome, { kind: "primary" });
     if (kind === "connected") {
-      const g = guide(m, { mood: "love", say: S.result.connected(ssid) });
-      if (installed) g.add(S.result.installed(installed));
+      const g = guide(m, { mood: "love", say: S.result.connected(escapeRich(ssid)) });
+      if (installed) g.add(S.result.installed(escapeRich(installed)));
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
       confetti();
     } else if (kind === "wifiFailed") {
-      const g = guide(m, { mood: "sad", say: installed ? S.result.installed(installed) : S.result.wifiFailed(ssid) });
-      if (installed) g.add(S.result.wifiFailed(ssid), "error");
+      const g = guide(m, { mood: "sad", say: installed ? S.result.installed(escapeRich(installed)) : S.result.wifiFailed(escapeRich(ssid)) });
+      if (installed) g.add(S.result.wifiFailed(escapeRich(ssid)), "error");
       m.append(actions(
         btn(S.problem.retry, () => { app.form.flow = "change"; app.form.added = []; showForm({ focus: "wifi" }); }, { kind: "primary" }),
-        btn(S.result.done, showHome, { kind: "link" })));
+        btn(S.result.done, backHome, { kind: "link" })));
     } else if (kind === "hotspot") {
-      const g = guide(m, { mood: "happy", say: installed ? S.result.installed(installed) : S.result.hotspot });
+      const g = guide(m, { mood: "happy", say: installed ? S.result.installed(escapeRich(installed)) : S.result.hotspot });
       if (installed) g.add(S.result.hotspot);
       m.append(h("ol", { class: "card steps" }, S.result.hotspotSteps.map((s) => h("li", {}, rich(s)))), actions(done));
     } else if (kind === "reset") {
       guide(m, { mood: "happy", say: S.result.reset });
       m.append(actions(done));
     } else {
-      guide(m, { mood: "happy", say: installed ? S.result.installed(installed) : S.result.saved });
+      guide(m, { mood: "happy", say: installed ? S.result.installed(escapeRich(installed)) : S.result.saved });
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
     }
   });
@@ -1346,6 +1413,10 @@ function confetti() {
 
 function chrome() {
   document.title = S.title;
+  if (params.has("fake")) {
+    // A shared ?fake link must never pass for a real install.
+    document.body.prepend(h("div", { class: "fake-banner", role: "note" }, S.fake));
+  }
   document.getElementById("skip").textContent = S.skipLink;
   document.getElementById("app-name").textContent = S.appName;
   document.getElementById("app-tagline").textContent = S.appTagline;
