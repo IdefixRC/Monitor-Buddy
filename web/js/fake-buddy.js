@@ -6,7 +6,8 @@
 //   cancel           the port picker is cancelled
 //   busy             opening the port fails as if another program held it
 //   boot             the Buddy prints boot lines for a few seconds before it answers
-//   flashfail=connect|write   the first flash fails at that stage
+//   flashfail=connect|erase|write   the first flash fails at that stage
+//   noreturn=SET|DEFAULTS   after that command the Buddy doesn't come back on the first reconnect
 //   added=key,key    keys the new firmware reports in GET's "added"
 //   lost=SET         the reply to SET is lost (change() then verifies)
 //   seterror=key     SET refuses with an error on that key
@@ -35,6 +36,8 @@ export function fakeDevice(params) {
   };
   const failOnce = new Set(params.get("flashfail") ? [params.get("flashfail")] : []);
   const loseOnce = new Set(params.get("lost") ? [params.get("lost")] : []);
+  const noReturn = new Set(params.get("noreturn") ? [params.get("noreturn")] : []);
+  let stayAway = false;
 
   const info = () => ({
     ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: "b0:a6:04:00:00:01",
@@ -104,6 +107,7 @@ export function fakeDevice(params) {
         case "GET":
           return { ok: true, cmd, v: board.cfg_v, stored: board.stored, config: structuredClone(board.config), added: [...board.added] };
         case "SET": {
+          if (noReturn.delete("SET")) stayAway = true;
           const errors = {};
           if (params.get("seterror")) errors[params.get("seterror")] = "rejected by the fake Buddy";
           if (body.config) Object.assign(errors, validateConfig(body.config).errors);
@@ -115,6 +119,7 @@ export function fakeDevice(params) {
           return { ok: true, cmd };
         }
         case "DEFAULTS":
+          if (noReturn.delete("DEFAULTS")) stayAway = true;
           board.config = mergeConfig(DEFAULTS, {});
           board.stored = false;
           this._restart();
@@ -133,7 +138,7 @@ export function fakeDevice(params) {
     async reconnect(timeoutMs = 40000) {
       this.isOpen = false;
       await sleep(Math.min(2500, timeoutMs));
-      if (!board.answers) throw new NoReply("the Buddy did not come back");
+      if (!board.answers || stayAway) { stayAway = false; throw new NoReply("the Buddy did not come back"); }
       this.isOpen = true;
       this.lost = false;
       board.awake = true;
@@ -156,6 +161,11 @@ export function fakeDevice(params) {
       onStage?.("erase");
       say("Erasing flash (this may take a while)...");
       await sleep(2500);
+      if (failOnce.has("erase")) {
+        failOnce.delete("erase");
+        board.wifi = { saved: false, ssid: "", password: "" };
+        throw new FlashError("erase", new Error("Timed out waiting for packet header"));
+      }
       board.config = mergeConfig(DEFAULTS, {});
       board.stored = false;
       board.wifi = { saved: false, ssid: "", password: "" };
