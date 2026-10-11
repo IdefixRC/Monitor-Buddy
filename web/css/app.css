@@ -1,0 +1,37 @@
+/* Design tokens. Dark is the default; light follows the system setting. */
+:root {
+  --bg: #0b0b0d;
+  --fg: #ececec;
+  --muted: #9a9aa0;
+  --card: #17171b;
+  --border: #2a2a31;
+  --accent: #1d9e75;
+  --danger: #e24b4a;
+  --ok: #5dcaa5;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fafafa;
+    --fg: #1d1d1f;
+    --muted: #5f5e5a;
+    --card: #ffffff;
+    --border: #d3d1c7;
+    --accent: #0f6e56;
+    --danger: #a32d2d;
+    --ok: #0f6e56;
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  margin: 0;
+}
+
+.page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 0 16px;
+}

@@ -25,5 +25,10 @@ jobs:
         run: pio test -e native
       - name: Python tool tests
         run: python -m unittest discover -s tools -v
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Web unit tests
+        run: node --test "web-tests/*.test.mjs"
       - name: Build the firmware
         run: pio run -e esp32-c6
