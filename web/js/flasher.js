@@ -49,6 +49,19 @@ export async function fetchImage(entry, siteRoot) {
   return data;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Restarts the Buddy after flashing. We pulse EN ourselves instead of calling
+// esptool-js's after("hard_reset"): its HardReset only releases RTS and never
+// pulses it, so on the ESP32-C6's USB-Serial-JTAG the chip stayed in the ROM
+// download mode and the Buddy never started (measured 2026-10-11).
+// RTS high holds EN low (reset); DTR stays low so IO9 is high (normal boot).
+export async function resetToFirmware(port) {
+  await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+  await sleep(100);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+}
+
 // Writes `image` at address 0. `serialPort` must be CLOSED: esptool-js opens
 // it itself (so close the BuddyPort first). It is closed again on return, and
 // the board is hard-reset, so it drops off USB and comes back as a new port.
@@ -81,7 +94,8 @@ export async function flashImage(serialPort, image, { erase = false, onProgress,
       },
     });
     stage = "reset";
-    await loader.after("hard_reset");
+    say("Restarting the Buddy");
+    await resetToFirmware(transport.device ?? serialPort);
   } catch (e) {
     if (transport) { try { await transport.disconnect(); } catch { /* leave the port as it is */ } }
     throw new FlashError(stage, e);
