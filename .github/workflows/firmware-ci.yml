@@ -9,11 +9,11 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.platformio
@@ -23,5 +23,7 @@ jobs:
         run: pip install platformio
       - name: Unit tests (PC)
         run: pio test -e native
+      - name: Python tool tests
+        run: python -m unittest discover -s tools -v
       - name: Build the firmware
         run: pio run -e esp32-c6
