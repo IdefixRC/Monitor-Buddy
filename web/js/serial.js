@@ -18,13 +18,15 @@ export class NoReply extends Error {
   }
 }
 
-// One function on purpose: whether opening first and then lowering DTR/RTS
-// keeps the board from resetting is what the hardware spike has to find out.
-// Python opens with the signals already low (pyserial sets them before open);
-// Web Serial can't, so this is the part to change if the board resets.
 export async function openQuietly(port) {
+  // Chrome opens with DTR and RTS asserted. Lowering both in one setSignals()
+  // call resets the ESP32-C6 (rst:0x15): the chip briefly sees RTS on, DTR off.
+  // RTS first, then DTR, never passes through that state. Closing with the
+  // lines already low doesn't reset either; closing with them still on does.
+  // Measured on the Buddy in Chrome, 2026-10-11.
   await port.open({ baudRate: BAUD });
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  await port.setSignals({ requestToSend: false });
+  await port.setSignals({ dataTerminalReady: false });
 }
 
 function isBuddy(port) {
