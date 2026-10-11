@@ -18,6 +18,7 @@ from pathlib import Path
 
 REPO_URL = "https://github.com/IdefixRC/Monitor-Buddy"
 FIRST_VERSION = (1, 2, 0)   # older firmware has no runtime settings
+MANIFEST_FORMAT = 1
 _TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
 _CFG = re.compile(r"static\s+const\s+int\s+CONFIG_VERSION\s*=\s*(\d+)\s*;")
 
@@ -63,13 +64,51 @@ def release_entry(tag, published_at, prerelease, data, cfg_v):
 
 def build_manifest(entries):
     """`entries` newest first. latest is the newest final release, or None while
-    only release candidates exist."""
+    only release candidates exist. `format` is the schema version, so the shape
+    can change later without breaking flashers that already shipped."""
     latest = next((e["version"] for e in entries if not e["prerelease"]), None)
-    return {"latest": latest, "releases": list(entries)}
+    return {"format": MANIFEST_FORMAT, "latest": latest, "releases": list(entries)}
 
 
-def _run(args, cwd=None, check=True):
-    return subprocess.run(args, cwd=cwd, check=check, capture_output=True, text=True)
+def effective_prerelease(is_prerelease, parsed):
+    """An -rcN tag is always a pre-release, whatever the release page says."""
+    return bool(is_prerelease) or parsed[3] is not None
+
+
+def select(listed):
+    """From `gh release list` rows to [(tag, release)], newest first. Drafts and
+    versions before 1.2.0 are dropped; an -rcN tag gets isPrerelease forced on."""
+    picked = []
+    for r in listed:
+        parsed = parse_tag(r["tagName"])
+        if r["isDraft"] or not included(parsed):
+            continue
+        r = dict(r, isPrerelease=effective_prerelease(r["isPrerelease"], parsed))
+        picked.append((sort_key(parsed), r["tagName"], r))
+    picked.sort(key=lambda p: p[0], reverse=True)
+    return [(tag, r) for _, tag, r in picked]
+
+
+def check_out_dir(repo, out):
+    """Why `out` must not be wiped and rebuilt, or None when it is fine. main()
+    deletes `out`, so it must never be the repo, one of its parents, web/ or .git/."""
+    repo, out = Path(repo).resolve(), Path(out).resolve()
+    if out == repo or out in repo.parents:
+        return f"{out} is the repo root or an ancestor of it"
+    for guarded in (repo / "web", repo / ".git"):
+        if out == guarded or guarded in out.parents:
+            return f"{out} is inside {guarded}"
+    return None
+
+
+def _run(args, cwd=None):
+    """Runs a gh/git command; on failure prints its stderr, then re-raises."""
+    try:
+        return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"command failed ({e.returncode}): {' '.join(map(str, args))}\n{e.stderr}",
+              file=sys.stderr)
+        raise
 
 
 def main(argv):
@@ -78,37 +117,43 @@ def main(argv):
         return 2
     repo = Path(__file__).resolve().parent.parent
     out = Path(argv[1]).resolve()
+    problem = check_out_dir(repo, out)
+    if problem:
+        print(f"refusing to use that OUT_DIR: {problem}", file=sys.stderr)
+        return 2
+
+    listed = json.loads(_run(["gh", "release", "list", "--limit", "200", "--json",
+                              "tagName,isPrerelease,isDraft,publishedAt"], cwd=repo).stdout)
+
     if out.exists():
         shutil.rmtree(out)
     shutil.copytree(repo / "web", out)
     firmware = out / "firmware"
     firmware.mkdir(exist_ok=True)
 
-    listed = json.loads(_run(["gh", "release", "list", "--limit", "200", "--json",
-                              "tagName,isPrerelease,isDraft,publishedAt"], cwd=repo).stdout)
-    picked = []
-    for r in listed:
-        parsed = parse_tag(r["tagName"])
-        if not r["isDraft"] and included(parsed):
-            picked.append((sort_key(parsed), r))
-    picked.sort(key=lambda p: p[0], reverse=True)
-
     entries = []
-    for _, r in picked:
-        tag = r["tagName"]
+    for tag, r in select(listed):
         name = asset_name(tag[1:])
+        view = json.loads(_run(["gh", "release", "view", tag, "--json", "assets"],
+                               cwd=repo).stdout)
+        asset = next((a for a in view["assets"] if a["name"] == name), None)
+        if asset is None:
+            print(f"::warning::skipping {tag}: no {name} attached")
+            continue
         dest = firmware / tag
         dest.mkdir(parents=True, exist_ok=True)
-        dl = _run(["gh", "release", "download", tag, "-p", name, "-D", str(dest), "--clobber"],
-                  cwd=repo, check=False)
+        _run(["gh", "release", "download", tag, "-p", name, "-D", str(dest), "--clobber"],
+             cwd=repo)
         path = dest / name
-        if dl.returncode != 0 or not path.exists():
-            print(f"skip {tag}: no {name} attached", file=sys.stderr)
-            shutil.rmtree(dest, ignore_errors=True)
-            continue
+        if not path.is_file():
+            raise RuntimeError(f"{tag}: gh reported success but {name} is missing")
+        data = path.read_bytes()
+        digest = asset.get("digest") or ""
+        if digest.startswith("sha256:") and digest[7:].lower() != hashlib.sha256(data).hexdigest():
+            raise RuntimeError(f"{tag}: {name} does not match the release's sha256 digest")
         header = _run(["git", "show", f"{tag}:lib/settings/settings.h"], cwd=repo).stdout
         entries.append(release_entry(tag, r["publishedAt"], r["isPrerelease"],
-                                     path.read_bytes(), parse_cfg_v(header)))
+                                     data, parse_cfg_v(header)))
         print(f"mirrored {tag} ({name})")
 
     manifest = build_manifest(entries)

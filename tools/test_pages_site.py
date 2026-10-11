@@ -1,5 +1,12 @@
+import contextlib
 import hashlib
+import io
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 import pages_site as ps
 
@@ -68,7 +75,155 @@ class Manifest(unittest.TestCase):
         self.assertIsNone(m["latest"])
 
     def test_empty(self):
-        self.assertEqual(ps.build_manifest([]), {"latest": None, "releases": []})
+        self.assertEqual(ps.build_manifest([]), {"format": 1, "latest": None, "releases": []})
+
+    def test_format_is_the_first_key(self):
+        self.assertEqual(next(iter(ps.build_manifest([]))), "format")
+
+
+def row(tag, pre=False, draft=False, published="2026-10-20T08:15:00Z"):
+    return {"tagName": tag, "isPrerelease": pre, "isDraft": draft, "publishedAt": published}
+
+
+class Select(unittest.TestCase):
+    def test_drops_drafts_and_old_tags_and_sorts(self):
+        listed = [row("v1.2.0-rc1", True), row("v1.1.0"), row("v1.2.1", draft=True),
+                  row("v1.2.0"), row("v1.0.2"), row("nightly"), row("v1.3.0-rc1", True)]
+        self.assertEqual([t for t, _ in ps.select(listed)],
+                         ["v1.3.0-rc1", "v1.2.0", "v1.2.0-rc1"])
+
+    def test_rc_without_prerelease_flag_is_flagged(self):
+        got = dict(ps.select([row("v1.2.0-rc1", pre=False)]))
+        self.assertTrue(got["v1.2.0-rc1"]["isPrerelease"])
+        self.assertFalse(dict(ps.select([row("v1.2.0")]))["v1.2.0"]["isPrerelease"])
+
+    def test_effective_prerelease(self):
+        self.assertTrue(ps.effective_prerelease(False, ps.parse_tag("v1.2.0-rc2")))
+        self.assertTrue(ps.effective_prerelease(True, ps.parse_tag("v1.2.0")))
+        self.assertFalse(ps.effective_prerelease(False, ps.parse_tag("v1.2.0")))
+
+
+class OutDirGuard(unittest.TestCase):
+    def test_refuses_repo_ancestors_web_and_git(self):
+        repo = Path(ps.__file__).resolve().parent.parent
+        for bad in (repo, repo.parent, repo / "web", repo / "web" / "x", repo / ".git",
+                    repo / ".git" / "y"):
+            self.assertIsNotNone(ps.check_out_dir(repo, bad), bad)
+
+    def test_allows_other_places(self):
+        repo = Path(ps.__file__).resolve().parent.parent
+        self.assertIsNone(ps.check_out_dir(repo, repo / "_site"))
+        with tempfile.TemporaryDirectory() as t:
+            self.assertIsNone(ps.check_out_dir(repo, Path(t) / "site"))
+
+
+class RunHelper(unittest.TestCase):
+    def test_failure_prints_stderr_and_reraises(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(subprocess.CalledProcessError):
+            ps._run([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"])
+        self.assertIn("boom", err.getvalue())
+
+
+class Main(unittest.TestCase):
+    """main() with a fake _run: no gh, no git, no network, no real repo writes."""
+
+    def setUp(self):
+        self._real_run = ps._run
+        self.addCleanup(setattr, ps, "_run", self._real_run)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "site"
+        self.calls = []
+
+    def fake(self, releases, files, digests=None, fail_download=False, attach=True):
+        """releases: list of gh list rows; files: tag -> bytes."""
+        digests = digests or {}
+
+        def run(args, cwd=None):
+            self.calls.append(args)
+            if args[:3] == ["gh", "release", "list"]:
+                return subprocess.CompletedProcess(args, 0, json.dumps(releases), "")
+            if args[:3] == ["gh", "release", "view"]:
+                tag = args[3]
+                name = ps.asset_name(tag[1:])
+                assets = [{"name": "Monitor-Buddy-x.zip"}]
+                if attach and tag in files:
+                    a = {"name": name}
+                    if tag in digests:
+                        a["digest"] = digests[tag]
+                    assets.append(a)
+                return subprocess.CompletedProcess(args, 0, json.dumps({"assets": assets}), "")
+            if args[:3] == ["gh", "release", "download"]:
+                if fail_download:
+                    raise subprocess.CalledProcessError(1, args, "", "HTTP 502")
+                tag, dest = args[3], Path(args[args.index("-D") + 1])
+                (dest / args[args.index("-p") + 1]).write_bytes(files[tag])
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if args[0] == "git" and args[1] == "show":
+                return subprocess.CompletedProcess(args, 0, HEADER, "")
+            raise AssertionError(args)
+        ps._run = run
+
+    def run_main(self):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = ps.main(["pages_site.py", str(self.out)])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_writes_bins_and_manifest(self):
+        self.fake([row("v1.2.0", published="2026-10-20T08:15:00Z"),
+                   row("v1.3.0-rc1", pre=False, published="2026-11-01T00:00:00Z"),
+                   row("v1.1.0")],
+                  {"v1.2.0": b"final", "v1.3.0-rc1": b"candidate"})
+        rc, _, _ = self.run_main()
+        self.assertEqual(rc, 0)
+        fw = self.out / "firmware"
+        self.assertEqual((fw / "v1.2.0" / "monitor-buddy-1.2.0.bin").read_bytes(), b"final")
+        self.assertTrue((self.out / "index.html").is_file())
+        m = json.loads((fw / "releases.json").read_text(encoding="utf-8"))
+        self.assertEqual(list(m)[0], "format")
+        self.assertEqual(m["format"], 1)
+        self.assertEqual(m["latest"], "1.2.0")
+        self.assertEqual([e["version"] for e in m["releases"]], ["1.3.0-rc1", "1.2.0"])
+        self.assertTrue(m["releases"][0]["prerelease"])
+        self.assertEqual(m["releases"][1]["sha256"], hashlib.sha256(b"final").hexdigest())
+        self.assertEqual(m["releases"][1]["cfg_v"], 1)
+
+    def test_matching_digest_is_accepted(self):
+        d = "sha256:" + hashlib.sha256(b"final").hexdigest()
+        self.fake([row("v1.2.0")], {"v1.2.0": b"final"}, digests={"v1.2.0": d})
+        self.assertEqual(self.run_main()[0], 0)
+
+    def test_missing_asset_is_skipped_with_a_warning(self):
+        self.fake([row("v1.2.0")], {"v1.2.0": b"x"}, attach=False)
+        rc, out, _ = self.run_main()
+        self.assertEqual(rc, 0)
+        self.assertIn("::warning::", out)
+        self.assertIn("v1.2.0", out)
+        m = json.loads((self.out / "firmware" / "releases.json").read_text(encoding="utf-8"))
+        self.assertEqual(m["releases"], [])
+
+    def test_failed_download_raises(self):
+        self.fake([row("v1.2.0")], {"v1.2.0": b"x"}, fail_download=True)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_main()
+
+    def test_digest_mismatch_raises(self):
+        self.fake([row("v1.2.0")], {"v1.2.0": b"x"}, digests={"v1.2.0": "sha256:" + "0" * 64})
+        with self.assertRaises(RuntimeError):
+            self.run_main()
+
+    def test_guard_refuses_the_repo_root(self):
+        self.fake([], {})
+        repo = Path(ps.__file__).resolve().parent.parent
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = ps.main(["pages_site.py", str(repo)])
+        self.assertEqual(rc, 2)
+        self.assertIn("refusing", err.getvalue())
+        self.assertEqual(self.calls, [])
+        self.assertTrue((repo / "web" / "index.html").is_file())
 
 
 if __name__ == "__main__":
