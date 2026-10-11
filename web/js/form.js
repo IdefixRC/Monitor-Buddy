@@ -83,10 +83,13 @@ export const LOCATION_KEYS = Object.freeze(["lat", "lon", "tz_name"]);
 // A fresh install (one that erases) must never write the firmware's built-in
 // location without the user choosing it (Eric, 2026-10-11): the place has to
 // come from the city search, from typing all three values, or from an import.
-// Upgrades and settings changes keep the board's location.
+// A path B upgrade counts as one too: after 1.1 -> 1.2 the board's defaults are
+// the release build's, so skipping the config.h import would silently write
+// the built-in place. Path A updates and settings changes keep the board's
+// location.
 export function locationMissing(state) {
   const flow = FLOWS[state.flow];
-  if (!flow || !flow.erase) return false;
+  if (!flow || !(flow.erase || state.flow === "upgrade")) return false;
   const given = state.location || [];
   return !LOCATION_KEYS.every((k) => given.includes(k));
 }

@@ -220,10 +220,23 @@ test("picking a place, typing all three values, or importing them is enough", ()
   assert.equal("location" in formErrors(f, zones), false);
 });
 
-test("upgrades and settings changes keep the board's location", () => {
-  for (const flow of ["change", "review", "update", "upgrade"]) {
+test("path A updates and settings changes keep the board's location", () => {
+  for (const flow of ["change", "review", "update"]) {
     assert.equal(locationMissing(newFormState(DEFAULTS, { flow, info: INFO_SAVED })), false, flow);
   }
+});
+
+test("a path B upgrade needs a location too, unless an import or the user gave it", () => {
+  // No INFO on path B: skipping the config.h import would write the built-in place.
+  const f = newFormState(DEFAULTS, { flow: "upgrade", info: null });
+  assert.equal(locationMissing(f), true);
+  assert.equal(formErrors(f, zones).location, S.errors.location);
+  // An import (config.h or backup) marks all three keys as given.
+  const imported = newFormState(DEFAULTS, { flow: "upgrade", info: null, location: [...LOCATION_KEYS] });
+  assert.equal(locationMissing(imported), false);
+  assert.equal("location" in formErrors(imported, zones), false);
+  // Two of the three are not enough.
+  assert.equal(locationMissing(newFormState(DEFAULTS, { flow: "upgrade", info: null, location: ["lat", "lon"] })), true);
 });
 
 test("a board's saved, non-default location counts; defaults or unsaved don't", () => {

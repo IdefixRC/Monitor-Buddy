@@ -1348,7 +1348,7 @@ function showBootHelper(retry) {
 
 function showResult(kind, { ssid = "", installed = null } = {}) {
   screen(S.titles.result, (m) => {
-    const done = btn(S.result.done, backHome, { kind: "primary" });
+    const done = btn(S.result.done, () => busy(backHome), { kind: "primary" });
     if (kind === "connected") {
       const g = guide(m, { mood: "love", say: S.result.connected(escapeRich(ssid)) });
       if (installed) g.add(S.result.installed(escapeRich(installed)));
@@ -1359,7 +1359,7 @@ function showResult(kind, { ssid = "", installed = null } = {}) {
       if (installed) g.add(S.result.wifiFailed(escapeRich(ssid)), "error");
       m.append(actions(
         btn(S.problem.retry, () => { app.form.flow = "change"; app.form.added = []; showForm({ focus: "wifi" }); }, { kind: "primary" }),
-        btn(S.result.done, backHome, { kind: "link" })));
+        btn(S.result.done, () => busy(backHome), { kind: "link" })));
     } else if (kind === "hotspot") {
       const g = guide(m, { mood: "happy", say: installed ? S.result.installed(escapeRich(installed)) : S.result.hotspot });
       if (installed) g.add(S.result.hotspot);
