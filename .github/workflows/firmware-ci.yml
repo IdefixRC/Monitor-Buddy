@@ -23,5 +23,7 @@ jobs:
         run: pip install platformio
       - name: Unit tests (PC)
         run: pio test -e native
+      - name: Python tool tests
+        run: python -m unittest discover -s tools -v
       - name: Build the firmware
         run: pio run -e esp32-c6
