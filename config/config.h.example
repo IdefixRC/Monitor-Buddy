@@ -72,6 +72,7 @@
 // Quotes come from Finnhub (https://finnhub.io/).
 // TICKER    US stock symbol (the free Finnhub tier is US only).
 // STOCKKEY  Your Finnhub API token — create a free account to get one.
+//           Leave "" (empty) to hide the stock page.
 #define TICKER    "AAPL"
 #define STOCKKEY  "xxxxxxx"
 

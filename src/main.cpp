@@ -292,6 +292,7 @@ void switchApp(int8_t delta);
 void buildPageList();
 bool wifiConfigured();
 bool githubConfigured();
+bool stockConfigured();
 bool ensureWifi();
 void syncNTP();
 void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color);
@@ -970,6 +971,7 @@ void buildPageList() {
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
+    if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -995,6 +997,7 @@ void switchApp(int8_t delta) {
 // non-empty ssid+password were parsed from it at begin().
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return settings.githubUser[0] != '\0'; }
+bool stockConfigured() { return settings.stockKey[0] != '\0'; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -2412,7 +2415,7 @@ void netTask(void *) {
     bool ran = false, usedTls = false;
     // Weather and GitHub are paced by data age after a success (okWaitMs 0),
     // stock by STOCK_REFRESH_MS; all three back off after a failure.
-    if (settings.pages[PAGE_STOCK] && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
+    if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
       runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (settings.pages[PAGE_WEATHER]
