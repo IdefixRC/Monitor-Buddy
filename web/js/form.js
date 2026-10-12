@@ -213,15 +213,16 @@ export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
 // page without jumping), or null (no jump and no hold: Wi-Fi, or a page
-// switched off). A theme change goes to the first themed page that is on and
+// switched off). "check.stock" and "check.github" are the Check buttons: on
+// the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
 // shown (an empty key or user hides stock and GitHub), or stays when there is
 // none. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
     case "tz_name": case "tz_rule": return "clock";
-    case "ticker": case "stock_key": return "stock";
-    case "github_user": return "github";
+    case "ticker": case "stock_key": case "check.stock": return "stock";
+    case "github_user": case "check.github": return "github";
     case "mount": return "face";
     case "theme": {
       const shown = pageList(config);

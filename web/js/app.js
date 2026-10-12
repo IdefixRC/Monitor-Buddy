@@ -935,6 +935,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       stockResult.textContent = S.check.checking;
       stockResult.dataset.state = "";
       stockCheck.disabled = true;
+      jumpFor("check.stock"); // show the stock page while it checks
       const asked = [f.config.ticker, f.config.stock_key];
       const res = await checkStock(window.fetch.bind(window), ...asked);
       // Gone, or the ticker or key changed while it ran: the answer is stale.
@@ -944,6 +945,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       stockResult.dataset.state = res.status === "ok" ? "ok" : "bad";
       if (res.status === "ok") app.live = { ...app.live, price: res.price };
       refresh();
+      jumpFor("check.stock"); // a fresh result: hold the page again, with the live price on it
     });
     const stockOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
     const clearStock = () => { delete app.live.price; stockResult.textContent = ""; };
@@ -979,6 +981,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       ghResult.textContent = S.check.checking;
       ghResult.dataset.state = "";
       ghCheck.disabled = true;
+      jumpFor("check.github");
       const asked = f.config.github_user;
       const res = await checkGithub(window.fetch.bind(window), asked);
       if (!alive || asked !== f.config.github_user) return;
@@ -987,6 +990,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       ghResult.dataset.state = res.status === "ok" ? "ok" : "bad";
       if (res.status === "ok") app.live = { ...app.live, followers: res.followers, repos: res.repos };
       refresh();
+      jumpFor("check.github");
     });
     const ghOff = h("p", { class: "field__hint" }, S.form.githubCheckOff);
     const github = textField({

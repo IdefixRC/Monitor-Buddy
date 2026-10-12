@@ -172,3 +172,22 @@ test("a theme change jumps to a page that shows the theme", () => {
   // Only the face: nothing themed to show, so it stays.
   assert.equal(previewPageFor("theme", { pages: { face: true } }), "stay");
 });
+
+test("the Check buttons jump to their pages, like editing the fields", () => {
+  const cfg = { stock_key: "k", github_user: "octocat", pages: { face: true, stock: true, github: true } };
+  assert.equal(previewPageFor("check.stock", cfg), "stock");
+  assert.equal(previewPageFor("check.github", cfg), "github");
+});
+
+test("a fresh check result restarts the hold on its page; a hidden page is never shown", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "stock", "github"]);
+  c.showPage("stock");             // the press
+  mock.timers.tick(4000);
+  c.showPage("stock");             // the result, 4 s later
+  mock.timers.tick(HOLD_MS - 1);
+  assert.equal(c.page, "stock", "held for a full HOLD_MS after the result");
+  c.setPages(["face", "clock", "stock"]); // GitHub hidden (user emptied)
+  assert.equal(c.showPage("github"), false);
+  assert.equal(c.page, "stock");
+});
