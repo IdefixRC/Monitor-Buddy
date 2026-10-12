@@ -17,7 +17,7 @@ import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor, locationSummary, locationMissing,
+  previewPageFor, locationSummary, locationMissing, afterRecovery,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -415,6 +415,15 @@ async function startFlashFlow(flow) {
   showForm();
 }
 
+// A Buddy that can't start (app.trouble): reinstall the newest firmware
+// straight away, without the form. Whether its saved settings survived only
+// shows after the flash (afterFlash, afterRecovery).
+async function startRecovery() {
+  app.form = newFormState(DEFAULTS, { flow: "recover" });
+  app.form.version = app.releases[0].version;
+  await runFlash();
+}
+
 async function startBackup() {
   const got = await readGet();
   if (!got) return;
@@ -548,7 +557,7 @@ function showPathB() {
     if (!installable()) g.add(installOff(), "error");
     m.append(h("div", { class: "action-grid action-grid--two" },
       actionCard(recover ? S.pathB.reinstall : S.pathB.upgrade, recover ? S.pathB.reinstallHint : S.pathB.upgradeHint,
-        () => startFlashFlow("upgrade"), { primary: true, disabled: !installable() }),
+        () => (recover ? startRecovery() : startFlashFlow("upgrade")), { primary: true, disabled: !installable() }),
       actionCard(S.pathB.fresh, S.pathB.freshHint, () => startFlashFlow("install"), { disabled: !installable() })));
     m.append(h("div", { class: "actions actions--small" },
       btn(S.pathB.retry, probeAndRoute, { kind: "link" }),
@@ -1069,7 +1078,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
 
     // The buttons.
     const summary = h("div", { class: "form-summary", role: "alert", hidden: true });
-    const backTo = f.flow === "review" ? null : (app.info ? showHome : showPathB);
+    // Already flashed: there is no going back from these two.
+    const backTo = f.flow === "review" || f.flow === "setup" ? null : (app.info ? showHome : showPathB);
     // Enter never saves, flashes or restarts (Eric, 2026-10-12). Only the
     // action button does, clicked or keyboard-activated. So the form has no
     // submit button: Enter in a field then submits nothing (and with a single
@@ -1317,7 +1327,7 @@ async function runFlash() {
     leaveGuard(false);
     report(e);
     return showProblem(e instanceof ImageMismatch ? S.flash.checksum : S.flash.downloadFailed, null,
-      { retry: runFlash, back: () => showForm() });
+      { retry: runFlash, back: () => (f.flow === "recover" ? showPathB() : showForm()) }); // recover has no form
   }
   await writeImage(entry, image, ui);
 }
@@ -1388,6 +1398,17 @@ async function afterFlash(entry, ui) {
     report(e);
     app.expectDrop = false;
     return showProblem(S.connecting.readFailed, null, { retry: () => afterFlash(entry) });
+  }
+  if (app.form.flow === "recover") {
+    app.expectDrop = false;
+    if (afterRecovery(got) === "keep") {
+      // What the Buddy saved survived the cut-off install: nothing to write.
+      app.form = newFormState(fromBoard(got.config), { flow: "change", info });
+      return showResult("saved", { installed: info.fw });
+    }
+    app.form = newFormState(fromBoard(got.config), { flow: "setup", info, added: got.added || [] });
+    app.form.installed = info.fw;
+    return showForm({ say: S.form.say.setup });
   }
   const f = app.form;
   f.config = mergeConfig(fromBoard(got.config), f.config);

@@ -5,7 +5,7 @@ import {
   DEFAULTS, formToRequest, badgesFor, helpFor, wifiChoices, formErrors, fromBoard,
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
-  joinedWifi, resultKind, WIFI_WAIT_MS, locationSummary,
+  joinedWifi, resultKind, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -364,4 +364,31 @@ test("the footer carries the copyright line LICENSE asks for", () => {
   assert.equal(S.about.copyright, `© ${holder[1]}`);
   assert.equal(S.about.author, holder[2].trim());
   assert.match(S.about.licenceUrl, /\/LICENSE$/);
+});
+
+// ── H: recovering a Buddy keeps what it saved (2026-10-12) ─
+
+test("recovery flashes without erasing; the setup form after it doesn't flash", () => {
+  assert.deepEqual(FLOWS.recover, { flash: true, erase: false });
+  assert.deepEqual(FLOWS.setup, { flash: false, erase: false });
+});
+
+test("after a recovery flash: keep what was stored, else set the Buddy up", () => {
+  assert.equal(afterRecovery({ ok: true, stored: true, config: {} }), "keep");
+  assert.equal(afterRecovery({ ok: true, stored: false, config: {} }), "setup");
+  assert.equal(afterRecovery({ ok: true, config: {} }), "setup");
+  assert.equal(afterRecovery(null), "setup");
+});
+
+test("setting up after a recovery needs a location, and keeps the Wi-Fi it found", () => {
+  assert.equal(locationMissing({ flow: "setup", location: [] }), true);
+  assert.equal(locationMissing({ flow: "setup", location: [...LOCATION_KEYS] }), false);
+  assert.equal(wifiChoices(INFO_SAVED, "setup")[0].value, "keep");
+});
+
+test("every flow with a form has its texts", () => {
+  for (const flow of Object.keys(FLOWS).filter((k) => k !== "recover")) {
+    assert.equal(typeof S.form.submit[flow], "string", `submit.${flow}`);
+    assert.equal(typeof S.form.say[flow], "string", `say.${flow}`);
+  }
 });

@@ -34,7 +34,17 @@ export const FLOWS = Object.freeze({
   fresh: { flash: true, erase: true },     // path A
   upgrade: { flash: true, erase: false },  // path B, from 1.1 or older
   install: { flash: true, erase: true },   // path B, a new board
+  recover: { flash: true, erase: false },  // path B, a Buddy that can't start: no form
+  setup: { flash: false, erase: false },   // after a recovery that found nothing saved
 });
+
+// After a recovery flash (a Buddy whose install was cut off), what GET found
+// decides (hardware test, 2026-10-12): settings it saved before survived on
+// LittleFS, so "keep" them as they are; with none, "setup" asks for them.
+// The recovery form used to start from defaults and overwrite them.
+export function afterRecovery(got) {
+  return got && got.stored === true ? "keep" : "setup";
+}
 
 const PLACEHOLDER_KEY = "xxxxxxx"; // STOCKKEY in config.h.example before 1.2
 
@@ -86,11 +96,11 @@ export const LOCATION_KEYS = Object.freeze(["lat", "lon", "tz_name"]);
 // come from the city search, from typing all three values, or from an import.
 // A path B upgrade counts as one too: after 1.1 -> 1.2 the board's defaults are
 // the release build's, so skipping the config.h import would silently write
-// the built-in place. Path A updates and settings changes keep the board's
-// location.
+// the built-in place. So does the setup after a recovery that found nothing
+// saved. Path A updates and settings changes keep the board's location.
 export function locationMissing(state) {
   const flow = FLOWS[state.flow];
-  if (!flow || !(flow.erase || state.flow === "upgrade")) return false;
+  if (!flow || !(flow.erase || state.flow === "upgrade" || state.flow === "setup")) return false;
   const given = state.location || [];
   return !LOCATION_KEYS.every((k) => given.includes(k));
 }
