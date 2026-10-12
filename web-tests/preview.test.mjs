@@ -153,8 +153,22 @@ test("which page a setting jumps to", () => {
   for (const k of ["ticker", "stock_key"]) assert.equal(previewPageFor(k, cfg), "stock", k);
   assert.equal(previewPageFor("github_user", cfg), "github");
   assert.equal(previewPageFor("mount", cfg), "face");
-  assert.equal(previewPageFor("theme", cfg), "stay");
+  assert.equal(previewPageFor("theme", cfg), "moon", "clock and date are off: the first themed page that is on");
   assert.equal(previewPageFor("pages.moon", cfg), "moon", "switched on");
   assert.equal(previewPageFor("pages.stock", cfg), null, "switched off");
   for (const k of ["wifi.ssid", "wifi.password", "wifi.configure", undefined]) assert.equal(previewPageFor(k, cfg), null, String(k));
+});
+
+test("a theme change jumps to a page that shows the theme", () => {
+  const all = { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true };
+  const cfg = (pages, more = {}) => ({ stock_key: "k", github_user: "octocat", pages: { ...all, ...pages }, ...more });
+  assert.equal(previewPageFor("theme", cfg({})), "clock");
+  assert.equal(previewPageFor("theme", cfg({ clock: false })), "date");
+  assert.equal(previewPageFor("theme", cfg({ clock: false, date: false, weather: false })), "moon");
+  // Hidden pages are skipped: stock without a key, GitHub without a user.
+  const onlyHidden = { clock: false, date: false, weather: false, moon: false };
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "" })), "github");
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "", github_user: "" })), "stay");
+  // Only the face: nothing themed to show, so it stays.
+  assert.equal(previewPageFor("theme", { pages: { face: true } }), "stay");
 });

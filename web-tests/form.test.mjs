@@ -5,7 +5,7 @@ import {
   DEFAULTS, formToRequest, badgesFor, helpFor, wifiChoices, formErrors, fromBoard,
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
-  joinedWifi, resultKind, WIFI_WAIT_MS,
+  joinedWifi, resultKind, WIFI_WAIT_MS, locationSummary,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -293,4 +293,27 @@ test("the result follows spec §4", () => {
   assert.equal(resultKind({ config: {} }, up), "saved");
   assert.equal(joinedWifi(null, "Home"), false);
   assert.equal(WIFI_WAIT_MS, 30000);
+});
+
+// ── The place summary under the city search (GUI review, 2026-10-12) ──
+
+test("the summary names the place when it came from the city search", () => {
+  const c = { lat: "48.1374", lon: "11.5755", tz_name: "Europe/Berlin" };
+  assert.equal(locationSummary(c, "Munich, Bavaria, Germany"), "Munich, Bavaria, Germany · 48.1374, 11.5755 · Europe/Berlin");
+});
+
+test("from an import or the board: coordinates and zone only", () => {
+  assert.equal(locationSummary({ lat: "1.3119", lon: "103.8149", tz_name: "Asia/Singapore" }), "1.3119, 103.8149 · Asia/Singapore");
+});
+
+test("missing parts are left out; nothing set gives an empty line", () => {
+  assert.equal(locationSummary({ lat: "48.1", lon: "", tz_name: "" }), "48.1");
+  assert.equal(locationSummary({ lat: "", lon: "", tz_name: "UTC" }), "UTC");
+  assert.equal(locationSummary({}), "");
+  assert.equal(locationSummary(null, ""), "");
+});
+
+test("the Advanced settings texts are the owner's wording", () => {
+  assert.equal(S.form.advanced, "Advanced settings");
+  assert.equal(S.form.advancedHint, "Allows you to tweak the data provided by City search.");
 });

@@ -16,7 +16,7 @@ import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor,
+  previewPageFor, locationSummary, locationMissing,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -849,8 +849,9 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       tzRule.input.value = f.config.tz_rule;
       for (const k of ["lat", "lon", "tz_name", "tz_rule"]) touch(k);
       gave(...LOCATION_KEYS);
+      f.placeLabel = r.label; // the summary line names the place
       results.hidden = true;
-      cityStatus.textContent = S.form.picked(r.label);
+      cityStatus.textContent = ""; // the summary line below says where, and is announced
       cityInput.focus();
       refresh();
       jumpFor("city");
@@ -860,21 +861,44 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       h("div", { class: "input-row" }, cityInput, searchBtn), cityStatus, results,
       errorSlot("location", [cityInput])); // a fresh install needs a place
     const coord = (v) => v.trim();
-    const lat = textField({ key: "lat", label: S.form.lat, help: "lat", value: f.config.lat, set: (v) => { f.config.lat = coord(v); gave("lat"); }, attrs: { inputmode: "decimal" } });
-    const lon = textField({ key: "lon", label: S.form.lon, help: "lon", value: f.config.lon, set: (v) => { f.config.lon = coord(v); gave("lon"); }, attrs: { inputmode: "decimal" } });
+    const lat = textField({ key: "lat", label: S.form.lat, help: "lat", value: f.config.lat, set: (v) => { f.config.lat = coord(v); gave("lat"); f.placeLabel = ""; }, attrs: { inputmode: "decimal" } });
+    const lon = textField({ key: "lon", label: S.form.lon, help: "lon", value: f.config.lon, set: (v) => { f.config.lon = coord(v); gave("lon"); f.placeLabel = ""; }, attrs: { inputmode: "decimal" } });
     const zonesList = h("datalist", { id: uid("zones") }, Object.keys(app.zones || {}).map((z) => h("option", { value: z })));
     const tz = textField({
       key: "tz_name", label: S.form.tz, help: "tz_name", value: f.config.tz_name, attrs: { list: zonesList.id },
       set: (v) => {
         f.config.tz_name = v.trim();
         gave("tz_name");
+        f.placeLabel = ""; // edited by hand: no longer just what the city search found
         const rule = app.zones ? ruleForZone(app.zones, f.config.tz_name) : null;
         if (rule) { f.config.tz_rule = rule; tzRule.input.value = rule; }
       },
     });
     const tzRule = textField({ key: "tz_rule", label: S.form.tzRule, help: "tz_rule", value: f.config.tz_rule, set: (v) => { f.config.tz_rule = v.trim(); } });
-    form.append(section(S.form.sections.location, cityField,
-      h("div", { class: "grid-2" }, lat.el, lon.el), tz.el, zonesList, tzRule.el));
+    // The four values the city search fills sit in a disclosure, closed by
+    // default; a one-line summary under the search shows what is set. An
+    // error inside opens it, and it stays open while the error is shown.
+    const summaryLine = h("p", { class: "place-summary", "aria-live": "polite" });
+    const advanced = h("details", { class: "advanced" },
+      h("summary", { class: "advanced__summary" },
+        h("span", { class: "advanced__title" }, S.form.advanced),
+        h("span", { class: "advanced__hint" }, S.form.advancedHint)),
+      h("div", { class: "advanced__body" },
+        h("div", { class: "grid-2" }, lat.el, lon.el), tz.el, zonesList, tzRule.el));
+    const advancedKeys = ["lat", "lon", "tz_name", "tz_rule"];
+    const advancedError = () => advancedKeys.some((k) => slots.get(k) && !slots.get(k).error.hidden);
+    advanced.addEventListener("toggle", () => {
+      if (!advanced.open && advancedError()) advanced.open = true; // keep the error in sight
+    });
+    form.append(section(S.form.sections.location, cityField, summaryLine, advanced));
+    refreshers.push(() => {
+      // While a fresh install still needs a place, the built-in one must not
+      // look chosen, so the line stays empty until the user gives one.
+      const text = locationMissing(f) ? "" : locationSummary(f.config, f.placeLabel);
+      summaryLine.hidden = !text;
+      summaryLine.textContent = text; // board and file values stay plain text
+      if (advancedError()) advanced.open = true;
+    });
 
     // 3. Units.
     form.append(section(S.form.sections.units, h("div", { class: "grid-2" },
@@ -1116,7 +1140,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   function markImported(keys) {
     f.imported = [...new Set([...f.imported, ...keys])];
     const place = LOCATION_KEYS.filter((k) => keys.includes(k));
-    if (place.length) gave(...place);
+    if (place.length) { gave(...place); f.placeLabel = ""; } // imported: coordinates only
     for (const k of keys) {
       if (k === "pages") PAGE_KEYS.forEach((p) => touch(`pages.${p}`));
       touch(k);

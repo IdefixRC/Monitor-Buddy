@@ -4,6 +4,7 @@
 import { S } from "./strings.js";
 import { validateConfig, validateWifi } from "./settings.js";
 import { ruleForZone } from "./tz.js";
+import { pageList } from "./preview.js";
 
 // The firmware's built-in values: config/config.h.example, which the release
 // builds use (an empty GitHub user and Finnhub key hide those pages), with
@@ -191,11 +192,30 @@ export function githubMessage(res) {
   return S.check.github[res.status] || S.check.github.network;
 }
 
+// The one-line summary under the city search (GUI review, 2026-10-12):
+// "Munich, Bavaria, Germany · 48.1374, 11.5755 · Europe/Berlin". The place
+// label only when the values came from the city search (placeLabel); from
+// an import or the board, just the coordinates and the zone. "" when nothing
+// is set. Plain text: app.js puts it in with textContent.
+export function locationSummary(config, placeLabel = "") {
+  const c = config || {};
+  const lat = String(c.lat ?? "").trim();
+  const lon = String(c.lon ?? "").trim();
+  const zone = String(c.tz_name ?? "").trim();
+  const coords = lat && lon ? `${lat}, ${lon}` : lat || lon;
+  return [String(placeLabel || "").trim(), coords, zone].filter(Boolean).join(" · ");
+}
+
+// The pages that show the theme's colours, in the order a theme change tries
+// them (Eric, 2026-10-12): the face never uses the theme.
+export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github"]);
+
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
-// page without jumping: the theme shows on every page), or null (no jump and
-// no hold: Wi-Fi, or a page switched off). Whether the page is actually shown
-// (an empty key or user hides stock and GitHub) is the preview's call.
+// page without jumping), or null (no jump and no hold: Wi-Fi, or a page
+// switched off). A theme change goes to the first themed page that is on and
+// shown (an empty key or user hides stock and GitHub), or stays when there is
+// none. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
@@ -203,7 +223,10 @@ export function previewPageFor(key, config) {
     case "ticker": case "stock_key": return "stock";
     case "github_user": return "github";
     case "mount": return "face";
-    case "theme": return "stay";
+    case "theme": {
+      const shown = pageList(config);
+      return THEMED_PAGES.find((p) => shown.includes(p)) || "stay";
+    }
     default: break;
   }
   if (typeof key === "string" && key.startsWith("pages.")) {

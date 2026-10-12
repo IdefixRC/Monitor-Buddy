@@ -1561,6 +1561,83 @@ select.input {
 .mount-icon--left b { left: 0; }
 .mount-icon--right b { right: 0; }
 
+/* The place under the city search, and the disclosure with the values it
+   fills (latitude, longitude, time zone, clock rule). */
+.place-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin: 0.6rem 0 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.place-summary::before {
+  content: "";
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg) translateY(-1px);
+  background: var(--accent);
+}
+
+.advanced {
+  margin: 0.9rem 0 0;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card-2);
+}
+
+.advanced__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.6rem;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced__summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A chevron that turns when the section opens. */
+.advanced__summary::before {
+  content: "";
+  grid-row: span 2;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+.advanced[open] > .advanced__summary::before {
+  transform: rotate(45deg);
+}
+
+.advanced__summary:hover .advanced__title {
+  color: var(--accent);
+}
+
+.advanced__title {
+  font-weight: 600;
+}
+
+.advanced__hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.advanced__body {
+  padding: 0 0.85rem 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
 /* City search results. */
 .places {
   list-style: none;
