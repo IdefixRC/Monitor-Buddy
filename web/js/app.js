@@ -2,7 +2,7 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, NoReply, change, isWedged } from "./serial.js";
+import { BuddyPort, NoReply, change } from "./serial.js";
 import { romTrouble } from "./protocol.js";
 import { fetchImage, flashImage, FlashError, ImageMismatch } from "./flasher.js";
 import { parseManifest, offered, updateFor } from "./releases.js";
@@ -1347,9 +1347,12 @@ async function writeImage(entry, image, ui) {
     } else {
       leaveGuard(false);
       app.expectDrop = false;
-      // A port with stuck bytes never closes; only a replug frees it (E2).
-      if (isWedged(e)) return showProblem(S.flash.replug, null, { retry: () => writeImage(entry, image) });
-      if (e instanceof FlashError && e.stage === "connect") return showBootHelper(() => writeImage(entry, image));
+      // esptool couldn't reach the chip. On the Buddy that is always the port,
+      // never the install-mode switch: the C6's built-in USB does that in silicon,
+      // and manual BOOT/RESET takes the board off USB altogether (measured
+      // 2026-10-12). A stale handle refind() missed, or stuck bytes Chrome won't
+      // let go of: a replug fixes both.
+      if (e instanceof FlashError && e.stage === "connect") return showProblem(S.flash.replug, null, { retry: () => writeImage(entry, image) });
       const text = e instanceof FlashError && e.stage === "erase" ? S.flash.eraseFailed : S.flash.writeFailed;
       return showProblem(text, null, { retry: () => writeImage(entry, image) });
     }
@@ -1397,38 +1400,6 @@ async function afterFlash(entry, ui) {
   }
   f.flow = "change"; // from here on, a retry is a settings change
   await saveSettings();
-}
-
-// The board's two buttons, for a bootloader that didn't answer.
-function boardDrawing() {
-  const svg = new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 150">
-    <rect class="b-pcb" x="10" y="20" width="250" height="110" rx="14"/>
-    <rect class="b-usb" x="252" y="58" width="34" height="34" rx="6"/>
-    <rect class="b-lcd" x="26" y="34" width="112" height="82" rx="8"/>
-    <g class="b-btn b-btn--boot"><rect x="206" y="32" width="34" height="26" rx="5"/><circle cx="223" cy="45" r="7"/></g>
-    <g class="b-btn b-btn--reset"><rect x="206" y="92" width="34" height="26" rx="5"/><circle cx="223" cy="105" r="7"/></g>
-    <text class="b-label" x="196" y="50" text-anchor="end"></text>
-    <text class="b-label" x="196" y="110" text-anchor="end"></text>
-  </svg>`, "image/svg+xml").documentElement;
-  const labels = svg.querySelectorAll("text");
-  labels[0].textContent = S.flash.bootLabel;
-  labels[1].textContent = S.flash.resetLabel;
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", S.flash.bootBoard);
-  return document.importNode(svg, true);
-}
-
-function showBootHelper(retry) {
-  screen(S.titles.boot, (m) => {
-    guide(m, { mood: "sad", say: S.flash.bootSay });
-    m.append(h("div", { class: "card boot" },
-      h("div", { class: "boot__board" }, boardDrawing()),
-      h("div", { class: "boot__steps" },
-        h("h2", { class: "boot__title" }, S.flash.bootTitle),
-        h("ol", {}, S.flash.bootSteps.map((s) => h("li", {}, s))))),
-    actions(btn(S.problem.retry, retry, { kind: "primary" }), btn(S.problem.startOver, startOver, { kind: "link" })),
-    logPanel());
-  });
 }
 
 // ── Results and problems ──────────────────────────────────

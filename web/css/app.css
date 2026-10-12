@@ -809,61 +809,6 @@ main > :not(.form-layout) {
   50% { transform: scale(0.6); }
 }
 
-/* The board's BOOT and RESET buttons. */
-.boot {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1.25rem;
-  align-items: center;
-}
-
-.boot__title {
-  font-size: 1.05rem;
-  margin: 0 0 0.5rem;
-}
-
-.boot ol {
-  margin: 0;
-  padding-left: 1.4rem;
-}
-
-.boot li + li {
-  margin-top: 0.35rem;
-}
-
-.boot svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-.b-pcb { fill: #17202b; stroke: #38485b; stroke-width: 1.5; }
-.b-lcd { fill: #000; stroke: #2e2e36; stroke-width: 2; }
-.b-usb { fill: #9aa3ad; }
-.b-btn rect { fill: #2c2c33; stroke: #55555f; stroke-width: 1.5; }
-.b-btn circle { fill: #d8d8dc; }
-.b-btn--boot rect { stroke: var(--gold); stroke-width: 2.5; animation: hold 3s infinite; }
-.b-btn--reset circle { animation: tap 3s infinite; transform-box: fill-box; transform-origin: center; }
-.b-label { fill: #e8e8ec; font: 700 12px system-ui, sans-serif; letter-spacing: 0.08em; }
-
-@keyframes hold {
-  0%, 10% { stroke-opacity: 0.3; }
-  15%, 80% { stroke-opacity: 1; }
-  90%, 100% { stroke-opacity: 0.3; }
-}
-
-@keyframes tap {
-  0%, 35% { transform: scale(1); fill: #d8d8dc; }
-  42% { transform: scale(0.75); fill: var(--gold); }
-  50%, 100% { transform: scale(1); fill: #d8d8dc; }
-}
-
-@media (max-width: 560px) {
-  .boot {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 /* The details log. */
 .log {
   margin-top: 1.5rem;
