@@ -297,7 +297,100 @@ function el(name, attrs = {}, parent) {
 
 const DEFAULT_CONFIG = { mount: "left", theme: 0, pages: { face: true } };
 
-// createPreview(container) -> { update(config, live?), destroy() }.
+// How long the preview stays on the page a settings change affects.
+export const HOLD_MS = 5000;
+
+// Which page the preview shows, and when it moves on: the automatic cycle,
+// the pause control, and the hold after a settings change. No DOM, so the
+// tests can drive it with fake timers. onChange() runs whenever the page
+// changes. reduced() is true under prefers-reduced-motion: no automatic cycle.
+export class PageCycle {
+  constructor({ onChange = () => {}, cycleMs = CYCLE_MS, reduced = () => false } = {}) {
+    this.onChange = onChange;
+    this.cycleMs = cycleMs;
+    this.reduced = reduced;
+    this.pages = ["face"];
+    this.index = 0;
+    this.paused = false;
+    this.holding = false;
+    this.timer = 0;
+    this.holdTimer = 0;
+  }
+
+  get page() { return this.pages[this.index]; }
+
+  // A new page list (pageList(config)). Keeps the current page if it is still
+  // there. Returns true if the list changed.
+  setPages(list) {
+    if (list.join() === this.pages.join()) return false;
+    const current = this.page;
+    this.pages = [...list];
+    const keep = this.pages.indexOf(current);
+    this.index = keep >= 0 ? keep : 0;
+    if (keep < 0) this.onChange();
+    this.schedule();
+    return true;
+  }
+
+  // The next page, by hand (a click on the preview). Ends a hold.
+  next() {
+    this.endHold();
+    this.index = (this.index + 1) % this.pages.length;
+    this.onChange();
+    this.schedule();
+  }
+
+  setPaused(paused) {
+    this.paused = !!paused;
+    this.schedule();
+  }
+
+  // Show `page` and stay on it for holdMs, then cycle on (unless paused).
+  // page null: stay on the current page, but restart the hold. A page that
+  // isn't in the list (off, or hidden by an empty key or user) is not shown:
+  // returns false and changes nothing.
+  showPage(page, holdMs = HOLD_MS) {
+    if (page !== null && page !== undefined) {
+      const i = this.pages.indexOf(page);
+      if (i < 0) return false;
+      if (i !== this.index) { this.index = i; this.onChange(); }
+    }
+    clearTimeout(this.holdTimer);
+    this.holding = true;
+    this.holdTimer = setTimeout(() => { this.holding = false; this.holdTimer = 0; this.schedule(); }, holdMs);
+    this.schedule();
+    return true;
+  }
+
+  endHold() {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = 0;
+    this.holding = false;
+  }
+
+  // The automatic cycle runs only with 2+ pages, no pause, no hold and no
+  // reduced motion.
+  schedule() {
+    clearInterval(this.timer);
+    this.timer = 0;
+    if (this.pages.length > 1 && !this.reduced() && !this.paused && !this.holding) {
+      this.timer = setInterval(() => {
+        this.index = (this.index + 1) % this.pages.length;
+        this.onChange();
+      }, this.cycleMs);
+    }
+  }
+
+  get cycling() { return this.timer !== 0; }
+
+  destroy() {
+    clearInterval(this.timer);
+    clearTimeout(this.holdTimer);
+    this.timer = this.holdTimer = 0;
+  }
+}
+
+// createPreview(container) -> { update(config, live?), showPage(page, holdMs?), setCompact(on), destroy() }.
 // live is { price?, followers?, repos? } from successful checks.
 export function createPreview(container) {
   const id = `buddy-preview-${++uid}`;
@@ -350,18 +443,25 @@ export function createPreview(container) {
 
   let config = DEFAULT_CONFIG;
   let live = {};
-  let pages = ["face"];
-  let index = 0;
   let face = null;
-  let cycle = 0;
   let tick = 0;
-  let paused = false;
+  let compact = false;
+  // The pause button's text sits in its own span, so the compact strip can
+  // show the icon alone and keep the accessible name.
+  const pauseText = document.createElement("span");
+  pauseText.className = "buddy-preview__pause-text";
+  pause.append(pauseText);
 
   const mq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
   const reduced = () => !!(mq && mq.matches);
+  const cycle = new PageCycle({ onChange: () => draw(), reduced });
 
   function layout() {
     const right = config.mount === "right";
+    // Compact (the phone strip): the view is cropped to the screen itself. A
+    // right mount turns the body 180 degrees, which moves the screen to x 100.
+    svg.setAttribute("viewBox", compact ? `${right ? 100 : 40} 40 ${SCREEN_W} ${SCREEN_H}` : `0 0 ${VIEW_W} ${VIEW_H}`);
+    figure.classList.toggle("buddy-preview--compact", compact);
     // Upside-down holder on the monitor's right edge; the screen turned back.
     holder.setAttribute("transform", right ? `rotate(180 ${VIEW_W / 2} ${VIEW_H / 2})` : "");
     body.setAttribute("transform", right ? `rotate(180 ${VIEW_W / 2} ${VIEW_H / 2})` : "");
@@ -370,7 +470,7 @@ export function createPreview(container) {
   }
 
   function draw() {
-    const key = pages[index];
+    const key = cycle.page;
     const c = themeColors(config.theme);
     const now = new Date();
     if (key === "face") {
@@ -386,7 +486,7 @@ export function createPreview(container) {
         : key === "stock" ? drawStock(c, config, live)
         : drawGithub(c, live);
     }
-    dotLayer.innerHTML = dots(pages.length, index);
+    dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
 
     let text = S.pageNames[key];
     if (key === "stock" && config.ticker) text += ` · ${String(config.ticker).toUpperCase()}`;
@@ -399,46 +499,25 @@ export function createPreview(container) {
   }
 
   function syncPause() {
-    pause.hidden = pages.length < 2 || reduced();
-    pause.textContent = paused ? S.previewPlay : S.previewPause;
-    pause.dataset.paused = String(paused);
-  }
-
-  function restartCycle() {
-    clearInterval(cycle);
-    cycle = 0;
-    if (pages.length > 1 && !reduced() && !paused) {
-      cycle = setInterval(() => { index = (index + 1) % pages.length; draw(); }, CYCLE_MS);
-    }
-    syncPause();
+    pause.hidden = cycle.pages.length < 2 || reduced();
+    pauseText.textContent = cycle.paused ? S.previewPlay : S.previewPause;
+    pause.dataset.paused = String(cycle.paused);
   }
 
   // The clock's seconds and colon change every second.
-  tick = setInterval(() => { if (pages[index] === "clock") draw(); }, 1000);
+  tick = setInterval(() => { if (cycle.page === "clock") draw(); }, 1000);
 
-  const next = () => {
-    index = (index + 1) % pages.length;
-    draw();
-    restartCycle();
-  };
+  const next = () => cycle.next();
   button.addEventListener("click", next);
-  const togglePause = () => { paused = !paused; restartCycle(); };
+  const togglePause = () => { cycle.setPaused(!cycle.paused); syncPause(); };
   pause.addEventListener("click", togglePause);
-  const onMotion = () => { restartCycle(); draw(); };
+  const onMotion = () => { cycle.schedule(); draw(); syncPause(); };
   if (mq) mq.addEventListener("change", onMotion);
 
   function update(nextConfig, nextLive) {
-    const current = pages[index];
     config = nextConfig || DEFAULT_CONFIG;
     live = nextLive || {};
-    const list = pageList(config);
-    const changed = list.join() !== pages.join();
-    pages = list;
-    if (changed) {
-      const keep = pages.indexOf(current);
-      index = keep >= 0 ? keep : 0;
-      restartCycle();
-    }
+    cycle.setPages(pageList(config));
     layout();
     draw();
     syncPause();
@@ -448,8 +527,12 @@ export function createPreview(container) {
 
   return {
     update,
+    // Jump to the page a settings change affects and hold it (PageCycle.showPage).
+    showPage(pageKey, holdMs = HOLD_MS) { return cycle.showPage(pageKey, holdMs); },
+    // The screen alone, without the holder and the monitor (the phone strip).
+    setCompact(on) { compact = !!on; layout(); },
     destroy() {
-      clearInterval(cycle);
+      cycle.destroy();
       clearInterval(tick);
       if (face) face.destroy();
       if (mq) mq.removeEventListener("change", onMotion);

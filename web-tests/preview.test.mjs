@@ -1,7 +1,8 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS } from "../web/js/preview.js";
+import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
 const all = { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true };
@@ -53,4 +54,107 @@ test("moon phase uses drawMoon's epoch and synodic month", () => {
   assert.equal(moonLabel(m.phase), "NEW MOON");
   assert.equal(moonLabel(0.5), "FULL MOON");
   assert.equal(moonLabel(0.25), "FIRST QUARTER");
+});
+
+// ── The page cycle and the hold after a change (GUI review, 2026-10-12) ──
+
+function cycleWith(pages, opts = {}) {
+  const seen = [];
+  const c = new PageCycle({ onChange: () => seen.push(c.page), ...opts });
+  c.setPages(pages);
+  return { c, seen };
+}
+const timers = (t) => { mock.timers.enable({ apis: ["setInterval", "setTimeout"] }); t.after(() => mock.timers.reset()); };
+
+test("the cycle advances every CYCLE_MS", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather"]);
+  assert.equal(c.page, "face");
+  mock.timers.tick(CYCLE_MS);
+  assert.equal(c.page, "clock");
+  mock.timers.tick(CYCLE_MS);
+  assert.equal(c.page, "weather");
+});
+
+test("showPage jumps, holds for HOLD_MS, then the cycle resumes", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather", "stock"]);
+  assert.equal(HOLD_MS >= 5000, true);
+  assert.equal(c.showPage("weather"), true);
+  assert.equal(c.page, "weather");
+  mock.timers.tick(HOLD_MS - 1);
+  assert.equal(c.page, "weather", "still held");
+  mock.timers.tick(1); // the hold ends and the cycle restarts (mock timers: a timer set during tick() waits for the next tick)
+  mock.timers.tick(CYCLE_MS);
+  assert.equal(c.page, "stock", "cycling again after the hold");
+});
+
+test("a further change restarts the hold, and jumps if it belongs elsewhere", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather"]);
+  c.showPage("weather");
+  mock.timers.tick(4000);
+  c.showPage("clock");
+  assert.equal(c.page, "clock");
+  mock.timers.tick(4000);
+  assert.equal(c.page, "clock", "the hold restarted at the second change");
+  c.showPage(null); // theme: no jump, hold again
+  mock.timers.tick(HOLD_MS - 1);
+  assert.equal(c.page, "clock");
+  mock.timers.tick(1); // the hold ends and the cycle restarts (mock timers: a timer set during tick() waits for the next tick)
+  mock.timers.tick(CYCLE_MS);
+  assert.equal(c.page, "weather");
+});
+
+test("a page that is off or hidden is not shown, and nothing is held", (t) => {
+  timers(t);
+  const { c, seen } = cycleWith(["face", "clock"]);
+  assert.equal(c.showPage("stock"), false);
+  assert.deepEqual(seen, []);
+  assert.equal(c.holding, false);
+  mock.timers.tick(CYCLE_MS);
+  assert.equal(c.page, "clock", "the cycle carried on");
+});
+
+test("paused: a jump still shows the page, and the cycle stays paused after the hold", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather"]);
+  c.setPaused(true);
+  c.showPage("weather");
+  assert.equal(c.page, "weather");
+  mock.timers.tick(HOLD_MS + CYCLE_MS * 3);
+  assert.equal(c.page, "weather");
+  assert.equal(c.cycling, false);
+});
+
+test("reduced motion: jumps work, there is never an automatic cycle", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather"], { reduced: () => true });
+  assert.equal(c.cycling, false);
+  c.showPage("clock");
+  mock.timers.tick(HOLD_MS + CYCLE_MS * 3);
+  assert.equal(c.page, "clock");
+});
+
+test("a click on the preview ends a hold and moves on", (t) => {
+  timers(t);
+  const { c } = cycleWith(["face", "clock", "weather"]);
+  c.showPage("clock");
+  c.next();
+  assert.equal(c.page, "weather");
+  assert.equal(c.holding, false);
+  assert.equal(c.cycling, true);
+});
+
+test("which page a setting jumps to", () => {
+  const cfg = { pages: { face: true, moon: true, stock: false } };
+  for (const k of ["temp_unit", "wind_unit", "city", "lat", "lon"]) assert.equal(previewPageFor(k, cfg), "weather", k);
+  for (const k of ["tz_name", "tz_rule"]) assert.equal(previewPageFor(k, cfg), "clock", k);
+  for (const k of ["ticker", "stock_key"]) assert.equal(previewPageFor(k, cfg), "stock", k);
+  assert.equal(previewPageFor("github_user", cfg), "github");
+  assert.equal(previewPageFor("mount", cfg), "face");
+  assert.equal(previewPageFor("theme", cfg), "stay");
+  assert.equal(previewPageFor("pages.moon", cfg), "moon", "switched on");
+  assert.equal(previewPageFor("pages.stock", cfg), null, "switched off");
+  for (const k of ["wifi.ssid", "wifi.password", "wifi.configure", undefined]) assert.equal(previewPageFor(k, cfg), null, String(k));
 });

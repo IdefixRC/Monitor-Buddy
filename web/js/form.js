@@ -191,6 +191,28 @@ export function githubMessage(res) {
   return S.check.github[res.status] || S.check.github.network;
 }
 
+// The preview page a changed setting belongs to, so the preview can jump
+// there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
+// page without jumping: the theme shows on every page), or null (no jump and
+// no hold: Wi-Fi, or a page switched off). Whether the page is actually shown
+// (an empty key or user hides stock and GitHub) is the preview's call.
+export function previewPageFor(key, config) {
+  switch (key) {
+    case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
+    case "tz_name": case "tz_rule": return "clock";
+    case "ticker": case "stock_key": return "stock";
+    case "github_user": return "github";
+    case "mount": return "face";
+    case "theme": return "stay";
+    default: break;
+  }
+  if (typeof key === "string" && key.startsWith("pages.")) {
+    const page = key.slice("pages.".length);
+    return config && config.pages && config.pages[page] === true ? page : null;
+  }
+  return null;
+}
+
 // How long the result screen waits for the Buddy to join the Wi-Fi, counted
 // from when it answers again after the restart.
 export const WIFI_WAIT_MS = 30000;
