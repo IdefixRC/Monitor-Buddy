@@ -1,3 +1,6 @@
+// "1 follower", "2 followers": English singular for exactly 1.
+const count = (n, one, many) => `${n} ${Number(n) === 1 ? one : many}`;
+
 // All user-facing text. The Buddy speaks in first person; buttons and labels stay plain.
 // Light markup, rendered by app.js: **bold**, `code` and [text](https://link).
 export const S = {
@@ -160,10 +163,10 @@ export const S = {
     importConfig: "Import config.h",
     importBackup: "Import backup",
     exportBackup: "Export backup",
-    configImported: (n) => `Imported ${n} settings from config.h.`,
+    configImported: (n) => `Imported ${count(n, "setting", "settings")} from config.h.`,
     skipped: (list) => `Skipped: ${list}.`,
     defaulted: (list) => `Not in this file, so left as they were: ${list}.`,
-    backupImported: (n) => `Imported ${n} settings from the backup.`,
+    backupImported: (n) => `Imported ${count(n, "setting", "settings")} from the backup.`,
     badBackup: "That file isn't a Monitor Buddy backup.",
     badFile: "I couldn't read that file.",
 
@@ -309,7 +312,7 @@ export const S = {
       network: "Couldn't reach Finnhub.",
     },
     github: {
-      ok: (followers, repos) => `OK — ${followers} followers, ${repos} repos`,
+      ok: (followers, repos) => `OK — ${count(followers, "follower", "followers")}, ${count(repos, "repo", "repos")}`,
       not_found: "User not found.",
       rate_limited: "GitHub's rate limit. Try again later.",
       network: "Couldn't reach GitHub.",

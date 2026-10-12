@@ -317,3 +317,34 @@ test("the Advanced settings texts are the owner's wording", () => {
   assert.equal(S.form.advanced, "Advanced settings");
   assert.equal(S.form.advancedHint, "Allows you to tweak the data provided by City search.");
 });
+
+// ── Enter never submits (Eric, 2026-10-12) ────────────────
+
+// Enter in a field submits a form implicitly, through its submit button. So
+// the app has none: every button is type "button", and the form's submit
+// event saves nothing. A new field or button can't bring the bug back.
+const appSource = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+
+test("no submit button anywhere in the app", () => {
+  assert.doesNotMatch(appSource, /type:\s*["']submit["']/);
+  const buttons = [...appSource.matchAll(/h\(\s*["']button["']\s*,\s*\{([^}]*)/g)];
+  assert.ok(buttons.length >= 5, "found the app's buttons");
+  for (const [call, attrs] of buttons) assert.match(attrs, /type:\s*["']button["']/, call);
+});
+
+test("the settings form's submit event only cancels", () => {
+  const handlers = [...appSource.matchAll(/addEventListener\(\s*["']submit["']\s*,([^\n]*)/g)].map((m) => m[1].trim());
+  assert.deepEqual(handlers, ["(e) => e.preventDefault());"]);
+});
+
+// ── Counts: singular for exactly 1 ────────────────────────
+
+test("one follower, one repo, one setting", () => {
+  assert.equal(S.check.github.ok(1, 1), "OK — 1 follower, 1 repo");
+  assert.equal(S.check.github.ok(1, 11), "OK — 1 follower, 11 repos");
+  assert.equal(S.check.github.ok(0, 2), "OK — 0 followers, 2 repos");
+  assert.equal(githubMessage({ status: "ok", followers: 1, repos: 11 }), "OK — 1 follower, 11 repos");
+  assert.equal(S.form.configImported(1), "Imported 1 setting from config.h.");
+  assert.equal(S.form.configImported(12), "Imported 12 settings from config.h.");
+  assert.equal(S.form.backupImported(1), "Imported 1 setting from the backup.");
+});

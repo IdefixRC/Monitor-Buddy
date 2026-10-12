@@ -1048,14 +1048,17 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     // The buttons.
     const summary = h("div", { class: "form-summary", role: "alert", hidden: true });
     const backTo = f.flow === "review" ? null : (app.info ? showHome : showPathB);
+    // Enter never saves, flashes or restarts (Eric, 2026-10-12). Only the
+    // action button does, clicked or keyboard-activated. So the form has no
+    // submit button: Enter in a field then submits nothing (and with a single
+    // field, only fires "submit", which saves nothing). A submitter check
+    // wouldn't do: implicit submission reports the default button as the
+    // submitter. Pinned by a test: no type "submit" anywhere in web/js.
     form.append(h("div", { class: "form-foot" }, summary,
       h("div", { class: "actions" },
-        h("button", { type: "submit", class: "btn btn--primary btn--big" }, S.form.submit[f.flow]),
+        btn(S.form.submit[f.flow], submit, { class: "btn btn--primary btn--big" }),
         backTo ? btn(S.form.back, backTo, { kind: "link" }) : null)));
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      submit();
-    });
+    form.addEventListener("submit", (e) => e.preventDefault());
     refreshers.push(() => {
       // Errors with no field of their own (a SET error on "wifi", say) are listed here.
       const orphans = Object.entries(currentErrors).filter(([k]) => !slots.has(k)).map(([, msg]) => msg);
