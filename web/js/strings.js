@@ -191,7 +191,7 @@ export const S = {
     band: "I can only join 2.4 GHz networks.",
     passwordHint: "Leave it empty for an open network.",
     offHotspot: "Your Buddy will open its setup hotspot **Monitor-Buddy-Setup**. Join it from your phone to set up Wi-Fi later.",
-    offKeep: "Off leaves the Wi-Fi saved on your Buddy as it is.",
+    offKeep: "Off leaves the Wi-Fi saved on your Buddy as it is, or opens a hotspot if no Wi-Fi details are found.",
 
     city: "City search",
     cityPlaceholder: "Munich",
