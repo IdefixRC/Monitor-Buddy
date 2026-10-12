@@ -101,6 +101,7 @@
 #include <esp_mac.h>
 #include "settings.h"
 #include "protocol.h"
+#include "display_fmt.h"
 
 // Set from the release tag by the release workflow (-DFW_VERSION=\"1.2.0\").
 #ifndef FW_VERSION
@@ -1801,15 +1802,18 @@ void drawGithub() {
 
   // Stats on the right: followers large, repos smaller beneath.
   const int rx = 150;
+  char fbuf[16], rbuf[16];
+  formatCount(g.followers, fbuf, sizeof(fbuf));
+  formatCount(g.repos, rbuf, sizeof(rbuf));
   gfx->setTextColor(COL_GHNUM);
-  gfx->setTextSize(6);
-  gfx->setCursor(rx, 22);  gfx->print(g.followers);
+  gfx->setTextSize(followerTextSize(fbuf));      // 5 digits at size 6 would run off the screen
+  gfx->setCursor(rx, 22);  gfx->print(fbuf);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(2);
   gfx->setCursor(rx, 78);  gfx->print("FOLLOWERS");
   gfx->setTextColor(COL_VALUE);
   gfx->setTextSize(3);
-  gfx->setCursor(rx, 110); gfx->print(g.repos);
+  gfx->setCursor(rx, 110); gfx->print(rbuf);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(1);
   gfx->setCursor(rx, 140); gfx->print("REPOS");

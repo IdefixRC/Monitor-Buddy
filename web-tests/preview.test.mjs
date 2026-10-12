@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize } from "../web/js/preview.js";
 import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
@@ -190,4 +190,22 @@ test("a fresh check result restarts the hold on its page; a hidden page is never
   c.setPages(["face", "clock", "stock"]); // GitHub hidden (user emptied)
   assert.equal(c.showPage("github"), false);
   assert.equal(c.page, "stock");
+});
+
+test("formatCount follows the owner-approved rule, like display_fmt.cpp", () => {
+  const cases = [[0, "0"], [9999, "9999"], [10000, "10000"], [24553, "24553"], [99999, "99999"],
+    [100000, "100k"], [245999, "245k"], [999999, "999k"], [1000000, "1.0M"], [1250000, "1.2M"],
+    [9999999, "9.9M"], [10000000, "10M"], [123456789, "123M"], [-5, "0"]];
+  for (const [n, want] of cases) assert.equal(formatCount(n), want, String(n));
+});
+
+test("followerTextSize: 5 for exactly five characters, else 6", () => {
+  for (const [s, want] of [["0", 6], ["9999", 6], ["10000", 5], ["99999", 5], ["245k", 6], ["1.2M", 6], ["123M", 6]]) {
+    assert.equal(followerTextSize(s), want, s);
+  }
+});
+
+test("a 5-digit follower count fits the screen at its size", () => {
+  const f = formatCount(24553);
+  assert.ok(150 + textWidth(f, followerTextSize(f)) <= 320);
 });

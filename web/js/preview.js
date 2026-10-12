@@ -268,12 +268,32 @@ function drawStock(c, config, live) {
 
 const GITHUB_D = bitmapPath(BITMAPS.github);
 
+// formatCount and followerTextSize port lib/display/display_fmt.cpp. KEEP IN SYNC.
+// 0-99999 digits; 100000-999999 thousands + "k"; 1000000-9999999 one truncated
+// decimal + "M"; 10000000 and up whole millions + "M"; negative "0".
+export function formatCount(n) {
+  n = Math.max(0, Math.trunc(n));
+  if (n < 100000) return String(n);
+  if (n < 1000000) return `${Math.floor(n / 1000)}k`;
+  if (n < 10000000) {
+    const tenths = Math.floor(n / 100000);
+    return `${Math.floor(tenths / 10)}.${tenths % 10}M`;
+  }
+  return `${Math.floor(n / 1000000)}M`;
+}
+
+// Text size of the big follower number: 5 for exactly 5 characters (five size-6
+// characters are 180 px and run off the 320 px screen from x=150), else 6.
+export function followerTextSize(formatted) {
+  return [...String(formatted)].length === 5 ? 5 : 6;
+}
+
 function drawGithub(c, live) {
-  const followers = isNum(live.followers) ? String(Math.trunc(live.followers)) : DASH;
-  const repos = isNum(live.repos) ? String(Math.trunc(live.repos)) : DASH;
+  const followers = isNum(live.followers) ? formatCount(live.followers) : DASH;
+  const repos = isNum(live.repos) ? formatCount(live.repos) : DASH;
   const rx = 150;
   return `<path fill="${c.ghLogo}" shape-rendering="crispEdges" transform="translate(14 ${(SCREEN_H - 112) / 2}) scale(2)" d="${GITHUB_D}"/>`
-    + txt(followers, rx, 22, 6, c.ghNum)
+    + txt(followers, rx, 22, followerTextSize(followers), c.ghNum)
     + txt("FOLLOWERS", rx, 78, 2, c.label)
     + txt(repos, rx, 110, 3, c.value)
     + txt("REPOS", rx, 140, 1, c.label);
