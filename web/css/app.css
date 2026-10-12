@@ -274,6 +274,11 @@ main > :not(.form-layout) {
   margin: 0 0 0.6rem;
 }
 
+.about .about__credit {
+  margin: 1.25rem 0 0;
+  font-size: 0.8rem;
+}
+
 .links {
   display: flex;
   flex-wrap: wrap;

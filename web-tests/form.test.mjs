@@ -348,3 +348,20 @@ test("one follower, one repo, one setting", () => {
   assert.equal(S.form.configImported(12), "Imported 12 settings from config.h.");
   assert.equal(S.form.backupImported(1), "Imported 1 setting from the backup.");
 });
+
+// ── Hardware-test fixes (2026-10-12) ──────────────────────
+
+test("a failed Wi-Fi join has its own title and points at the name too", () => {
+  assert.equal(S.titles.wifiFailed, "Wi-Fi didn't connect");
+  assert.notEqual(S.titles.wifiFailed, S.titles.result);
+  assert.equal(S.result.wifiFailed("getafix"),
+    "Couldn't join getafix. Check the network name (capitals count) and the password; I've opened my setup hotspot.");
+});
+
+test("the footer carries the copyright line LICENSE asks for", () => {
+  const licence = readFileSync(new URL("../LICENSE", import.meta.url), "utf8");
+  const holder = licence.match(/Copyright \(c\) (\d{4}) (.+)/);
+  assert.equal(S.about.copyright, `© ${holder[1]}`);
+  assert.equal(S.about.author, holder[2].trim());
+  assert.match(S.about.licenceUrl, /\/LICENSE$/);
+});

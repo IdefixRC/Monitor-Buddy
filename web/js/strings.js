@@ -43,6 +43,7 @@ export const S = {
     flashing: "Installing firmware",
     saving: "Saving settings",
     result: "Done",
+    wifiFailed: "Wi-Fi didn't connect",
     problem: "Something went wrong",
     backup: "Back up first",
     reset: "Reset to defaults",
@@ -66,6 +67,12 @@ export const S = {
     guideUrl: "https://github.com/IdefixRC/Monitor-Buddy#readme",
     issue: "Report a problem",
     issueUrl: "https://github.com/IdefixRC/Monitor-Buddy/issues",
+    // The copyright line LICENSE asks for, with the licence beside it.
+    copyright: "© 2026",
+    author: "IdefixRC",
+    authorUrl: "https://github.com/IdefixRC",
+    licence: "Open source under the MIT License",
+    licenceUrl: "https://github.com/IdefixRC/Monitor-Buddy/blob/main/LICENSE",
   },
 
   connecting: {
@@ -360,7 +367,8 @@ export const S = {
 
   result: {
     connected: (ssid) => `Connected to ${ssid}. I'm all set.`,
-    wifiFailed: (ssid) => `Couldn't join ${ssid}. Check the password; I've opened my setup hotspot.`,
+    // Hardware test 2026-10-12: a lowercase "getafix" failed as "check the password".
+    wifiFailed: (ssid) => `Couldn't join ${ssid}. Check the network name (capitals count) and the password; I've opened my setup hotspot.`,
     hotspot: "I've opened my setup hotspot, so you can give me your Wi-Fi from your phone.",
     hotspotSteps: [
       "On your phone, open the Wi-Fi settings and join **Monitor-Buddy-Setup**.",

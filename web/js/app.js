@@ -1405,7 +1405,7 @@ async function afterFlash(entry, ui) {
 // ── Results and problems ──────────────────────────────────
 
 function showResult(kind, { ssid = "", installed = null } = {}) {
-  screen(S.titles.result, (m) => {
+  screen(kind === "wifiFailed" ? S.titles.wifiFailed : S.titles.result, (m) => {
     const done = btn(S.result.done, () => busy(backHome), { kind: "primary" });
     if (kind === "connected") {
       const g = guide(m, { mood: "love", say: S.result.connected(escapeRich(ssid)) });
@@ -1495,7 +1495,10 @@ function chrome() {
     h("ul", { class: "links" },
       h("li", {}, h("a", { href: S.about.projectUrl, target: "_blank", rel: "noopener" }, S.about.project)),
       h("li", {}, h("a", { href: S.about.guideUrl, target: "_blank", rel: "noopener" }, S.about.guide)),
-      h("li", {}, h("a", { href: S.about.issueUrl, target: "_blank", rel: "noopener" }, S.about.issue))));
+      h("li", {}, h("a", { href: S.about.issueUrl, target: "_blank", rel: "noopener" }, S.about.issue))),
+    h("p", { class: "about__credit" }, `${S.about.copyright} `,
+      h("a", { href: S.about.authorUrl, target: "_blank", rel: "noopener" }, S.about.author), " · ",
+      h("a", { href: S.about.licenceUrl, target: "_blank", rel: "noopener" }, S.about.licence)));
 }
 
 async function loadManifest() {
