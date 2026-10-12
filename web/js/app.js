@@ -16,6 +16,7 @@ import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
+  previewPageFor,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -631,6 +632,10 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 
 // ── The settings form ─────────────────────────────────────
 
+// The single-column layout, where the preview becomes a compact strip. KEEP
+// IN SYNC with the max-width of the form-layout media query in app.css.
+const NARROW = "(max-width: 900px)";
+
 function showForm({ say: message = "", tone = "", focus } = {}) {
   const f = app.form;
   const flow = FLOWS[f.flow];
@@ -653,7 +658,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
 
   const touch = (key) => { f.touched.add(key); delete f.serverErrors[key]; };
   const gave = (...keys) => { f.location = [...new Set([...f.location, ...keys])]; touch("location"); };
-  const changed = (key) => { if (key) touch(key); refresh(); };
+  // The preview jumps to the page a changed setting affects and holds it there
+  // (previewPageFor; the hold and resume live in preview.js).
+  const jumpFor = (key) => {
+    const target = previewPageFor(key, f.config);
+    if (target && preview && alive) preview.showPage(target === "stay" ? null : target);
+  };
+  const changed = (key) => { if (key) touch(key); refresh(); if (key) jumpFor(key); };
 
   // A label row: the label, its help button and its badges.
   function head(labelEl, labelText, helpKey, badgeKey) {
@@ -717,7 +728,24 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const form = h("form", { class: "settings", novalidate: true });
     m.append(h("div", { class: "form-layout" }, side, form));
     preview = createPreview(previewBox);
-    cleanups.push(() => { alive = false; preview.destroy(); });
+    // Phones get the compact sticky strip; its height sets the scroll padding,
+    // so a focused field never hides behind it.
+    const narrow = matchMedia(NARROW);
+    const fit = () => preview.setCompact(narrow.matches);
+    fit();
+    narrow.addEventListener("change", fit);
+    const measure = () => document.documentElement.style.setProperty("--strip-h", `${previewBox.offsetHeight}px`);
+    const ro = new ResizeObserver(measure);
+    ro.observe(previewBox);
+    window.addEventListener("resize", measure);
+    measure();
+    cleanups.push(() => {
+      alive = false;
+      narrow.removeEventListener("change", fit);
+      window.removeEventListener("resize", measure);
+      ro.disconnect();
+      preview.destroy();
+    });
     const say = (text, t = "") => bubble.replaceChildren(h("p", { class: t ? `bubble__line bubble__line--${t}` : "bubble__line" }, rich(text)));
     say(message || S.form.say[f.flow], tone);
 
@@ -825,6 +853,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       cityStatus.textContent = S.form.picked(r.label);
       cityInput.focus();
       refresh();
+      jumpFor("city");
     }
     const cityField = h("div", { class: "field" },
       head(h("label", { for: cityId }, S.form.city), S.form.city, "city"),
@@ -1415,7 +1444,13 @@ function chrome() {
   document.title = S.title;
   if (params.has("fake")) {
     // A shared ?fake link must never pass for a real install.
-    document.body.prepend(h("div", { class: "fake-banner", role: "note" }, S.fake));
+    const banner = h("div", { class: "fake-banner", role: "note" }, S.fake);
+    document.body.prepend(banner);
+    // Sticky things below it (the preview) start under it.
+    const measure = () => document.documentElement.style.setProperty("--banner-h", `${banner.offsetHeight}px`);
+    new ResizeObserver(measure).observe(banner);
+    window.addEventListener("resize", measure);
+    measure();
   }
   document.getElementById("skip").textContent = S.skipLink;
   document.getElementById("app-name").textContent = S.appName;

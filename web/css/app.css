@@ -76,6 +76,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  scroll-padding-top: var(--banner-h, 0px); /* anchors land below the ?fake banner */
 }
 
 body {
@@ -899,9 +900,29 @@ main > :not(.form-layout) {
   align-items: start;
 }
 
-.form-side__sticky {
+/* The preview stays in view while the form scrolls. The aside itself is the
+   sticky element: a grid item that doesn't stretch (align-self: start) can
+   move down its whole row. If the column is ever taller than the window, it
+   scrolls on its own instead of being cut off. */
+:root {
+  /* --banner-h: the ?fake banner's height, measured by app.js (it is sticky too). */
+  --sticky-top: calc(var(--banner-h, 0px) + 1rem);
+}
+
+.form-side {
   position: sticky;
-  top: 1rem;
+  top: var(--sticky-top);
+  align-self: start;
+  max-height: calc(100vh - var(--sticky-top) - 1rem);
+  overflow-y: auto;
+  /* Room inside the scroll box for the preview's focus outline and the
+     bubble's shadow, which overflow would otherwise cut off. */
+  padding: 8px 16px 2.5rem;
+  margin: -8px -16px -2.5rem;
+  scrollbar-width: thin;
+}
+
+.form-side__sticky {
   display: grid;
   gap: 1.1rem;
 }
@@ -915,11 +936,91 @@ main > :not(.form-layout) {
     grid-template-columns: minmax(0, 1fr);
     gap: 1.25rem;
   }
+  /* Phones and narrow windows: the preview becomes a compact strip that
+     sticks to the top while the form scrolls under it. The two wrappers step
+     aside (display: contents), so the preview box is a direct child of the
+     layout and can stick for the layout's whole height; the bubble scrolls
+     with the form. */
+  .form-side,
   .form-side__sticky {
-    position: static;
-    max-width: 26rem;
-    margin: 0 auto;
+    display: contents;
   }
+  .form-side__preview {
+    position: sticky;
+    top: var(--banner-h, 0px);
+    z-index: 20;
+    display: flex;
+    justify-content: center;
+    margin: -1.75rem -16px 0;  /* full bleed, flush with the top of main */
+    padding: 0.5rem max(16px, env(safe-area-inset-right)) 0.5rem max(16px, env(safe-area-inset-left));
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 8px 16px -12px rgba(0, 0, 0, 0.6);
+  }
+  .form-side .bubble {
+    max-width: 30rem;
+    margin: 0.25rem auto 0;
+  }
+  /* Focused fields, anchors and scrollIntoView stop below the strip. The
+     scroll padding takes the banner and the strip off the top of the scroll
+     area (Chrome also uses it to decide whether a focused field is hidden);
+     the scroll margin adds a little air. The two add up, so the strip's
+     height goes in only once. */
+  html {
+    scroll-padding-top: calc(var(--banner-h, 0px) + var(--strip-h, 0px));
+  }
+  .settings :is(input, select, button, fieldset, section) {
+    scroll-margin-top: 0.75rem;
+  }
+}
+
+/* The compact preview: the Buddy's screen alone, at most about a third of
+   the window's height, with a small pause icon beside it. */
+.buddy-preview--compact {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: auto;
+  max-width: none;
+}
+
+.buddy-preview--compact .buddy-preview__device {
+  width: min(70vw, 52vh, 22rem);
+  border-radius: 10px;
+  box-shadow: 0 0 0 3px var(--holder), 0 0 0 4px var(--holder-rim);
+}
+
+.buddy-preview--compact .buddy-preview__device svg {
+  aspect-ratio: 320 / 172;
+  border-radius: 10px;
+}
+
+.buddy-preview--compact .buddy-preview__bar {
+  margin: 0;
+}
+
+.buddy-preview--compact .buddy-preview__caption {
+  display: none;
+}
+
+.buddy-preview--compact .buddy-preview__pause {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.buddy-preview--compact .buddy-preview__pause::before {
+  margin: 0;
+}
+
+.buddy-preview--compact .buddy-preview__pause-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .settings {
