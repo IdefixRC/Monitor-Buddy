@@ -1307,9 +1307,12 @@ async function writeImage(entry, image, ui) {
   app.expectDrop = true;
   // esptool-js opens the port itself, so the protocol session closes first.
   try { await app.bp.close(); } catch { /* already closed */ }
+  // After a USB drop (a reset, BOOT/RESET, a cut-off flash) the old port
+  // handle never opens again, so every retry flashes the port as it is now.
+  const port = await app.bp.refind();
   let resetFailed = false;
   try {
-    await dev.flashImage(app.bp.port, image, {
+    await dev.flashImage(port, image, {
       erase: flow.erase,
       onStage: (s) => ui.stage(s === "reset" ? "restart" : s),
       onProgress: (x) => ui.progress(x),

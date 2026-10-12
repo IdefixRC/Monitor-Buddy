@@ -8,8 +8,22 @@ export const ESPRESSIF_VID = 0x303a;
 export const BUDDY_PID = 0x1001; // the ESP32-C6's built-in USB-serial/JTAG
 const CHANGE_WAIT_MS = 3000;
 const READ_WAIT_MS = 1500;
+// A Buddy running the firmware takes a write at once. One that doesn't read
+// USB (boot loop after a cut-off flash) never does: Chrome's 255-byte buffer
+// fills and write() never resolves (2026-10-12, COM12). Past this, give up.
+const WRITE_WAIT_MS = 2000;
+// close() must finish even then: a stuck write blocks writer.close() and abort().
+const CLOSE_STEP_MS = 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Resolves true when `promise` settles within ms, false when it doesn't.
+const settles = (promise, ms) => {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).then(() => true, () => true),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 export class NoReply extends Error {
   constructor(message) {
@@ -47,6 +61,8 @@ export class BuddyPort {
     this.lastRx = Date.now();
     this.isOpen = false;
     this.lost = false; // the reader ended or failed while open: the device is gone
+    this.stalled = false; // a write never completed: the Buddy isn't reading
+    this.writeWaitMs = WRITE_WAIT_MS;
   }
 
   static supported() {
@@ -79,6 +95,7 @@ export class BuddyPort {
     }
     this.isOpen = true;
     this.lost = false;
+    this.stalled = false;
     this.lastRx = Date.now();
     this.writer = this.port.writable.getWriter();
     this.reader = this.port.readable.getReader();
@@ -130,15 +147,30 @@ export class BuddyPort {
     const pending = this.waiters;
     this.waiters = [];
     for (const w of pending) w.resolve(null);
-    if (reader) { try { await reader.cancel(); } catch { /* port already gone */ } }
-    if (readDone) { try { await readDone; } catch { /* the loop reports its own errors */ } }
+    // Each step is bounded: with a write stuck in the port (stalled), close()
+    // and even abort() can wait forever, and the page would hang with them.
+    // Errors mean the port is already gone; the read loop reports its own.
+    const step = (fn) => settles(Promise.resolve().then(fn), CLOSE_STEP_MS);
+    const stalled = this.stalled;
+    this.stalled = false;
+    if (reader) await step(() => reader.cancel());
+    if (readDone) await step(() => readDone);
     if (writer) {
-      try { await writer.close(); } catch { /* port already gone */ }
+      await step(() => (stalled ? writer.abort() : writer.close()));
       try { writer.releaseLock(); } catch { /* already released */ }
     }
-    if (wasOpen || this.port.readable || this.port.writable) {
-      try { await this.port.close(); } catch { /* already closed, or the device is gone */ }
-    }
+    if (wasOpen || this.port.readable || this.port.writable) await step(() => this.port.close());
+  }
+
+  // The port as it is now. After a USB drop (a reset, BOOT/RESET, a cut-off
+  // flash) Chrome hands out a new SerialPort and the old one never opens
+  // again, so anything that opens the port itself (esptool-js) asks here
+  // first. Keeps the current port when it is still listed or no Buddy is.
+  async refind() {
+    let port = null;
+    try { port = await this._findPort(); } catch { /* keep the current one */ }
+    if (port) this.port = port;
+    return this.port;
   }
 
   // Sends `cmd` with a fresh id and resolves with the reply that echoes that id
@@ -161,7 +193,12 @@ export class BuddyPort {
         const writer = this.writer;
         if (!this.isOpen || !writer) throw new NoReply(`${cmd}: the port was closed`);
         this._emit(line.trimEnd(), "tx");
-        await writer.write(new TextEncoder().encode(line));
+        if (!(await settles(writer.write(new TextEncoder().encode(line)), this.writeWaitMs))) {
+          // The Buddy isn't reading: treat the port as lost, so callers reopen
+          // it (reconnect) or give up (the probe falls through to path B).
+          this.stalled = this.lost = true;
+          throw new NoReply(`${cmd}: the Buddy isn't reading`);
+        }
         let timer;
         const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), wait); });
         const reply = await Promise.race([replied, timeout]);

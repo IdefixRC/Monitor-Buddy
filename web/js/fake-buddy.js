@@ -83,6 +83,7 @@ export function fakeDevice(params) {
       }
     }
     async close() { this.isOpen = false; }
+    async refind() { return this.port; }
     async drain() { await sleep(100); }
     async command(cmd, body = null) {
       if (!this.isOpen) throw new Error("the port is not open");
