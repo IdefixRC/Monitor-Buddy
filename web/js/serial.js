@@ -32,6 +32,11 @@ export class NoReply extends Error {
   }
 }
 
+// Chrome's errors for a port that has bytes stuck in it (a board that stopped
+// reading): it never closes, and only unplugging the Buddy frees it. The
+// messages were measured on COM12, 2026-10-12.
+export const isWedged = (e) => /already open|already in progress/i.test(String((e && e.message) || ""));
+
 export async function openQuietly(port) {
   // Chrome opens with DTR and RTS asserted. Lowering both in one setSignals()
   // call resets the ESP32-C6 (rst:0x15): the chip briefly sees RTS on, DTR off.

@@ -42,3 +42,22 @@ export function answers(reply, cmd, id) {
   if (reply.id === id) return true;
   return !("id" in reply) && reply.ok === false && IDLESS_ERRORS.includes(reply.error);
 }
+
+// What the port printed before we wrote anything, read for trouble (E2,
+// 2026-10-12). A board that isn't running the firmware never reads USB, so
+// every byte we send stays stuck in the port, and Chrome can't close a port
+// with stuck bytes: only a replug frees it. So look first, and send nothing to:
+//   "bootloop"  the bootloader finds no app (a cut-off flash) and restarts every
+//               ~40 ms; or the ROM banner repeats (a clean boot prints it once);
+//   "download"  the ROM waits in install mode.
+// null: nothing wrong seen (a running Buddy, a clean boot, or silence).
+const NO_APP = /No bootable app partitions|is not bootable|invalid magic byte|invalid segment length/;
+export function romTrouble(lines) {
+  let banners = 0;
+  for (const line of lines) {
+    if (NO_APP.test(line)) return "bootloop";
+    if (/waiting for download/.test(line)) return "download";
+    if (/^rst:0x/.test(line) && ++banners > 1) return "bootloop";
+  }
+  return null;
+}

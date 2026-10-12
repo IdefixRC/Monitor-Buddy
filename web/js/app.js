@@ -2,7 +2,8 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, NoReply, change } from "./serial.js";
+import { BuddyPort, NoReply, change, isWedged } from "./serial.js";
+import { romTrouble } from "./protocol.js";
 import { fetchImage, flashImage, FlashError, ImageMismatch } from "./flasher.js";
 import { parseManifest, offered, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup } from "./settings.js";
@@ -40,8 +41,12 @@ const app = {
   form: null,        // the form, kept across screens so a retry finds it intact
   live: {},          // results of successful checks, for the preview
   expectDrop: false, // a flash or restart is under way: the port going away is expected
-  rx: { last: 0, status: false },
+  rx: { last: 0, status: false, recent: [] }, // recent: the latest lines, for romTrouble
+  trouble: null,     // romTrouble() at connect: the firmware isn't running (path B, recovery)
 };
+// How long connect listens before it writes anything (E2): a boot loop prints
+// every ~40 ms, a running Buddy gets its INFO half a second later.
+const LISTEN_MS = 500;
 
 // ── DOM helpers ───────────────────────────────────────────
 
@@ -227,6 +232,8 @@ function attach(bp) {
     if (dir === "rx") {
       app.rx.last = Date.now();
       if (/^app=/.test(line)) app.rx.status = true;
+      app.rx.recent.push(line);
+      if (app.rx.recent.length > 100) app.rx.recent.shift();
     }
     log(line, dir === "tx" ? ">> " : "<< ");
   });
@@ -285,6 +292,17 @@ async function probeAndRouteOnce() {
   } catch (e) {
     const busyPort = e && (e.name === "NetworkError" || e.name === "InvalidStateError");
     return showProblem(busyPort ? S.connecting.portBusy : S.connecting.openFailed, e, { retry: probeAndRoute });
+  }
+  // Look before writing (E2): a board that isn't running the firmware never
+  // reads, so even one INFO would stay stuck and keep the port from closing
+  // until a replug. Then the flash couldn't open it.
+  app.rx.recent = [];
+  await sleep(LISTEN_MS);
+  app.trouble = romTrouble(app.rx.recent);
+  if (app.trouble) {
+    log(`no firmware running (${app.trouble}): nothing sent`, "* ");
+    app.info = null;
+    return showPathB();
   }
   let info = null;
   try {
@@ -522,11 +540,15 @@ async function backHome() {
 // ── Path B ────────────────────────────────────────────────
 
 function showPathB() {
-  screen(S.titles.pathB, (m) => {
-    const g = guide(m, { mood: "curious", say: S.pathB.say });
+  // The same choices for a Buddy whose firmware didn't finish installing.
+  const recover = !!app.trouble;
+  screen(recover ? S.titles.recover : S.titles.pathB, (m) => {
+    const say = !recover ? S.pathB.say : app.trouble === "download" ? S.pathB.downloadSay : S.pathB.recoverSay;
+    const g = guide(m, { mood: recover ? "sad" : "curious", say });
     if (!installable()) g.add(installOff(), "error");
     m.append(h("div", { class: "action-grid action-grid--two" },
-      actionCard(S.pathB.upgrade, S.pathB.upgradeHint, () => startFlashFlow("upgrade"), { primary: true, disabled: !installable() }),
+      actionCard(recover ? S.pathB.reinstall : S.pathB.upgrade, recover ? S.pathB.reinstallHint : S.pathB.upgradeHint,
+        () => startFlashFlow("upgrade"), { primary: true, disabled: !installable() }),
       actionCard(S.pathB.fresh, S.pathB.freshHint, () => startFlashFlow("install"), { disabled: !installable() })));
     m.append(h("div", { class: "actions actions--small" },
       btn(S.pathB.retry, probeAndRoute, { kind: "link" }),
@@ -1325,6 +1347,8 @@ async function writeImage(entry, image, ui) {
     } else {
       leaveGuard(false);
       app.expectDrop = false;
+      // A port with stuck bytes never closes; only a replug frees it (E2).
+      if (isWedged(e)) return showProblem(S.flash.replug, null, { retry: () => writeImage(entry, image) });
       if (e instanceof FlashError && e.stage === "connect") return showBootHelper(() => writeImage(entry, image));
       const text = e instanceof FlashError && e.stage === "erase" ? S.flash.eraseFailed : S.flash.writeFailed;
       return showProblem(text, null, { retry: () => writeImage(entry, image) });

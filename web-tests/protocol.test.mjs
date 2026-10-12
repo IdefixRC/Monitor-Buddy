@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers } from "../web/js/protocol.js";
+import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble } from "../web/js/protocol.js";
 
 test("ids start at the given value, increase and wrap", () => {
   const next = makeIdSource(MAX_ID - 1);
@@ -39,4 +39,41 @@ test("answers matches cmd and id, plus the three id-less errors", () => {
     assert.ok(answers({ ok: false, cmd: "SET", error }, "SET", 5), error);
   assert.ok(!answers({ ok: false, cmd: "SET", error: "unknown command" }, "SET", 5));
   assert.ok(!answers({ ok: false, cmd: "SET", id: 4, error: "restarting" }, "SET", 5));
+});
+
+// ── What the port says before we write anything (E2, 2026-10-12) ─
+// Captured on COM12: a boot loop after a cut-off flash, the same after an
+// erased app header, and a Buddy that runs.
+
+const ROM = [
+  "ESP-ROM:esp32c6-20220919", "Build:Sep 19 2022",
+  "rst:0x3 (LP_SW_HPSYS),boot:0x2b (SPI_FAST_FLASH_BOOT)", "Saved PC:0x4001974a", "SPIWP:0xee",
+  "mode:DIO, clock div:2", "load:0x40875730,len:0x117c", "entry 0x4086b910",
+];
+const CUT_OFF = [...ROM, "E (80) esp_image: invalid segment length 0xffffffff",
+  "E (80) boot: OTA app partition slot 0 is not bootable", "E (81) boot: No bootable app partitions in the partition table"];
+const ERASED = [...ROM, "E (23) esp_image: image at 0x10000 has invalid magic byte (nothing flashed here?)",
+  "E (24) boot: OTA app partition slot 0 is not bootable"];
+const RUNNING = ["app=4 mood=0 wifi=up up=40s rst=11", "app=4 mood=0 wifi=up up=42s rst=11"];
+
+test("a boot loop is recognised before anything is written", () => {
+  assert.equal(romTrouble(CUT_OFF), "bootloop");
+  assert.equal(romTrouble(ERASED), "bootloop");
+  assert.equal(romTrouble(["E (24) boot: No bootable app partitions in the partition table"]), "bootloop");
+});
+
+test("ROM banners repeating without an error line still mean a boot loop", () => {
+  assert.equal(romTrouble([...ROM, ...ROM]), "bootloop");
+});
+
+test("one clean boot, or a running Buddy, is no trouble", () => {
+  // A Buddy that was just plugged in prints the ROM banner exactly once.
+  assert.equal(romTrouble([...ROM.map((l) => l.replace("rst:0x3 (LP_SW_HPSYS)", "rst:0x1 (POWERON)")),
+    "ESP32-C6 Monitor-Buddy 1.2.0-rc2 starting"]), null);
+  assert.equal(romTrouble(RUNNING), null);
+  assert.equal(romTrouble([]), null);
+});
+
+test("a board already in download mode is recognised", () => {
+  assert.equal(romTrouble(["rst:0x1 (POWERON),boot:0x1f (DOWNLOAD(USB/UART0/SDIO_FEI_FEO))", "waiting for download"]), "download");
 });

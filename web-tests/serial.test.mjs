@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID } from "../web/js/serial.js";
+import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, isWedged } from "../web/js/serial.js";
 
 // A Web Serial port that never answers. With stall, writes never complete,
 // like a Buddy that doesn't read USB (boot loop, or Chrome's 255-byte buffer full).
@@ -93,4 +93,15 @@ test("refind() keeps the current port when no Buddy is listed", async () => {
   assert.equal(await bp.refind(), cur);
   setPorts([]);
   assert.equal(await bp.refind(), cur);
+});
+
+// ── A wedged port needs a replug, not BOOT/RESET (E2) ─────
+// The messages are Chrome's, measured on COM12 (2026-10-12).
+
+test("isWedged() knows Chrome's stuck-port errors", () => {
+  assert.equal(isWedged(new Error("connect: Failed to execute 'open' on 'SerialPort': The port is already open.")), true);
+  assert.equal(isWedged(new Error("Failed to execute 'close' on 'SerialPort': A call to close() is already in progress.")), true);
+  assert.equal(isWedged(new Error("connect: Failed to execute 'open' on 'SerialPort': Failed to open serial port.")), false);
+  assert.equal(isWedged(new Error("connect: Couldn't sync to ESP32-C6")), false);
+  assert.equal(isWedged(null), false);
 });
