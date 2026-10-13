@@ -94,7 +94,7 @@ There are two ways to get the firmware onto your Buddy. The **web flasher** does
 
 ### The web flasher (recommended)
 
-<!-- SHOT: web-flasher.png - the web flasher's settings page on a desktop, the form on the left and the live preview of the Buddy beside it -->
+![Monitor-Buddy web flasher](docs/images/web-flasher.png)
 
 The **[Monitor-Buddy web flasher](https://idefixrc.github.io/Monitor-Buddy/)** installs the firmware over USB and writes your settings straight onto the board. No VS Code, no `config.h`, nothing to install.
 
