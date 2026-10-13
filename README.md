@@ -112,6 +112,8 @@ Your settings go straight to the Buddy. The page stores nothing in your browser,
 
 If an install gets interrupted, say the cable came out halfway, the Buddy can't start any more. That sounds worse than it is: connect it again and the page notices, offers **Install the firmware again**, and keeps the settings that were already on the board. If the page ever says it couldn't get ready for the install, unplug the Buddy, plug it back in and click **Try again**. The web flasher never needs the BOOT or RESET buttons.
 
+---
+
 ### Building it yourself
 
 This guide assumes you have never used VS Code or pioarduino. It is written for **Windows**, with notes for **macOS** and **Linux** where they differ. It takes about 20 minutes the first time, most of which is software downloading in the background.
