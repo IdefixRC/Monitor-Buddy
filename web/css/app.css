@@ -949,8 +949,19 @@ main > :not(.form-layout) {
   margin: 0;
 }
 
+/* No room for the page name in the strip, but screen readers still read it
+   (display: none would hide it from them too). As .sr-only. */
 .buddy-preview--compact .buddy-preview__caption {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .buddy-preview--compact .buddy-preview__pause {
@@ -1671,6 +1682,12 @@ select.input {
   margin: 0.5rem 0 0;
   color: var(--danger);
   font-weight: 600;
+}
+
+/* Empty while there's nothing to say, but always in the page: an alert that is
+   merely un-hidden isn't announced by every screen reader. */
+.form-summary:empty {
+  margin: 0;
 }
 
 .form-summary p,
