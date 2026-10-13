@@ -112,8 +112,8 @@
 // Copy config/config.h.example to
 // config/config.h and edit it there — that file is gitignored so
 // your Finnhub API key never gets committed. If config/config.h is
-// absent the build falls back to the placeholder values in
-// config/config.h.example (the stock page just won't load data as it required the API key).
+// absent the build falls back to config/config.h.example, whose empty
+// Finnhub key and GitHub user hide the stock and GitHub pages.
 #if __has_include("config.h")
   #include "config.h"
 #else

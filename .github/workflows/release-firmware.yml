@@ -115,7 +115,11 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           if [[ "$TAG" != *-rc* ]] && [[ "$FORCE" != "true" ]]; then
-            if gh release view "$TAG" --repo "${{ github.repository }}" --json assets -q '.assets[].name' | grep -qx "monitor-buddy-${TAG#v}.bin"; then
+            # Fail closed: if the release can't be read, don't risk overwriting it.
+            if ! assets="$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets -q '.assets[].name')"; then
+              echo "::error::couldn't read the assets of $TAG; re-run, or use force"; exit 1
+            fi
+            if grep -qx "monitor-buddy-${TAG#v}.bin" <<< "$assets"; then
               echo "::error::$TAG is a final release and already has its firmware; re-run with force to replace it"; exit 1
             fi
           fi

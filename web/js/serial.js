@@ -246,8 +246,8 @@ export class BuddyPort {
         }
       }
       // Connected. Keep this connection and ask again until the deadline:
-      // setup() can block for ~18 s, and reopening the port on every miss could
-      // reset the board each time (if open-then-lower-DTR/RTS resets it).
+      // setup() can block for ~18 s, and reopening on every miss gains nothing
+      // (openQuietly doesn't reset the board; measured 2026-10-11).
       try {
         const info = await this.command("INFO", null, { attempts: 1, wait: READ_WAIT_MS });
         if (info.ok !== false) {
