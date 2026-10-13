@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Buddy diagnostics</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main class="page">
+  <h1>Buddy diagnostics</h1>
+  <p>A hidden test page for the Web Serial session and the flasher. <a href="./">Back to the flasher</a></p>
+  <p id="status">Not connected.</p>
+
+  <p>
+    <button id="pick">Pick and open</button>
+    <button id="info" disabled>INFO</button>
+    <button id="get" disabled>GET</button>
+    <button id="reboot" disabled>REBOOT</button>
+    <button id="reconnect" disabled>Reconnect</button>
+    <button id="close" disabled>Close</button>
+  </p>
+
+  <p>
+    <label>Firmware <select id="version" disabled><option>loading...</option></select></label>
+    <label><input type="checkbox" id="erase"> erase first</label>
+    <button id="flash" disabled>Flash from mirror</button>
+  </p>
+  <progress id="progress" max="1" value="0" hidden></progress>
+
+  <h2>Log</h2>
+  <pre id="log" style="white-space: pre-wrap; word-break: break-all; max-height: 50vh; overflow: auto"></pre>
+</main>
+
+<script type="module">
+  import { BuddyPort, change } from "./js/serial.js";
+  import { fetchImage, flashImage } from "./js/flasher.js";
+  // stock_key and the Wi-Fi password never go on screen: the flasher's own redaction.
+  import { redactLog } from "./js/form.js";
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+  let bp = null;
+  let releases = [];
+
+  function log(text, prefix = "  ") {
+    const t = new Date().toISOString().slice(11, 23);
+    logEl.textContent += `${t} ${prefix}${redactLog(String(text))}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  const status = (text) => { $("status").textContent = text; log(text, "* "); };
+  const show = (obj) => log(JSON.stringify(obj));
+
+  // Buttons follow the real state: bp.isOpen, whether we hold a port, a flash running.
+  let busy = false;
+  function sync() {
+    const open = !!(bp && bp.isOpen);
+    for (const id of ["info", "get", "reboot", "close"]) $(id).disabled = busy || !open;
+    $("reconnect").disabled = busy || !bp;
+    $("pick").disabled = busy || open || !BuddyPort.supported();
+    $("flash").disabled = busy || !releases.length;
+  }
+
+  // Run one action: log its start, its result, or its error.
+  async function run(name, fn) {
+    status(`${name}...`);
+    try {
+      const out = await fn();
+      status(`${name}: done`);
+      return out;
+    } catch (e) {
+      status(`${name}: failed (${e.name}: ${e.message})`);
+      if (e.stage) log(`stage: ${e.stage}`, "* ");
+    } finally {
+      sync();
+    }
+  }
+
+  function attach(b) {
+    b.onLine((line, dir) => log(line, dir === "tx" ? ">> " : "<< "));
+    b.onError((e) => status(`the port failed: ${e.message}`));
+  }
+
+  if (!BuddyPort.supported()) {
+    status("This browser has no Web Serial. Use Chrome or Edge on a computer.");
+  }
+
+  $("pick").onclick = () => run("Pick and open", async () => {
+    bp = await BuddyPort.pick();
+    attach(bp);
+    await bp.open();
+    const info = JSON.stringify(bp.port.getInfo());
+    log(`port ${info}`, "* ");
+  });
+
+  $("info").onclick = () => run("INFO", async () => show(await bp.command("INFO")));
+
+  $("get").onclick = () => run("GET", async () => show(await bp.command("GET")));
+
+  $("reboot").onclick = () => run("REBOOT", async () => {
+    const c = await change(bp, "REBOOT", null, { waitRestart: true });
+    if (c.reply) show(c.reply);
+    if (c.note) log(c.note, "* ");
+    if (!c.ok) throw new Error(c.note || "the Buddy refused");
+  });
+
+  $("reconnect").onclick = () => run("Reconnect", async () => show(await bp.reconnect()));
+
+  $("close").onclick = () => run("Close", async () => {
+    await bp.close();
+  });
+
+  // The mirror's release list: every entry, newest first as published.
+  async function loadReleases() {
+    const sel = $("version");
+    try {
+      const r = await fetch("firmware/releases.json", { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      releases = (await r.json()).releases || [];
+      sel.textContent = "";
+      for (const e of releases) {
+        sel.add(new Option(e.version + (e.prerelease ? " (pre-release)" : ""), e.version));
+      }
+      sel.disabled = !releases.length;
+      if (!releases.length) sel.add(new Option("none mirrored yet", ""));
+    } catch (e) {
+      sel.textContent = "";
+      sel.add(new Option("no release list", ""));
+      log(`could not load firmware/releases.json: ${e.message}`, "* ");
+    }
+    sync();
+  }
+
+  $("flash").onclick = () => run("Flash", async () => {
+    const entry = releases.find((e) => e.version === $("version").value);
+    if (!entry) throw new Error("pick a firmware version");
+    busy = true;
+    sync();
+    // The port picker needs the click's user activation, which expires after a
+    // few seconds, so pick (or keep) the port BEFORE the download.
+    if (!bp) { bp = await BuddyPort.pick(); attach(bp); }
+    status(`downloading ${entry.version}`);
+    const image = await fetchImage(entry, new URL("./", location.href));
+    log(`image ok: ${image.length} bytes, SHA-256 matches`, "* ");
+    // esptool-js opens the port itself, so it has to be closed here.
+    await bp.close();
+    const bar = $("progress");
+    bar.hidden = false;
+    bar.value = 0;
+    try {
+      await flashImage(bp.port, image, {
+        erase: $("erase").checked,
+        onProgress: (f) => { bar.value = f; },
+        log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] "),
+      });
+    } finally {
+      bar.hidden = true;
+    }
+    status("Flashed. The Buddy restarts; press Reconnect once it is back.");
+  }).finally(() => { busy = false; sync(); });
+
+  sync();
+  loadReleases();
+</script>
+</body>
+</html>

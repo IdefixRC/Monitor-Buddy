@@ -1,0 +1,20 @@
+name: Pages refresh
+
+# When a release is edited (e.g. its pre-release flag), deleted or unpublished,
+# rebuild the Pages mirror on main so releases.json matches the releases.
+on:
+  release:
+    types: [edited, deleted, unpublished]
+
+permissions:
+  actions: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start the Pages workflow on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main --repo "${{ github.repository }}"

@@ -101,6 +101,7 @@
 #include <esp_mac.h>
 #include "settings.h"
 #include "protocol.h"
+#include "display_fmt.h"
 
 // Set from the release tag by the release workflow (-DFW_VERSION=\"1.2.0\").
 #ifndef FW_VERSION
@@ -111,8 +112,8 @@
 // Copy config/config.h.example to
 // config/config.h and edit it there — that file is gitignored so
 // your Finnhub API key never gets committed. If config/config.h is
-// absent the build falls back to the placeholder values in
-// config/config.h.example (the stock page just won't load data as it required the API key).
+// absent the build falls back to config/config.h.example, whose empty
+// Finnhub key and GitHub user hide the stock and GitHub pages.
 #if __has_include("config.h")
   #include "config.h"
 #else
@@ -292,6 +293,7 @@ void switchApp(int8_t delta);
 void buildPageList();
 bool wifiConfigured();
 bool githubConfigured();
+bool stockConfigured();
 bool ensureWifi();
 void syncNTP();
 void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color);
@@ -970,6 +972,7 @@ void buildPageList() {
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
+    if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     pageOrder[pageCount++] = i;
   }
   if (pageCount == 0) pageOrder[pageCount++] = PAGE_FACE;  // never leave it empty
@@ -995,6 +998,7 @@ void switchApp(int8_t delta) {
 // non-empty ssid+password were parsed from it at begin().
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return settings.githubUser[0] != '\0'; }
+bool stockConfigured() { return settings.stockKey[0] != '\0'; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -1364,14 +1368,14 @@ void drawBitmapScaled(int x, int y, const uint8_t *bmp, int w, int h, int scale,
 void drawEyelidMask(int ix, int iy, int iw, int ih, uint8_t mood, bool isLeft) {
   int slant = (int)(iw * 0.167f);
   int band  = (int)(ih * 0.44f);
-  if (mood == MOOD_ANGRY) {                       // brows angled in
-    for (int i = 0; i < band; i++)
-      if (isLeft) gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
-      else        gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
-  } else if (mood == MOOD_SAD) {                  // brows angled out (inverse)
+  if (mood == MOOD_ANGRY) {                       // angry: lids lowered towards the nose (a frown)
     for (int i = 0; i < band; i++)
       if (isLeft) gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
       else        gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
+  } else if (mood == MOOD_SAD) {                  // sad: lids lowered at the outer corners (a droop)
+    for (int i = 0; i < band; i++)
+      if (isLeft) gfx->drawLine(ix, iy + i,         ix + iw, iy - slant + i, BG);
+      else        gfx->drawLine(ix, iy - slant + i, ix + iw, iy + i,         BG);
   } else if (mood == MOOD_SLEEPY) {               // heavy top lids
     gfx->fillRect(ix, iy, iw, ih / 2 + 5, BG);
   } else if (mood == MOOD_SUSPICIOUS) {           // one squint, one wide
@@ -1798,15 +1802,18 @@ void drawGithub() {
 
   // Stats on the right: followers large, repos smaller beneath.
   const int rx = 150;
+  char fbuf[16], rbuf[16];
+  formatCount(g.followers, fbuf, sizeof(fbuf));
+  formatCount(g.repos, rbuf, sizeof(rbuf));
   gfx->setTextColor(COL_GHNUM);
-  gfx->setTextSize(6);
-  gfx->setCursor(rx, 22);  gfx->print(g.followers);
+  gfx->setTextSize(followerTextSize(fbuf));      // 5 digits at size 6 would run off the screen
+  gfx->setCursor(rx, 22);  gfx->print(fbuf);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(2);
   gfx->setCursor(rx, 78);  gfx->print("FOLLOWERS");
   gfx->setTextColor(COL_VALUE);
   gfx->setTextSize(3);
-  gfx->setCursor(rx, 110); gfx->print(g.repos);
+  gfx->setCursor(rx, 110); gfx->print(rbuf);
   gfx->setTextColor(COL_LABEL);
   gfx->setTextSize(1);
   gfx->setCursor(rx, 140); gfx->print("REPOS");
@@ -1907,7 +1914,9 @@ Settings defaultsFromConfig() {
   else if (!tzRuleFromOffset(TZ_OFFSET_HOURS, d.tzRule, sizeof(d.tzRule)))
     strlcpy(d.tzRule, "UTC0", sizeof(d.tzRule));
   strlcpy(d.ticker,   TICKER,   sizeof(d.ticker));
-  strlcpy(d.stockKey, STOCKKEY, sizeof(d.stockKey));
+  // Before 1.2 the template's key was the placeholder "xxxxxxx": no key at all,
+  // so it hides the stock page like "" does (the web flasher maps it the same).
+  strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
   d.tempFahrenheit = TEMP[0] == 'f';
@@ -2412,7 +2421,7 @@ void netTask(void *) {
     bool ran = false, usedTls = false;
     // Weather and GitHub are paced by data age after a success (okWaitMs 0),
     // stock by STOCK_REFRESH_MS; all three back off after a failure.
-    if (settings.pages[PAGE_STOCK] && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
+    if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
       runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (settings.pages[PAGE_WEATHER]

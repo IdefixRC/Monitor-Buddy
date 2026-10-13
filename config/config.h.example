@@ -21,15 +21,15 @@
 //     only config file tracked by git.
 //
 //  If config/config.h is missing, the project still builds using
-//  the placeholder values in this template.
+//  the default values in this template.
 //
 //  A few entries are worth setting:
 //   Mount:   Left or right side of your monitor.
-//   Github:  Replace the username with your own.
+//   Github:  Your username, to show the GitHub page (empty hides it).
 //   Time:    Set your IANA timezone name, and your UTC offset or a
 //            TZ_RULE with daylight saving.
 //   Stocks:  Set a US stock ticker and your free Finnhub API key
-//            (register at https://finnhub.io).
+//            (register at https://finnhub.io); an empty key hides the page.
 //   Weather: Set LAT/LONG to your location, pick temp/wind units.
 //   Theme:   Pick one of the five colour themes.
 //   Pages:   Toggle each page on/off.
@@ -50,9 +50,8 @@
 #define THEME 2
 
 // ── GitHub ──────────────────────────────────────────────────
-// Your GitHub username, shown on the stats page. Leave "" to
-// disable the GitHub page.
-#define GITHUB_USER   "IdefixRC"
+// Your GitHub username for the stats page. Leave "" to hide the page.
+#define GITHUB_USER   ""
 
 // ── Time ────────────────────────────────────────────────────
 // TIMEZONE   IANA name — used for the weather request.
@@ -71,9 +70,10 @@
 // ── Stock market ────────────────────────────────────────────
 // Quotes come from Finnhub (https://finnhub.io/).
 // TICKER    US stock symbol (the free Finnhub tier is US only).
-// STOCKKEY  Your Finnhub API token — create a free account to get one.
+// STOCKKEY  Your free Finnhub API key from https://finnhub.io/register.
+//           Leave "" to hide the stock page.
 #define TICKER    "AAPL"
-#define STOCKKEY  "xxxxxxx"
+#define STOCKKEY  ""
 
 // ── Weather ─────────────────────────────────────────────────
 // LAT / LONG  Your location for weather queries.

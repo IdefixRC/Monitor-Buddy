@@ -12,6 +12,10 @@ on:
       tag:
         description: "Release tag to (re)build, e.g. v1.2.0-rc1"
         required: true
+      force:
+        description: "Replace the files of a final release that already has them"
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.event.release.tag_name || inputs.tag }}
@@ -106,6 +110,19 @@ jobs:
         with:
           name: release-files
           path: dist
+      - name: Refuse to replace a published final release
+        env:
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          if [[ "$TAG" != *-rc* ]] && [[ "$FORCE" != "true" ]]; then
+            # Fail closed: if the release can't be read, don't risk overwriting it.
+            if ! assets="$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets -q '.assets[].name')"; then
+              echo "::error::couldn't read the assets of $TAG; re-run, or use force"; exit 1
+            fi
+            if grep -qx "monitor-buddy-${TAG#v}.bin" <<< "$assets"; then
+              echo "::error::$TAG is a final release and already has its firmware; re-run with force to replace it"; exit 1
+            fi
+          fi
       - name: Attach to the release
         run: gh release upload "$TAG" dist/monitor-buddy-*.bin dist/Monitor-Buddy-*.zip --clobber --repo ${{ github.repository }}
       - name: Rebuild the Pages mirror

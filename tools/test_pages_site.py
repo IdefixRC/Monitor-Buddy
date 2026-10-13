@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -224,6 +225,108 @@ class Main(unittest.TestCase):
         self.assertIn("refusing", err.getvalue())
         self.assertEqual(self.calls, [])
         self.assertTrue((repo / "web" / "index.html").is_file())
+
+
+
+# ── Versioned code URLs (hardware test 2026-10-12, finding F) ──
+# Pages caches for 10 minutes. Without a version in the URLs, a visitor could
+# run a new app.js with old cached modules and fail mid-flash.
+
+RELATIVE_JS = r"""(?:\bfrom|\bimport)\s*\(?\s*["'](\.{1,2}/[^"']+?\.m?js(?:\?[^"']*)?)["']"""
+
+
+def write_site(root):
+    files = {
+        "index.html": '<link rel="icon" href="data:image/svg+xml,x.js">\n'
+                      '<link rel="stylesheet" href="css/app.css">\n'
+                      '<link rel="modulepreload" href="js/app.js">\n'
+                      '<a href="https://example.com/a.js">x</a>\n'
+                      '<script type="module" src="js/app.js"></script>\n',
+        "dev.html": '<script type="module">\nimport { BuddyPort } from "./js/a.js";\n</script>\n',
+        "js/app.js": 'import { a } from "./a.js";\nimport {\n  b,\n} from "./b.js";\n'
+                     'const fake = await import("./fake.js");\nfetch("firmware/releases.json");\n',
+        "js/a.js": 'import { E } from "../vendor/lib/bundle.js";\nexport const a = E;\n',
+        "js/b.js": "export const b = 2;\n",
+        "js/fake.js": "export default 3;\n",
+        "vendor/lib/bundle.js": "export const E = 1;\n",
+        "css/app.css": "body { color: red; }\n",
+    }
+    for rel, text in files.items():
+        p = Path(root) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+
+def specifiers(root):
+    found = []
+    for p in Path(root).rglob("*"):
+        if p.suffix in (".js", ".mjs", ".html"):
+            import re
+            found += re.findall(RELATIVE_JS, p.read_text(encoding="utf-8"))
+    return found
+
+
+class StampAssets(unittest.TestCase):
+    def test_version_follows_the_content(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            write_site(a)
+            write_site(b)
+            va = ps.site_version(Path(a))
+            self.assertRegex(va, r"^[0-9a-f]{10}$")
+            self.assertEqual(va, ps.site_version(Path(b)))
+            (Path(b) / "js/b.js").write_text("export const b = 3;\n", encoding="utf-8")
+            self.assertNotEqual(va, ps.site_version(Path(b)))
+
+    def test_every_relative_import_carries_the_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_site(d)
+            ps.stamp_assets(Path(d), "abc1234567")
+            found = specifiers(d)
+            self.assertEqual(len(found), 5)  # app: a, b, fake; a: bundle; dev: a
+            for spec in found:
+                self.assertTrue(spec.endswith("?v=abc1234567"), spec)
+
+    def test_html_code_links_carry_the_version_and_nothing_else_changes(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_site(d)
+            ps.stamp_assets(Path(d), "abc1234567")
+            html = (Path(d) / "index.html").read_text(encoding="utf-8")
+            self.assertIn('href="css/app.css?v=abc1234567"', html)
+            self.assertIn('href="js/app.js?v=abc1234567"', html)
+            self.assertIn('src="js/app.js?v=abc1234567"', html)
+            self.assertIn('href="data:image/svg+xml,x.js"', html)
+            self.assertIn('href="https://example.com/a.js"', html)
+            app = (Path(d) / "js/app.js").read_text(encoding="utf-8")
+            self.assertIn('fetch("firmware/releases.json")', app)
+
+    def test_a_from_call_is_not_an_import(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.js"
+            p.write_text('const a = Array.from("./data.js");\nimport { b } from "./b.js";\n', encoding="utf-8")
+            ps.stamp_assets(Path(d), "abc1234567")
+            text = p.read_text(encoding="utf-8")
+            self.assertIn('Array.from("./data.js")', text)
+            self.assertIn('from "./b.js?v=abc1234567"', text)
+
+    def test_stamping_twice_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_site(d)
+            ps.stamp_assets(Path(d), "abc1234567")
+            before = {p: p.read_bytes() for p in Path(d).rglob("*") if p.is_file()}
+            ps.stamp_assets(Path(d), "abc1234567")
+            self.assertEqual(before, {p: p.read_bytes() for p in Path(d).rglob("*") if p.is_file()})
+
+    def test_the_real_site_has_no_unversioned_import_left(self):
+        repo = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "site"
+            shutil.copytree(repo / "web", out)
+            ps.stamp_assets(out, "abc1234567")
+            found = specifiers(out)
+            self.assertGreater(len(found), 15)
+            self.assertEqual([s for s in found if not s.endswith("?v=abc1234567")], [])
+            html = (out / "index.html").read_text(encoding="utf-8")
+            self.assertEqual(html.count("?v=abc1234567"), 3)  # app.css, modulepreload, script
 
 
 if __name__ == "__main__":

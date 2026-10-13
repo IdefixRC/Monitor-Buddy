@@ -89,6 +89,48 @@ def select(listed):
     return [(tag, r) for _, tag, r in picked]
 
 
+# Pages caches every file for 10 minutes, so right after a deploy a visitor
+# could run a new app.js with old cached modules (hardware test 2026-10-12).
+# Every code URL carries the site's version: a new deploy is new URLs.
+# `from "./x.js"`, `import "./x.js"` and `import("./x.js")`; not `Array.from("./x.js")`.
+_JS_IMPORT = re.compile(r"""((?:\bfrom\s*|\bimport\s*\(?\s*))(["'])(\.{1,2}/[^"'?#]+?\.m?js)\2""")
+_HTML_REF = re.compile(r"""(\b(?:src|href)=)(["'])((?![a-z][a-z0-9+.-]*:|/)[^"'?#]+\.(?:m?js|css))\2""",
+                       re.IGNORECASE)
+
+
+def site_version(root):
+    """A short hash of every file under `root`: it changes whenever the site does."""
+    root = Path(root)
+    h = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        h.update(path.relative_to(root).as_posix().encode() + b"\n" + path.read_bytes() + b"\n")
+    return h.hexdigest()[:10]
+
+
+def stamp_assets(root, version):
+    """Appends ?v=<version> to every relative module import (in .js, .mjs and
+    .html) and to the .js and .css links in the HTML. Every import of a module
+    must carry the same URL, or the browser loads it twice. Data fetches are
+    left alone. Running it again changes nothing. Returns the number of edits."""
+    edits = 0
+
+    def stamp(m):
+        nonlocal edits
+        edits += 1
+        return f"{m.group(1)}{m.group(2)}{m.group(3)}?v={version}{m.group(2)}"
+
+    for path in Path(root).rglob("*"):
+        if path.suffix not in (".js", ".mjs", ".html") or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        new = _JS_IMPORT.sub(stamp, text)
+        if path.suffix == ".html":
+            new = _HTML_REF.sub(stamp, new)
+        if new != text:
+            path.write_text(new, encoding="utf-8", newline="")
+    return edits
+
+
 def check_out_dir(repo, out):
     """Why `out` must not be wiped and rebuilt, or None when it is fine. main()
     deletes `out`, so it must never be the repo, one of its parents, web/ or .git/."""
@@ -128,6 +170,8 @@ def main(argv):
     if out.exists():
         shutil.rmtree(out)
     shutil.copytree(repo / "web", out)
+    version = site_version(out)
+    print(f"site version {version}: {stamp_assets(out, version)} code URLs stamped")
     firmware = out / "firmware"
     firmware.mkdir(exist_ok=True)
 
