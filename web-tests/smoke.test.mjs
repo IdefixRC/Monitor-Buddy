@@ -21,3 +21,24 @@ test("every S.… text the app uses exists", () => {
   const missing = [...paths].filter((p) => p.split(".").reduce((o, k) => (o == null ? o : o[k]), S) === undefined);
   assert.deepEqual(missing, []);
 });
+
+// ── Accessibility follow-ups from the GUI review (2026-10-13) ─
+
+test("the phone strip hides the page name from sight, not from screen readers", () => {
+  const css = readFileSync(new URL("../web/css/app.css", import.meta.url), "utf8");
+  const rule = css.match(/\.buddy-preview--compact \.buddy-preview__caption \{([^}]*)\}/);
+  assert.ok(rule, "the compact caption rule exists");
+  assert.doesNotMatch(rule[1], /display:\s*none|visibility:\s*hidden/);
+  assert.match(rule[1], /clip:\s*rect\(0 0 0 0\)/);
+});
+
+test("the form's error alert stays in the page instead of being un-hidden", () => {
+  const app = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.match(app, /h\("div", \{ class: "form-summary", role: "alert" \}\)/);
+  assert.doesNotMatch(app, /summary\.hidden\s*=/);
+});
+
+test("leaving the form drops the strip's scroll padding", () => {
+  const app = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.match(app, /removeProperty\("--strip-h"\)/);
+});

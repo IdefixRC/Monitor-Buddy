@@ -753,6 +753,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       narrow.removeEventListener("change", fit);
       window.removeEventListener("resize", measure);
       ro.disconnect();
+      // The strip is gone: its scroll padding must not outlive the form.
+      document.documentElement.style.removeProperty("--strip-h");
       preview.destroy();
     });
     const say = (text, t = "") => bubble.replaceChildren(h("p", { class: t ? `bubble__line bubble__line--${t}` : "bubble__line" }, rich(text)));
@@ -1055,7 +1057,11 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
 
     // The buttons.
-    const summary = h("div", { class: "form-summary", role: "alert", hidden: true });
+    // Always in the page and only refilled when the errors change: an alert
+    // that is merely un-hidden isn't announced by every screen reader, and one
+    // refilled on every keystroke would be announced over and over.
+    const summary = h("div", { class: "form-summary", role: "alert" });
+    let summaryShown = "";
     // Already flashed: there is no going back from these two.
     const backTo = f.flow === "review" || f.flow === "setup" ? null : (app.info ? showHome : showPathB);
     // Enter never saves, flashes or restarts (Eric, 2026-10-12). Only the
@@ -1072,9 +1078,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     refreshers.push(() => {
       // Errors with no field of their own (a SET error on "wifi", say) are listed here.
       const orphans = Object.entries(currentErrors).filter(([k]) => !slots.has(k)).map(([, msg]) => msg);
-      summary.hidden = !(f.submitted && Object.keys(currentErrors).length);
-      summary.replaceChildren(h("p", {}, S.form.summary));
-      if (orphans.length) summary.append(h("ul", {}, orphans.map((o) => h("li", {}, o))));
+      const show = f.submitted && Object.keys(currentErrors).length > 0;
+      const now = show ? JSON.stringify(orphans) : "";
+      if (now === summaryShown) return;
+      summaryShown = now;
+      const parts = show ? [h("p", {}, S.form.summary)] : [];
+      if (show && orphans.length) parts.push(h("ul", {}, orphans.map((o) => h("li", {}, o))));
+      summary.replaceChildren(...parts);
     });
 
     function submit() {
