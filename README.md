@@ -46,6 +46,8 @@ The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-print
 | Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)             |
 | USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)  |
 
+**IMPORTANT:** Please make sure you purchase the touchscreen version of the ESP-32-C6  (see link above). Non-touchscreen versions are smaller and will not fit the holder. In addition, the code will not work as intended **!!**
+
 You also need a computer to flash the board once. After that the USB-C cable is only for power, so any charger or a spare USB port on the monitor will do.
 
 Nothing else. No resistors, no headers, no hot glue.
