@@ -1,7 +1,7 @@
 // A Web Serial session with a Monitor Buddy, speaking the @MB protocol.
 // Mirrors tools/mb_serial.py (command, read_reply, reconnect, drain, change,
 // verify_change). Browser only: it needs navigator.serial.
-import { CHANGING, LineSplitter, answers, makeIdSource, parseReply, requestLine } from "./protocol.js";
+import { CHANGING, LineSplitter, answers, makeIdSource, parseReply, requestLine, sameMac } from "./protocol.js";
 
 export const BAUD = 115200;
 export const ESPRESSIF_VID = 0x303a;
@@ -63,6 +63,7 @@ export class BuddyPort {
     this.lost = false; // the reader ended or failed while open: the device is gone
     this.stalled = false; // a write never completed: the Buddy isn't reading
     this.writeWaitMs = WRITE_WAIT_MS;
+    this.mac = ""; // the board's MAC from INFO: reconnect() and the flash accept only this one
   }
 
   static supported() {
@@ -128,7 +129,7 @@ export class BuddyPort {
     this._emit(line, "rx");
     const reply = parseReply(line);
     if (!reply) return;
-    const i = this.waiters.findIndex((w) => answers(reply, w.cmd, w.id));
+    const i = this.waiters.findIndex((w) => (w.any ? reply.cmd === w.cmd : answers(reply, w.cmd, w.id)));
     if (i >= 0) {
       const [w] = this.waiters.splice(i, 1);
       w.resolve(reply);
@@ -213,15 +214,36 @@ export class BuddyPort {
     throw new NoReply(`no reply to ${cmd}`);
   }
 
+  // The next reply to `cmd`, whatever its id, or null after ms. Sends nothing:
+  // it catches a late answer to a request already written (probe()).
+  async waitForReply(cmd, ms) {
+    if (!this.isOpen) return null;
+    let waiter, timer;
+    const replied = new Promise((resolve) => { waiter = { cmd, any: true, resolve }; });
+    this.waiters.push(waiter);
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); });
+    try {
+      return await Promise.race([replied, timeout]);
+    } finally {
+      clearTimeout(timer);
+      const i = this.waiters.indexOf(waiter);
+      if (i >= 0) this.waiters.splice(i, 1);
+    }
+  }
+
   // Discard input until the line has been silent for quietMs.
   async drain(quietMs = 500) {
     this.lastRx = Date.now();
     while (Date.now() - this.lastRx < quietMs) await sleep(50);
   }
 
+  // The current port while it is listed; otherwise the one Buddy that is.
+  // With several listed it never guesses: they all look alike (VID/PID), and
+  // the wrong pick would flash or erase another board (review, 2026-10-13).
   async _findPort() {
     const ports = (await navigator.serial.getPorts()).filter(isBuddy);
-    return ports.includes(this.port) ? this.port : ports[0] || null;
+    if (ports.includes(this.port)) return this.port;
+    return ports.length === 1 ? ports[0] : null;
   }
 
   // After a restart: reopen the device (it vanishes from USB for a moment and
@@ -250,7 +272,14 @@ export class BuddyPort {
       // (openQuietly doesn't reset the board; measured 2026-10-11).
       try {
         const info = await this.command("INFO", null, { attempts: 1, wait: READ_WAIT_MS });
+        if (info.ok !== false && this.mac && info.mac && !sameMac(info.mac, this.mac)) {
+          // Another Buddy answered (its port came up first): not ours. Look again.
+          await this.close();
+          await sleep(500);
+          continue;
+        }
         if (info.ok !== false) {
+          if (!this.mac && info.mac) this.mac = info.mac;
           // Earlier probes sat in the Buddy's RX buffer while setup() ran, so it
           // answers them in a burst right after. Drop those replies.
           await this.drain(500);
@@ -264,6 +293,51 @@ export class BuddyPort {
       }
     }
     throw new NoReply("the Buddy did not come back");
+  }
+}
+
+// At most this many INFO lines go out before the board has answered one
+// (review, 2026-10-13). The C6's USB input buffer holds 64 bytes and an INFO
+// line is about 27, so a board that never reads USB keeps two; a third would
+// stick in the port, which Chrome then can't close until a replug. Waveshare's
+// factory demo is such a board: its USB console is output only.
+export const PROBE_WRITES = 2;
+export const PROBE_MAX_MS = 25000;
+
+// Asks INFO and tells a Buddy that answers from one that doesn't. Resolves
+// the INFO reply, or null (no Buddy that speaks @MB: path B). rx is
+// { last, status }: when the last line arrived, and whether a status line
+// ("app=...") showed the main loop running. A Buddy that was just plugged in
+// sits in setup() for up to ~18 s and answers nothing, so while boot lines
+// keep coming the probe waits, listening for the late answer instead of
+// writing more. Any answer proves the board reads, and then asking again is
+// safe. Throws when the port goes away.
+export async function probe(bp, rx, {
+  onBooting = () => {}, maxMs = PROBE_MAX_MS, firstWaitMs = 1000, waitMs = 1500, pauseMs = 1000,
+} = {}) {
+  const start = Date.now();
+  let told = false;
+  let reads = false;
+  let sent = 0;
+  for (;;) {
+    if (!bp.isOpen || bp.lost) throw new Error("the port went away");
+    let r = null;
+    if (reads || sent < PROBE_WRITES) {
+      sent++;
+      try {
+        r = await bp.command("INFO", null, { attempts: 1, wait: sent === 1 ? firstWaitMs : waitMs });
+      } catch (e) {
+        if (!(e instanceof NoReply)) throw e;
+      }
+    } else {
+      r = await bp.waitForReply("INFO", waitMs);
+    }
+    if (r && r.ok) return r;
+    if (r) reads = true; // "restarting": a 1.2+ Buddy on its way
+    const booting = !!r || (Date.now() - rx.last < 3000 && !rx.status);
+    if (!booting || Date.now() - start > maxMs) return null;
+    if (!told) { onBooting(); told = true; }
+    if (r) await sleep(pauseMs);
   }
 }
 

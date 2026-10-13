@@ -92,7 +92,8 @@ def select(listed):
 # Pages caches every file for 10 minutes, so right after a deploy a visitor
 # could run a new app.js with old cached modules (hardware test 2026-10-12).
 # Every code URL carries the site's version: a new deploy is new URLs.
-_JS_IMPORT = re.compile(r"""((?:\bfrom|\bimport)\s*\(?\s*)(["'])(\.{1,2}/[^"'?#]+?\.m?js)\2""")
+# `from "./x.js"`, `import "./x.js"` and `import("./x.js")`; not `Array.from("./x.js")`.
+_JS_IMPORT = re.compile(r"""((?:\bfrom\s*|\bimport\s*\(?\s*))(["'])(\.{1,2}/[^"'?#]+?\.m?js)\2""")
 _HTML_REF = re.compile(r"""(\b(?:src|href)=)(["'])((?![a-z][a-z0-9+.-]*:|/)[^"'?#]+\.(?:m?js|css))\2""",
                        re.IGNORECASE)
 

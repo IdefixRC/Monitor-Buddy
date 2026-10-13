@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble } from "../web/js/protocol.js";
+import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble, sameMac } from "../web/js/protocol.js";
 
 test("ids start at the given value, increase and wrap", () => {
   const next = makeIdSource(MAX_ID - 1);
@@ -76,4 +76,16 @@ test("one clean boot, or a running Buddy, is no trouble", () => {
 
 test("a board already in download mode is recognised", () => {
   assert.equal(romTrouble(["rst:0x1 (POWERON),boot:0x1f (DOWNLOAD(USB/UART0/SDIO_FEI_FEO))", "waiting for download"]), "download");
+});
+
+// ── Which Buddy is this? (review, 2026-10-13) ─────────────
+// INFO reports the base MAC; esptool may print it as an EUI-64 (ff:fe in the middle).
+
+test("sameMac() matches the base MAC in either form, and nothing else", () => {
+  assert.equal(sameMac("b0:a6:04:8b:03:f0", "B0:A6:04:8B:03:F0"), true);
+  assert.equal(sameMac("b0:a6:04:ff:fe:8b:03:f0", "b0:a6:04:8b:03:f0"), true);
+  assert.equal(sameMac("b0a6048b03f0", "b0:a6:04:8b:03:f0"), true);
+  assert.equal(sameMac("58:8c:81:5a:33:fc", "b0:a6:04:8b:03:f0"), false);
+  assert.equal(sameMac("", "b0:a6:04:8b:03:f0"), false);
+  assert.equal(sameMac(undefined, undefined), false);
 });

@@ -36,20 +36,17 @@
 <script type="module">
   import { BuddyPort, change } from "./js/serial.js";
   import { fetchImage, flashImage } from "./js/flasher.js";
+  // stock_key and the Wi-Fi password never go on screen: the flasher's own redaction.
+  import { redactLog } from "./js/form.js";
 
   const $ = (id) => document.getElementById(id);
   const logEl = $("log");
   let bp = null;
   let releases = [];
 
-  // stock_key and the Wi-Fi password never go on screen, in the raw log or elsewhere.
-  const redactText = (s) => s
-    .replace(/("stock_key"\s*:\s*)"(?:[^"\\]|\\.)+"/g, '$1"<redacted>"')
-    .replace(/("password"\s*:\s*)"(?:[^"\\]|\\.)+"/g, '$1"<redacted>"');
-
   function log(text, prefix = "  ") {
     const t = new Date().toISOString().slice(11, 23);
-    logEl.textContent += `${t} ${prefix}${redactText(String(text))}\n`;
+    logEl.textContent += `${t} ${prefix}${redactLog(String(text))}\n`;
     logEl.scrollTop = logEl.scrollHeight;
   }
   const status = (text) => { $("status").textContent = text; log(text, "* "); };

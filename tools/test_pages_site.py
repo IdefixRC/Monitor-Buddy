@@ -299,6 +299,15 @@ class StampAssets(unittest.TestCase):
             app = (Path(d) / "js/app.js").read_text(encoding="utf-8")
             self.assertIn('fetch("firmware/releases.json")', app)
 
+    def test_a_from_call_is_not_an_import(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.js"
+            p.write_text('const a = Array.from("./data.js");\nimport { b } from "./b.js";\n', encoding="utf-8")
+            ps.stamp_assets(Path(d), "abc1234567")
+            text = p.read_text(encoding="utf-8")
+            self.assertIn('Array.from("./data.js")', text)
+            self.assertIn('from "./b.js?v=abc1234567"', text)
+
     def test_stamping_twice_changes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             write_site(d)

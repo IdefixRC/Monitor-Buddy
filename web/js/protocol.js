@@ -61,3 +61,16 @@ export function romTrouble(lines) {
   }
   return null;
 }
+
+// Whether two MAC strings name the same board (review, 2026-10-13). INFO
+// reports the base MAC; esptool can print it as an EUI-64 with ff:fe in the
+// middle. Web Serial shows only VID/PID, the same for every Buddy, so with two
+// Buddies on one computer the MAC is what tells them apart.
+const macHex = (m) => {
+  const h = String(m || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+  return h.length === 16 && h.slice(6, 10) === "fffe" ? h.slice(0, 6) + h.slice(10) : h;
+};
+export function sameMac(a, b) {
+  const x = macHex(a);
+  return x.length === 12 && x === macHex(b);
+}

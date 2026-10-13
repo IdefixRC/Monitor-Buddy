@@ -2,9 +2,9 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, NoReply, change } from "./serial.js";
+import { BuddyPort, change, probe } from "./serial.js";
 import { romTrouble } from "./protocol.js";
-import { fetchImage, flashImage, FlashError, ImageMismatch } from "./flasher.js";
+import { fetchImage, flashImage, FlashError, ImageMismatch, WrongBoard } from "./flasher.js";
 import { parseManifest, offered, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup } from "./settings.js";
 import { parseConfigH } from "./configh.js";
@@ -305,38 +305,16 @@ async function probeAndRouteOnce() {
     return showPathB();
   }
   let info = null;
+  app.rx.status = false;
   try {
-    info = await probe(bp, () => g.say(S.connecting.booting));
+    info = await probe(bp, app.rx, { onBooting: () => g.say(S.connecting.booting) });
   } catch (e) {
     return showProblem(S.connecting.lost, e, { retry: connect, retryLabel: S.connect });
   }
   app.info = info;
+  if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
   if (info) showHome();
   else showPathB();
-}
-
-// INFO up to 3 times; then, while boot-log lines keep arriving and no status
-// line ("app=...") has shown that the main loop runs, keep asking: a Buddy
-// that was just plugged in sits in setup() for up to ~18 s and answers nothing.
-const PROBE_MAX_MS = 25000;
-async function probe(bp, onBooting) {
-  const start = Date.now();
-  app.rx.status = false;
-  let told = false;
-  for (let round = 0; ; round++) {
-    let alive = false;
-    try {
-      const r = await bp.command("INFO", null, { attempts: round ? 1 : 3, wait: round ? 1500 : 1000 });
-      if (r && r.ok) return r;
-      alive = true; // "restarting": a 1.2+ Buddy on its way
-    } catch (e) {
-      if (!(e instanceof NoReply)) throw e;
-    }
-    const booting = alive || (Date.now() - app.rx.last < 3000 && !app.rx.status);
-    if (!booting || Date.now() - start > PROBE_MAX_MS) return null;
-    if (!told) { onBooting(); told = true; }
-    if (alive) await sleep(1000);
-  }
 }
 
 async function infoOnce() {
@@ -1346,6 +1324,7 @@ async function writeImage(entry, image, ui) {
   try {
     await dev.flashImage(port, image, {
       erase: flow.erase,
+      expectedMac: app.bp.mac, // known on path A: never flash another Buddy
       onStage: (s) => ui.stage(s === "reset" ? "restart" : s),
       onProgress: (x) => ui.progress(x),
       log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] "),
@@ -1362,6 +1341,9 @@ async function writeImage(entry, image, ui) {
       // and manual BOOT/RESET takes the board off USB altogether (measured
       // 2026-10-12). A stale handle refind() missed, or stuck bytes Chrome won't
       // let go of: a replug fixes both.
+      if (e instanceof FlashError && e.cause instanceof WrongBoard) {
+        return showProblem(S.flash.wrongBoard, null, { retry: () => writeImage(entry, image) });
+      }
       if (e instanceof FlashError && e.stage === "connect") return showProblem(S.flash.replug, null, { retry: () => writeImage(entry, image) });
       const text = e instanceof FlashError && e.stage === "erase" ? S.flash.eraseFailed : S.flash.writeFailed;
       return showProblem(text, null, { retry: () => writeImage(entry, image) });
@@ -1402,8 +1384,14 @@ async function afterFlash(entry, ui) {
   if (app.form.flow === "recover") {
     app.expectDrop = false;
     if (afterRecovery(got) === "keep") {
-      // What the Buddy saved survived the cut-off install: nothing to write.
-      app.form = newFormState(fromBoard(got.config), { flow: "change", info });
+      // What the Buddy saved survived the cut-off install: nothing to write,
+      // unless this firmware brings settings the saved ones predate. Those get
+      // the same review as after an update.
+      const added = got.added || [];
+      app.form = newFormState(fromBoard(got.config), { flow: added.length ? "review" : "change", info, added });
+      app.form.installed = info.fw;
+      if (added.length) return showForm({ say: S.form.say.review });
+      app.form.installed = null;
       return showResult("saved", { installed: info.fw });
     }
     app.form = newFormState(fromBoard(got.config), { flow: "setup", info, added: got.added || [] });

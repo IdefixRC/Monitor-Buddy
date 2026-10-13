@@ -84,6 +84,18 @@ export function fakeDevice(params) {
     }
     async close() { this.isOpen = false; }
     async refind() { return this.port; }
+    // A late answer to an INFO already written (serial.js probe()).
+    async waitForReply(cmd, ms) {
+      await sleep(ms);
+      if (!this.isOpen) return null;
+      if (!board.answers || board.awake === false) {
+        if (board.fw === null) this._emit("app=0 mood=0 wifi=up up=812s rst=1", "rx");
+        return null;
+      }
+      const reply = { ...this._answer(cmd, null), id: 0 };
+      this._emit(`@MB ${JSON.stringify(reply)}`, "rx");
+      return reply;
+    }
     async drain() { await sleep(100); }
     async command(cmd, body = null) {
       if (!this.isOpen) throw new Error("the port is not open");

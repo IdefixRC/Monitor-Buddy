@@ -1,5 +1,14 @@
 // Download, verify and flash a firmware image with the vendored esptool-js.
 import { ESPLoader, Transport } from "../vendor/esptool-js/bundle.js";
+import { sameMac } from "./protocol.js";
+
+// The chip esptool reached isn't the Buddy the page was talking to.
+export class WrongBoard extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WrongBoard";
+  }
+}
 
 export class DownloadError extends Error {
   constructor(message) {
@@ -67,11 +76,14 @@ export async function resetToFirmware(port) {
 // Writes `image` at address 0. `serialPort` must be CLOSED: esptool-js opens
 // it itself (so close the BuddyPort first). It is closed again on return, and
 // the board is hard-reset, so it drops off USB and comes back as a new port.
-// opts: { erase, onProgress(fraction 0..1), onStage(stage), log(text), resetMode }
+// opts: { erase, onProgress(fraction 0..1), onStage(stage), log(text), resetMode, expectedMac }
 // onStage gets "connect", "erase", "write" and "reset" as each one starts.
-// resetMode is esptool-js's `main()` mode; "default_reset" unless the spike
-// finds that "usb_reset" is what the C6's USB-serial/JTAG needs.
-export async function flashImage(serialPort, image, { erase = false, onProgress, onStage, log, resetMode = "default_reset" } = {}) {
+// resetMode is esptool-js's `main()` mode ("default_reset").
+// expectedMac: when known (INFO), nothing is erased or written unless the chip
+// has this MAC; another Buddy on the same computer throws WrongBoard.
+export async function flashImage(serialPort, image, {
+  erase = false, onProgress, onStage, log, resetMode = "default_reset", expectedMac = "",
+} = {}) {
   const say = (text) => { if (log) log(String(text)); };
   const enter = (name) => { stage = name; if (onStage) onStage(name); };
   const terminal = { clean() {}, write: say, writeLine: say };
@@ -82,6 +94,10 @@ export async function flashImage(serialPort, image, { erase = false, onProgress,
     transport = new Transport(serialPort);
     const loader = new ESPLoader({ transport, baudrate: 115200, terminal });
     await loader.main(resetMode);
+    if (expectedMac) {
+      const mac = await loader.chip.readMac(loader);
+      if (!sameMac(mac, expectedMac)) throw new WrongBoard(`the chip is ${mac}, expected ${expectedMac}`);
+    }
     if (erase) {
       enter("erase");
       await loader.eraseFlash();
