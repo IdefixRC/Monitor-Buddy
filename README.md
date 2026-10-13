@@ -217,7 +217,7 @@ Along the top bar of VS Code, pioarduino adds a row of small icons:
 1. Click the **checkmark (Build)** first. This compiles the project. The first build takes a few minutes. It ends with `SUCCESS`.
 2. Click the **right-arrow (Upload)**. This flashes the firmware onto the board. The screen goes dark for a moment and then the Buddy starts up.
 
-If the upload fails to start, hold the **BOOT** button on the board, click Upload again, and release BOOT once you see it connecting. Do not hold BOOT through a power cycle, that puts the chip into a different download mode.
+If the upload can't find or open the board, close any serial monitor that is open on it (the pioarduino monitor holds the port too), unplug the Buddy, plug it back in and click Upload again. The board switches into upload mode by itself, so you never need the BOOT button for this. If an upload got cut off and the Buddy no longer starts, the [web flasher](#the-web-flasher-recommended) reinstalls it and keeps your saved settings.
 
 ### 4.8 Updating to a new version
 
@@ -261,7 +261,7 @@ The board also has a **BOOT** button, next to **RESET**. Check the labels, becau
 - **Hold 2 to 5 seconds**: opens the Wi-Fi setup hotspot.
 - **Hold 5 seconds or more**: forgets the saved Wi-Fi and restarts into Wi-Fi setup. Brightness and the settings saved on the board are kept. To erase those as well, use **erase** on the setup page; the Buddy then goes back to its built-in `config.h` values.
 
-Don't hold BOOT while plugging in: that starts the chip's download mode instead.
+Don't hold BOOT while plugging in: that starts the chip's download mode instead. The screen stays dark, and the computer sees a different device on a new port (on Windows, a new COM number) instead of your Buddy. Unplug it and plug it back in without touching BOOT.
 
 The built-in values are the release defaults, or your `config/config.h` settings if you built the firmware yourself, so a factory reset doesn't touch them. To reset only the settings and keep the Wi-Fi and brightness, use **Reset to defaults** in the web flasher.
 
@@ -272,7 +272,7 @@ The built-in values are the release defaults, or your `config/config.h` settings
 | The web flasher doesn't list the Buddy            | Use Chrome or Edge on a computer, and a USB-C cable that carries data (many are charge-only). Close any program that has the port open, such as a serial monitor in VS Code, then unplug the Buddy and plug it back in. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board). |
 | The Buddy stays dark after an interrupted install | Its firmware didn't finish installing. Connect it in the web flasher and choose **Install the firmware again**. The settings saved on the board stay.                                                                                                                                                                                         |
 | No port shown / Upload can't find the board       | Try a different USB-C cable. Many are charge-only. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board).                                                                                                                                                                      |
-| Upload starts then fails                          | Hold **BOOT**, click Upload, release BOOT when it connects.                                                                                                                                                                                                                                                                                   |
+| Upload starts then fails                          | Close any serial monitor on the port, unplug the Buddy, plug it back in and click Upload again. If it no longer starts, reinstall it with the web flasher; your saved settings stay.                                                                                                                                                          |
 | Clock or weather never updates                    | Wi-Fi did not connect. Set it in the web flasher's **Change settings**, or hold the screen for 3 seconds and redo the setup. Then check the location and time zone there too. Built it yourself without saved settings? Check `TZ_OFFSET_HOURS` and `TZ_RULE` in `config/config.h` and flash again.                                           |
 | Screen is upside down                             | Your Buddy is mounted on the other side. Change the **Mounting side** in the web flasher's **Change settings**. Built it yourself? Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again; settings saved on the board win, so change those in the web flasher or with the tool (`set mount=right`).               |
 | Screen too dark to read                           | Swipe up a few times to raise the brightness, or press **erase** on the setup page (clears the board settings too; see [4.10](#410-everyday-controls)).                                                                                                                                                                                       |
