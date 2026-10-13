@@ -1914,7 +1914,9 @@ Settings defaultsFromConfig() {
   else if (!tzRuleFromOffset(TZ_OFFSET_HOURS, d.tzRule, sizeof(d.tzRule)))
     strlcpy(d.tzRule, "UTC0", sizeof(d.tzRule));
   strlcpy(d.ticker,   TICKER,   sizeof(d.ticker));
-  strlcpy(d.stockKey, STOCKKEY, sizeof(d.stockKey));
+  // Before 1.2 the template's key was the placeholder "xxxxxxx": no key at all,
+  // so it hides the stock page like "" does (the web flasher maps it the same).
+  strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
   d.tempFahrenheit = TEMP[0] == 'f';
