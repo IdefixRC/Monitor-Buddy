@@ -48,10 +48,13 @@ export function answers(reply, cmd, id) {
 // every byte we send stays stuck in the port, and Chrome can't close a port
 // with stuck bytes: only a replug frees it. So look first, and send nothing to:
 //   "bootloop"  the bootloader finds no app (a cut-off flash) and restarts every
-//               ~40 ms; or the ROM banner repeats (a clean boot prints it once);
+//               ~40 ms; or the ROM finds no bootloader (blank flash: "invalid
+//               header", then a watchdog restart every 1-3 s that drops the port;
+//               an ESP32-C3, 2026-10-17); or the ROM banner repeats (a clean boot
+//               prints it once);
 //   "download"  the ROM waits in install mode.
 // null: nothing wrong seen (a running Buddy, a clean boot, or silence).
-const NO_APP = /No bootable app partitions|is not bootable|invalid magic byte|invalid segment length/;
+const NO_APP = /No bootable app partitions|is not bootable|invalid magic byte|invalid segment length|invalid header: 0x/;
 export function romTrouble(lines) {
   let banners = 0;
   for (const line of lines) {
@@ -60,6 +63,19 @@ export function romTrouble(lines) {
     if (/^rst:0x/.test(line) && ++banners > 1) return "bootloop";
   }
   return null;
+}
+
+// Watches `lines` (an array that keeps filling) for up to ms and resolves
+// romTrouble()'s answer as soon as there is one, or null after ms. A board in
+// a boot loop may drop off USB every 1-3 s (COM7, 2026-10-17), so the board
+// check must start the moment the loop shows, not after the full listen.
+export async function watchForTrouble(lines, ms, { step = 50 } = {}) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const trouble = romTrouble(lines);
+    if (trouble || Date.now() >= end) return trouble;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(step, end - Date.now())));
+  }
 }
 
 // Whether two MAC strings name the same board (review, 2026-10-13). INFO

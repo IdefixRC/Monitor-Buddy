@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble, sameMac } from "../web/js/protocol.js";
+import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble, watchForTrouble, sameMac } from "../web/js/protocol.js";
 
 test("ids start at the given value, increase and wrap", () => {
   const next = makeIdSource(MAX_ID - 1);
@@ -74,6 +74,15 @@ test("one clean boot, or a running Buddy, is no trouble", () => {
   assert.equal(romTrouble([]), null);
 });
 
+test("blank flash (the ROM finds no bootloader) is a boot loop", () => {
+  // COM7, an ESP32-C3 with blank flash, 2026-10-17: only this line, hundreds a
+  // second, then a watchdog restart every 1-3 s that drops it off USB. The ROM
+  // banner comes before the port can be opened, so this line is all there is.
+  assert.equal(romTrouble(["invalid header: 0xffffffff", "invalid header: 0xffffffff"]), "bootloop");
+  // The first line, cut off by opening mid-stream, doesn't count on its own.
+  assert.equal(romTrouble(["ader: 0xffffffff", "invalid header: 0xffffffff"]), "bootloop");
+});
+
 test("a board already in download mode is recognised", () => {
   assert.equal(romTrouble(["rst:0x1 (POWERON),boot:0x1f (DOWNLOAD(USB/UART0/SDIO_FEI_FEO))", "waiting for download"]), "download");
 });
@@ -88,4 +97,20 @@ test("sameMac() matches the base MAC in either form, and nothing else", () => {
   assert.equal(sameMac("58:8c:81:5a:33:fc", "b0:a6:04:8b:03:f0"), false);
   assert.equal(sameMac("", "b0:a6:04:8b:03:f0"), false);
   assert.equal(sameMac(undefined, undefined), false);
+});
+
+// A board in a boot loop must get esptool before its next USB drop (COM7: every
+// 1-3 s), so the listen ends the moment the trouble shows instead of after 500 ms.
+test("watchForTrouble() returns as soon as a boot loop shows", async () => {
+  const lines = [];
+  setTimeout(() => lines.push("invalid header: 0xffffffff"), 20);
+  const t0 = Date.now();
+  assert.equal(await watchForTrouble(lines, 2000, { step: 5 }), "bootloop");
+  assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
+});
+
+test("watchForTrouble() listens the full time when nothing is wrong", async () => {
+  const t0 = Date.now();
+  assert.equal(await watchForTrouble(["app=4 mood=0 wifi=up up=40s rst=11"], 60, { step: 5 }), null);
+  assert.ok(Date.now() - t0 >= 55);
 });

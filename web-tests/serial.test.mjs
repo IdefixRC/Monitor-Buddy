@@ -63,10 +63,11 @@ test("a Buddy that reads still gets the normal reply timeout", async () => {
 
 // ── C: after a USB drop, flash through the port as it is now ─
 
-test("refind() picks the port the Buddy came back as", async () => {
+test("refind() picks the port the Buddy came back as, once its MAC is known", async () => {
   const old = fakePort();
   const back = fakePort();
   const bp = new BuddyPort(old);
+  bp.mac = "b0:a6:04:8b:03:f0"; // the flash and reconnect() check it on the new port
   setPorts([fakePort({ vid: 0x1234 }), back]); // the old handle is gone
   assert.equal(await bp.refind(), back);
   assert.equal(bp.port, back);
@@ -84,6 +85,16 @@ test("the app flashes through refind(), never through the stored handle", () => 
   const calls = [...app.matchAll(/dev\.flashImage\(\s*([\w.]+)/g)].map((m) => m[1]);
   assert.deepEqual(calls, ["port"]);
   assert.match(app, /const port = await app\.bp\.refind\(\);\s[\s\S]{0,200}dev\.flashImage\(port,/);
+});
+
+// COM7, 2026-10-17: an ESP32-C3 in a boot loop dropped off USB every 1-3 s.
+// In one of its gaps only COM12 (a Buddy) was listed, and the board check ran
+// there. Without a MAC nothing can tell the two apart, so never switch.
+test("refind() without a known MAC never switches to another port", async () => {
+  const cur = fakePort();
+  const bp = new BuddyPort(cur);
+  setPorts([fakePort()]); // the picked board is in a USB gap; another board is listed
+  assert.equal(await bp.refind(), cur);
 });
 
 test("refind() keeps the current port when no Buddy is listed", async () => {
@@ -218,9 +229,16 @@ test("reconnect() gives up rather than accept another Buddy", async () => {
   await assert.rejects(bp.reconnect(1200), NoReply);
 });
 
-test("reconnect() learns the MAC when it didn't know it", async () => {
-  setPorts([fakePort()]);
+test("reconnect() learns the MAC when it didn't know it, on the port it has", async () => {
   const bp = new StubPort([{ ok: true, cmd: "INFO", mac: "b0:a6:04:8b:03:f0" }]);
+  setPorts([bp.port]);
   await bp.reconnect(2000);
   assert.equal(bp.mac, "b0:a6:04:8b:03:f0");
+});
+
+test("reconnect() without a MAC doesn't take another board's port", async () => {
+  setPorts([fakePort()]); // ours is gone; only another board is listed
+  const bp = new StubPort(Array(20).fill({ ok: true, cmd: "INFO", mac: "58:8c:81:5a:33:fc" }));
+  await assert.rejects(bp.reconnect(1200), NoReply);
+  assert.equal(bp.opens, 0);
 });
