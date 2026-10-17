@@ -1,6 +1,8 @@
 // A pretend Buddy for checking the screens without hardware. app.js loads it
-// only when the page is opened with ?fake=a (a 1.2+ Buddy that answers) or
-// ?fake=b (one that doesn't). It never touches navigator.serial.
+// only when the page is opened with ?fake=a (a 1.2+ Buddy that answers),
+// ?fake=b (one that doesn't), ?fake=c (an ESP32-C6 board without the Buddy's
+// touch screen and motion sensor) or ?fake=d (another ESP32 chip). c and d
+// answer nothing and are refused by the board check. It never touches navigator.serial.
 //
 // Extra switches, all optional:
 //   cancel           the port picker is cancelled
@@ -15,14 +17,18 @@
 //   fw=1.1.9         the firmware version INFO reports (to see the update ribbon)
 // A Wi-Fi password of "wrongpass" never connects.
 import { NoReply } from "./serial.js";
-import { FlashError } from "./flasher.js";
+import { FlashError, NotABuddy } from "./flasher.js";
 import { DEFAULTS } from "./form.js";
 import { mergeConfig, validateConfig, validateWifi } from "./settings.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function fakeDevice(params) {
-  const answers = params.get("fake") !== "b";
+  const kind = params.get("fake");
+  const answers = !["b", "c", "d"].includes(kind);
+  // What boardcheck.js would find: c lacks the parts, d isn't an ESP32-C6.
+  const refusal = kind === "c" ? new NotABuddy("parts", "motion sensor at 0x6b: no answer")
+    : kind === "d" ? new NotABuddy("chip", "the chip is ESP32-S3, not ESP32-C6") : null;
   const board = {
     answers,
     fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
@@ -160,6 +166,16 @@ export function fakeDevice(params) {
     }
   }
 
+  async function checkBuddy(_port, { log } = {}) {
+    const say = (t) => { if (log) log(t); };
+    say("Connecting...");
+    await sleep(1500);
+    if (refusal) { say(`Board check: ${refusal.message}`); throw new FlashError("connect", refusal); }
+    say("Board check: motion sensor and touch controller found");
+    say("Restarting the board");
+    return { mac: "b0:a6:04:00:00:01" };
+  }
+
   async function flashImage(_port, image, { erase = false, onProgress, onStage, log } = {}) {
     const say = (t) => { if (log) log(t); };
     onStage?.("connect");
@@ -169,6 +185,7 @@ export function fakeDevice(params) {
       failOnce.delete("connect");
       throw new FlashError("connect", new Error("Failed to connect with the device"));
     }
+    if (refusal) { say(`Board check: ${refusal.message}`); throw new FlashError("connect", refusal); }
     say("Chip is ESP32-C6 (fake)");
     if (erase) {
       onStage?.("erase");
@@ -202,5 +219,5 @@ export function fakeDevice(params) {
     await sleep(300);
   }
 
-  return { BuddyPort: FakeBuddyPort, flashImage };
+  return { BuddyPort: FakeBuddyPort, flashImage, checkBuddy };
 }

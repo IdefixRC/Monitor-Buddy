@@ -195,9 +195,12 @@ test("copy: no exclamation marks, no please, simply or just", () => {
   };
   walk(S, "S");
   assert.ok(texts.length > 100);
+  // The two refusal screens keep Eric's own wording, "Please" included (2026-10-17).
+  const ownWording = new Set(["S.notBuddy.parts", "S.notBuddy.chip"]);
   for (const [path, t] of texts) {
     assert.doesNotMatch(t, /!/, `${path} has an exclamation mark`);
-    assert.doesNotMatch(t, /\b(please|simply|just)\b/i, `${path}: "${t}"`);
+    const banned = ownWording.has(path) ? /\b(simply|just)\b/i : /\b(please|simply|just)\b/i;
+    assert.doesNotMatch(t, banned, `${path}: "${t}"`);
   }
 });
 

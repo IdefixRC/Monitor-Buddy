@@ -3,8 +3,8 @@
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
 import { BuddyPort, change, probe } from "./serial.js";
-import { romTrouble } from "./protocol.js";
-import { fetchImage, flashImage, FlashError, ImageMismatch, WrongBoard } from "./flasher.js";
+import { sameMac, watchForTrouble } from "./protocol.js";
+import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup } from "./settings.js";
 import { parseConfigH } from "./configh.js";
@@ -25,8 +25,8 @@ const BETA = params.has("beta");
 const SITE_ROOT = new URL("./", location.href);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// The hardware, or the pretend Buddy for checking the screens (?fake=a|b).
-let dev = { BuddyPort, flashImage };
+// The hardware, or the pretend Buddy for checking the screens (?fake=a|b|c|d).
+let dev = { BuddyPort, flashImage, checkBuddy };
 if (params.has("fake")) dev = (await import("./fake-buddy.js")).fakeDevice(params);
 // ?noserial shows the unsupported screen in a browser that has Web Serial.
 const SERIAL_OK = !params.has("noserial") && dev.BuddyPort.supported();
@@ -204,6 +204,7 @@ function showStart() {
       h("div", { class: "actions actions--start" },
         btn(S.connect, () => connect(), { kind: "primary", class: "btn btn--primary btn--big" })),
       h("p", { class: "hint hint--center" }, S.start.cable),
+      h("p", { class: "hint hint--center" }, rich(S.start.notListed)),
     );
     if (installable()) m.append(h("p", { class: "hint hint--center" }, S.start.newest(app.releases[0].version)));
   });
@@ -288,6 +289,7 @@ async function probeAndRouteOnce() {
     m.append(spinner());
   });
   try {
+    await bp.refind(); // the board check restarts it, and it may come back as a new port
     await bp.open();
   } catch (e) {
     const busyPort = e && (e.name === "NetworkError" || e.name === "InvalidStateError");
@@ -297,12 +299,11 @@ async function probeAndRouteOnce() {
   // reads, so even one INFO would stay stuck and keep the port from closing
   // until a replug. Then the flash couldn't open it.
   app.rx.recent = [];
-  await sleep(LISTEN_MS);
-  app.trouble = romTrouble(app.rx.recent);
+  app.trouble = await watchForTrouble(app.rx.recent, LISTEN_MS);
   if (app.trouble) {
     log(`no firmware running (${app.trouble}): nothing sent`, "* ");
     app.info = null;
-    return showPathB();
+    return checkThenPathB();
   }
   let info = null;
   app.rx.status = false;
@@ -311,10 +312,52 @@ async function probeAndRouteOnce() {
   } catch (e) {
     return showProblem(S.connecting.lost, e, { retry: connect, retryLabel: S.connect });
   }
+  // The board check read a MAC (path B, "Check again"): another board's
+  // answer means the port lookup found the wrong one.
+  if (info && bp.mac && info.mac && !sameMac(info.mac, bp.mac)) return showProblem(S.flash.wrongBoard, null, { retry: probeAndRoute });
   app.info = info;
   if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
   if (info) showHome();
-  else showPathB();
+  else await checkThenPathB();
+}
+
+// Path B: nothing answered INFO, so nothing yet says this is a Buddy. Check
+// the board (boardcheck.js) before offering to install, so nobody fills in
+// the form for a board that will be refused. The board restarts once.
+async function checkThenPathB() {
+  screen(S.titles.connecting, (m) => {
+    guide(m, { mood: "curious", say: S.connecting.checking });
+    m.append(spinner());
+  });
+  app.expectDrop = true;
+  try { await app.bp.close(); } catch { /* already closed */ }
+  // No MAC is known yet, so this is the port that was picked: refind() never
+  // swaps it for another board's. If it died (a boot loop drops off USB),
+  // only picking it again can tell which board it is.
+  const port = await app.bp.refind();
+  try {
+    const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
+    app.bp.mac = mac || ""; // from now on, only this board is accepted
+  } catch (e) {
+    app.expectDrop = false;
+    report(e);
+    if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
+    return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
+  }
+  app.expectDrop = false;
+  showPathB();
+}
+
+// kind "chip" (another chip) or "parts" (an ESP32-C6 without the Buddy's parts).
+function showNotBuddy(kind) {
+  leaveGuard(false);
+  screen(S.titles.notBuddy, (m) => {
+    guide(m, { mood: "sad", say: kind === "chip" ? S.notBuddy.chip : S.notBuddy.parts });
+    m.append(actions(
+      btn(S.notBuddy.another, () => connect(), { kind: "primary" }),
+      btn(S.problem.startOver, startOver, { kind: "link" })),
+    logPanel());
+  });
 }
 
 async function infoOnce() {
@@ -1351,6 +1394,7 @@ async function writeImage(entry, image, ui) {
       // and manual BOOT/RESET takes the board off USB altogether (measured
       // 2026-10-12). A stale handle refind() missed, or stuck bytes Chrome won't
       // let go of: a replug fixes both.
+      if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
       if (e instanceof FlashError && e.cause instanceof WrongBoard) {
         return showProblem(S.flash.wrongBoard, null, { retry: () => writeImage(entry, image) });
       }
