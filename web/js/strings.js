@@ -1,6 +1,9 @@
 // "1 follower", "2 followers": English singular for exactly 1.
 const count = (n, one, many) => `${n} ${Number(n) === 1 ? one : many}`;
 
+// README §2, "What you need": the board to buy, and the warning about the version without touch.
+const TOUCH_NOTE = "https://github.com/IdefixRC/Monitor-Buddy#2-what-you-need";
+
 // All user-facing text. The Buddy speaks in first person; buttons and labels stay plain.
 // Light markup, rendered by app.js: **bold**, `code` and [text](https://link).
 export const S = {
@@ -47,6 +50,7 @@ export const S = {
     problem: "Something went wrong",
     backup: "Back up first",
     reset: "Reset to defaults",
+    notBuddy: "Not a Monitor Buddy board",
   },
 
   start: {
@@ -55,6 +59,7 @@ export const S = {
     manifestError: "I can't read the firmware list right now, so installing and updating are off. You can still change my settings.",
     noRelease: "There's no firmware release to install yet, so installing and updating are off. You can still change my settings.",
     cable: "Use a USB cable that carries data. Some charging cables don't.",
+    notListed: `Not in the list? I need the touchscreen version, the [Waveshare ESP32-C6-Touch-LCD-1.47](${TOUCH_NOTE}).`,
   },
 
   about: {
@@ -83,6 +88,20 @@ export const S = {
     lost: "I lost the connection. Plug me back in, then connect again.",
     reading: "Let me look up my settings.",
     readFailed: "I couldn't read my settings. Unplug me, plug me back in and connect again.",
+    checking: "Let me make sure this is a Monitor Buddy board. It restarts once while I look.",
+    checkFailed: "I couldn't reach the board to check it. Pick it from the list again. If that keeps happening, unplug it, plug it back in and try again.",
+    pickAgain: "Pick the board again",
+  },
+
+  // A board the flasher refused (boardcheck.js). Nothing was written to it.
+  notBuddy: {
+    parts: "I'm sorry but this does not seem to be a Monitor Buddy board. I found an ESP32-C6, but not the "
+      + "touchscreen and motion sensor of the Waveshare ESP32-C6-Touch-LCD-1.47. Please check the "
+      + `[documentation](${TOUCH_NOTE}) and ensure you have the correct device. Nothing was written to it.`,
+    chip: "I'm sorry, no Monitor Buddy compatible board was found. Please ensure you connect a Waveshare "
+      + `ESP32-C6-Touch-LCD-1.47. Please check the link in the [documentation](${TOUCH_NOTE}) for the correct `
+      + "device. Nothing was written.",
+    another: "Choose another board",
   },
 
   home: {

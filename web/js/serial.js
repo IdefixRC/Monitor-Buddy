@@ -237,13 +237,16 @@ export class BuddyPort {
     while (Date.now() - this.lastRx < quietMs) await sleep(50);
   }
 
-  // The current port while it is listed; otherwise the one Buddy that is.
-  // With several listed it never guesses: they all look alike (VID/PID), and
-  // the wrong pick would flash or erase another board (review, 2026-10-13).
+  // The current port while it is listed; otherwise, once the board's MAC is
+  // known, the one Buddy that is. They all look alike (VID/PID), so it never
+  // guesses between several (review, 2026-10-13), and never switches at all
+  // without a MAC: with one board in a USB gap, the only one listed can be
+  // another (COM7 and COM12, 2026-10-17). With a MAC, INFO (reconnect) and
+  // esptool (WrongBoard) prove the switch before anything is written.
   async _findPort() {
     const ports = (await navigator.serial.getPorts()).filter(isBuddy);
     if (ports.includes(this.port)) return this.port;
-    return ports.length === 1 ? ports[0] : null;
+    return this.mac && ports.length === 1 ? ports[0] : null;
   }
 
   // After a restart: reopen the device (it vanishes from USB for a moment and
