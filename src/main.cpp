@@ -183,6 +183,12 @@
 #ifndef NIGHT_WAKE_MS
   #define NIGHT_WAKE_MS 30000UL
 #endif
+// SHOW_BITCOIN    true adds a Bitcoin page after the stock page: BTC/USD from
+//                 Coinbase's public market data (no key), 24 h change, high/low
+//                 and a 24 h sparkline.
+#ifndef SHOW_BITCOIN
+  #define SHOW_BITCOIN false
+#endif
 static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
 static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
 static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
@@ -253,6 +259,12 @@ static constexpr uint32_t FETCH_RETRY_MS               = 60000UL;
 static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
+// Bitcoin: every minute while the page is shown, every 5 minutes otherwise so
+// it's never stale when it comes round; the hourly sparkline every 15 minutes.
+static constexpr uint32_t BTC_REFRESH_SHOWN_MS        = 60UL * 1000UL;
+static constexpr uint32_t BTC_REFRESH_HIDDEN_MS       = 5UL * 60UL * 1000UL;
+static constexpr uint32_t BTC_SPARK_REFRESH_MS        = 15UL * 60UL * 1000UL;
+static constexpr uint8_t  BTC_SPARK_POINTS            = 24;   // hourly closes
 
 // Background fetch task. Upstream sized this at 7 KB from a measured 3.3 KB
 // high-water mark with certificate checks off. Verifying the server's
@@ -623,7 +635,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 7;   // total number of pages defined
+static const uint8_t APP_COUNT    = 8;   // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -634,6 +646,9 @@ static constexpr uint8_t PAGE_WEATHER = 3;
 static constexpr uint8_t PAGE_MOON    = 4;
 static constexpr uint8_t PAGE_STOCK   = 5;
 static constexpr uint8_t PAGE_GITHUB  = 6;
+// Build-only page (SHOW_BITCOIN): not in settings.pages[], so the web flasher
+// and the settings protocol don't know about it.
+static constexpr uint8_t PAGE_BITCOIN = 7;
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -669,8 +684,8 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
               PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
-static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
-              "settings.pages[] needs one entry per page");
+static_assert(SETTINGS_PAGE_COUNT == PAGE_BITCOIN && APP_COUNT == PAGE_BITCOIN + 1,
+              "settings.pages[] covers every page except the build-only Bitcoin page");
 
 Arduino_DataBus *bus     = new Arduino_HWSPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI);
 Arduino_GFX    *display  = new Arduino_ST7789(bus, LCD_RST, 0, false, 172, 320, 34, 0, 34, 0);
@@ -749,7 +764,15 @@ float pressPulse   = 0.0f;
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
 struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
-struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+struct BitcoinData {
+  bool     valid;
+  float    price, open24, high24, low24;     // USD; open24 = price 24 h ago
+  uint32_t updatedAt;
+  uint8_t  sparkCount;                       // 0 = no sparkline yet
+  float    spark[BTC_SPARK_POINTS];          // hourly closes, oldest first
+  uint32_t sparkAt;
+};
+struct NetData     { WeatherData weather; StockData stock; GithubData github; BitcoinData bitcoin; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -1055,6 +1078,8 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 void buildPageList() {
   pageCount = 0;
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
+    // The build-only Bitcoin page goes right after the stock page's slot.
+    if (i == PAGE_GITHUB && SHOW_BITCOIN) pageOrder[pageCount++] = PAGE_BITCOIN;
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
@@ -1315,6 +1340,106 @@ bool fetchGithub() {
   g.updatedAt = millis();
   g.valid     = true;
   publishNetData(netShared.github, g);
+  return true;
+}
+
+// ── Bitcoin fetch (Coinbase Exchange public market data) ──
+// No key or account. Two endpoints:
+//   /products/BTC-USD/stats    {"open":"...","high":"...","low":"...","last":"...",...}
+//       24 h window; the numbers are JSON strings.
+//   /products/BTC-USD/candles?granularity=3600
+//       [[time, low, high, open, close, volume], ...], newest first, ~300 rows
+//       (about 21 KB), so it is scanned in place rather than parsed into a
+//       JsonDocument.
+
+// One HTTPS GET into `body`. False on any failure.
+static bool btcGet(const char *url, String &body) {
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setUserAgent("Monitor-Buddy");   // Coinbase rejects requests without one
+  if (!http.begin(client, url)) return false;
+  if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+  body = http.getString();
+  http.end();
+  return body.length() > 0;
+}
+
+// The close of the newest `max` candles, written oldest first. Returns how
+// many it found, or 0 if the response isn't the expected newest-first array
+// (an error object, a format change), so a bad response never draws a wrong chart.
+static uint8_t parseCandleCloses(const char *s, float *out, uint8_t max) {
+  const char *p = strchr(s, '[');                 // the outer array
+  if (!p) return 0;
+  p++;
+  float  newestFirst[BTC_SPARK_POINTS];
+  double prevTime = 0;
+  uint8_t n = 0;
+  if (max > BTC_SPARK_POINTS) max = BTC_SPARK_POINTS;
+  while (n < max) {
+    p = strchr(p, '[');                           // the next candle
+    if (!p) break;
+    p++;
+    double v[5];
+    uint8_t k = 0;
+    while (k < 5) {
+      char *end;
+      v[k] = strtod(p, &end);
+      if (end == p) break;                        // not a number
+      k++;
+      p = end;
+      while (*p == ' ') p++;
+      if (*p != ',') break;
+      p++;
+    }
+    if (k < 5) return 0;                          // malformed candle
+    if (n > 0 && !(v[0] < prevTime)) return 0;    // not newest first
+    prevTime = v[0];
+    newestFirst[n++] = (float)v[4];               // close
+  }
+  for (uint8_t i = 0; i < n; i++) out[i] = newestFirst[n - 1 - i];
+  return n;
+}
+
+bool fetchBitcoin() {
+  if (!ensureWifi()) return false;
+  String body;
+  if (!btcGet("https://api.exchange.coinbase.com/products/BTC-USD/stats", body)) return false;
+  JsonDocument doc;
+  if (deserializeJson(doc, body)) return false;
+  // Values arrive as strings ("67432.11").
+  const float last = strtof(doc["last"] | "0", nullptr);
+  if (last <= 0.0f) return false;
+
+  // netTask is the only writer of netShared, so it may read it without the lock.
+  BitcoinData b = netShared.bitcoin;
+  b.price     = last;
+  b.open24    = strtof(doc["open"] | "0", nullptr);
+  b.high24    = strtof(doc["high"] | "0", nullptr);
+  b.low24     = strtof(doc["low"]  | "0", nullptr);
+  b.updatedAt = millis();
+  b.valid     = true;
+
+  // The sparkline only changes hourly; a failure here keeps the old one.
+  doc.clear();
+  if (b.sparkCount == 0 || millis() - b.sparkAt >= BTC_SPARK_REFRESH_MS) {
+    String candles;
+    if (btcGet("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600", candles)) {
+      float pts[BTC_SPARK_POINTS];
+      uint8_t n = parseCandleCloses(candles.c_str(), pts, BTC_SPARK_POINTS);
+      if (n >= 2) {
+        memcpy(b.spark, pts, n * sizeof(float));
+        b.sparkCount = n;
+        b.sparkAt    = millis();
+      } else {
+        Serial.println("[net] bitcoin: candles response not understood");
+      }
+    }
+  }
+  publishNetData(netShared.bitcoin, b);
   return true;
 }
 
@@ -1891,6 +2016,101 @@ void drawStock() {
   gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
   gfx->setCursor(150, 116); gfx->print("HIGH  "); gfx->print(s.high, 2);
   gfx->setCursor(150, 140); gfx->print("LOW   "); gfx->print(s.low, 2);
+  drawPageDots();
+}
+
+// ── Bitcoin page ──────────────────────────────────────────
+
+// "$67,432" (whole dollars, thousands commas); "$0.00" style below $1,000.
+static void formatUsd(float v, char *out, size_t len) {
+  if (v < 1000.0f) { snprintf(out, len, "$%.2f", v); return; }
+  char digits[16];
+  snprintf(digits, sizeof(digits), "%lu", (unsigned long)lroundf(v));
+  const size_t nd = strlen(digits);
+  size_t o = 0;
+  if (o + 1 < len) out[o++] = '$';
+  for (size_t i = 0; i < nd && o + 1 < len; i++) {
+    if (i > 0 && (nd - i) % 3 == 0 && o + 1 < len) out[o++] = ',';
+    if (o + 1 < len) out[o++] = digits[i];
+  }
+  out[o] = '\0';
+}
+
+// "67.4K" for the small high/low labels.
+static void formatKilo(float v, char *out, size_t len) {
+  if (v >= 1000.0f) snprintf(out, len, "%.1fK", v / 1000.0f);
+  else              snprintf(out, len, "%.0f", v);
+}
+
+void drawBitcoin() {
+  gfx->fillScreen(BG);
+  if (drawWifiGate()) return;
+  const BitcoinData &b = netView.bitcoin;
+  if (!b.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+
+  const bool  haveRef  = b.open24 > 0.0f;
+  const bool  up       = !haveRef || b.price >= b.open24;
+  const uint16_t col   = up ? COL_PRICE_UP : COL_PRICE_DOWN;
+
+  // Big price, shrunk only if it would run off the screen ($1,000,000+).
+  char pbuf[20];
+  formatUsd(b.price, pbuf, sizeof(pbuf));
+  uint8_t psize = 6;
+  while (psize > 3 && (int)strlen(pbuf) * 6 * psize > SCREEN_W - 16) psize--;
+  centeredTextColor(pbuf, 18 + (6 - psize) * 4, psize, col);
+
+  // Left column: symbol, 24 h change, 24 h range.
+  gfx->setTextSize(4); gfx->setTextColor(COL_TICKER);
+  gfx->setCursor(14, 82);
+  gfx->print("BTC");
+  if (haveRef) {
+    char cbuf[12];
+    snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (b.price - b.open24) / b.open24 * 100.0f);
+    gfx->setTextSize(2); gfx->setTextColor(col);
+    gfx->setCursor(14, 120);
+    gfx->print(cbuf);
+  }
+  if (b.high24 > 0.0f && b.low24 > 0.0f) {
+    char hi[10], lo[10], line[28];
+    formatKilo(b.high24, hi, sizeof(hi));
+    formatKilo(b.low24, lo, sizeof(lo));
+    snprintf(line, sizeof(line), "H %s  L %s", hi, lo);
+    gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+    gfx->setCursor(14, 144);
+    gfx->print(line);
+  }
+
+  // Right: 24 h sparkline of hourly closes plus the live price, scaled to fit.
+  const int sx = 132, sy = 82, sw = SCREEN_W - 14 - sx, sh = 58;
+  if (b.sparkCount >= 2) {
+    float pts[BTC_SPARK_POINTS + 1];
+    uint8_t n = b.sparkCount;
+    memcpy(pts, b.spark, n * sizeof(float));
+    pts[n++] = b.price;                         // end the line at the live price
+    float lo = pts[0], hi = pts[0];
+    for (uint8_t i = 1; i < n; i++) { lo = fminf(lo, pts[i]); hi = fmaxf(hi, pts[i]); }
+    if (hi - lo < 1.0f) { hi += 0.5f; lo -= 0.5f; }   // flat market: keep it on screen
+    // A dim line at the price 24 h ago, if it falls inside the chart.
+    if (haveRef && b.open24 >= lo && b.open24 <= hi) {
+      const int ry = sy + sh - 1 - (int)lroundf((b.open24 - lo) / (hi - lo) * (sh - 1));
+      for (int x = sx; x < sx + sw; x += 4) gfx->drawPixel(x, ry, rgb(80, 80, 80));
+    }
+    int px = 0, py = 0;
+    for (uint8_t i = 0; i < n; i++) {
+      const int x = sx + (int)lroundf((float)i * (sw - 1) / (n - 1));
+      const int y = sy + sh - 1 - (int)lroundf((pts[i] - lo) / (hi - lo) * (sh - 1));
+      if (i > 0) {
+        gfx->drawLine(px, py, x, y, col);
+        gfx->drawLine(px, py + 1, x, y + 1, col);   // 2 px thick
+      }
+      px = x; py = y;
+    }
+    gfx->fillCircle(px, py, 3, col);              // the live price
+  } else {
+    gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+    gfx->setCursor(sx + 30, sy + sh / 2 - 4);
+    gfx->print("CHART LOADING");
+  }
   drawPageDots();
 }
 
@@ -2568,7 +2788,7 @@ static void logNetHealth() {
 }
 
 void netTask(void *) {
-  FetchPacer weatherPacer, stockPacer, githubPacer;
+  FetchPacer weatherPacer, stockPacer, githubPacer, bitcoinPacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2582,6 +2802,12 @@ void netTask(void *) {
     // stock by STOCK_REFRESH_MS; all three back off after a failure.
     if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
       runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
+      ran = usedTls = true;
+    } else if (SHOW_BITCOIN && bitcoinPacer.ready(now)
+        && (!netShared.bitcoin.valid
+            || now - netShared.bitcoin.updatedAt >= (currentApp == PAGE_BITCOIN
+                                                     ? BTC_REFRESH_SHOWN_MS : BTC_REFRESH_HIDDEN_MS))) {
+      runFetch("bitcoin", fetchBitcoin, bitcoinPacer, now, 0, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -2824,6 +3050,7 @@ void loop() {
     case 3: drawWeather();    break;
     case 4: drawMoon();       break;
     case 5: drawStock();      break;
+    case PAGE_BITCOIN: drawBitcoin(); break;
     default: drawGithub();    break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.

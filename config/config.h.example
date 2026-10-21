@@ -113,6 +113,11 @@
 #define NIGHT_END_HOUR   7
 #define NIGHT_BRIGHTNESS 8
 
+// Bitcoin page: BTC/USD from Coinbase's public market data (no key needed),
+// with the 24 h change, high/low and a 24 h sparkline. Sits after the
+// stock page.
+#define SHOW_BITCOIN false
+
 // Setup hotspot. The password (8-63 characters) is shown on the Buddy's
 // screen while the hotspot is open, so a random one costs nothing.
 // #define AP_SSID "Monitor-Buddy-Setup"
