@@ -186,6 +186,12 @@
 static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
 static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
 static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
+static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_END_HOUR must differ");
+// WPA2 needs 8-63 characters (or "" for an open hotspot); the setup screen
+// shows both at text size 2, which fits 26 characters across.
+static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <= 27),
+              "AP_PASS must be empty or 8-26 characters");
+static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 
 // How long the portal stays open with nobody using it, in seconds.
 // The timer is reset by any connected AP client and by every HTTP
@@ -827,6 +833,13 @@ void applyTheme() {
 
 float clampFloat(float v, float lo, float hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// True once millis() has reached `deadline`. Comparing the signed difference
+// keeps working across the millis() wrap at ~49.7 days of uptime, where a
+// plain `now > deadline` stops the blink, glance and auto-advance timers.
+static inline bool timeReached(uint32_t now, uint32_t deadline) {
+  return (int32_t)(now - deadline) >= 0;
 }
 
 // ── LCD init sequence for the AXS15231B panel ─────────────
@@ -1822,10 +1835,11 @@ void drawMoonDisc(int cx, int cy, int radius, float phase, uint16_t color) {
 void drawMoon() {
   const float syn = 29.53058867f;
   const LocalNow now = localNow();
-  // Local days since 1970 with the time of day as the fraction. 10962.7597 is
-  // the 2000-01-06 18:14 UTC new moon on the same scale.
-  double days = (double)now.days
-              + ((double)now.hour * 3600.0 + now.min * 60.0 + now.sec) / 86400.0;
+  // Days since 1970 UTC; 10962.7597 is the 2000-01-06 18:14 UTC new moon on
+  // that scale. Before NTP, the local seed is the best there is (hours off).
+  double days = clockTrusted
+      ? (double)time(nullptr) / 86400.0
+      : (double)now.days + ((double)now.hour * 3600.0 + now.min * 60.0 + now.sec) / 86400.0;
   float age  = (float)fmod(days - 10962.7597, (double)syn);
   if (age < 0.0f) age += syn;
   float phase       = age/syn;
@@ -1862,7 +1876,7 @@ void drawStock() {
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
-  gfx->setCursor(14, 112 - 4 * tsize);                   // centred on the ticker + change block
+  gfx->setCursor(14, (ref > 0.0f ? 112 : 124) - 4 * tsize);  // centred, with or without the % line
   gfx->print(settings.ticker);
   // Day change in percent under the ticker, e.g. "+0.35%".
   if (ref > 0.0f) {
@@ -2296,7 +2310,7 @@ void setBrightness(int level) {
   writeBacklight(backlightTarget());
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
-  brightnessBannerUntil = millis() + 1200;
+  brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
   Serial.printf("Brightness: %u/255\n", brightnessLevel);
 }
 
@@ -2317,7 +2331,7 @@ void flushBrightnessSave(bool now) {
 
 void triggerDoubleTap() {
   autoPageEnabled = !autoPageEnabled;
-  autoPageBannerUntil = millis() + 1400;
+  autoPageBannerUntil = (millis() + 1400) | 1;     // 0 means no banner
   if (autoPageEnabled) nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
   Serial.printf("Auto-advance: %s\n", autoPageEnabled ? "ON" : "OFF");
 }
@@ -2371,6 +2385,7 @@ void readTouch() {
   bsp_touch_read();
   if (bsp_touch_get_coordinates(&x, &y)) {
     uint32_t now = millis();
+    if (nightWoken) nightWokenAt = now;   // still in use: keep the night wake going
     touchLastX = x; touchLastY = y;
     touchMissFrames = 0;
     if (!touchWasDown) {
@@ -2440,11 +2455,11 @@ void readTouch() {
 
 void updateFaceTimers() {
   uint32_t now = millis();
-  if (now > nextBlink) {
+  if (timeReached(now, nextBlink)) {
     blinkUntil = now + (random(0,6)==0 ? 220 : 105);
     nextBlink  = now + 1000 + random(0, 2600);
   }
-  if (now > nextGlance) {
+  if (timeReached(now, nextGlance)) {
     faceTargetX = (float)random(-8, 9);
     faceTargetY = (float)random(-4, 5);
     nextGlance  = now + 650 + random(0, 1500);
@@ -2455,7 +2470,7 @@ void updateFaceTimers() {
 }
 
 void updateAutoPage() {
-  if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
+  if (autoPageEnabled && timeReached(millis(), nextAutoPage)) switchApp(1);
 }
 
 // Returns the current local hour (0-23).
@@ -2765,6 +2780,7 @@ void loop() {
     // Save now, long before anyone can press "erase" in the portal, so a
     // factory reset still removes /display.json.
     flushBrightnessSave(true);
+    writeBacklight(brightnessLevel);      // never run setup at night brightness
     servicePortal();
     return;
   }
@@ -2811,7 +2827,11 @@ void loop() {
     default: drawGithub();    break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
-  if (millis() < brightnessBannerUntil) {
+  // A deadline is cleared once it passes, so it never goes stale long enough
+  // for the signed comparison in timeReached() to wrap.
+  if (brightnessBannerUntil && timeReached(millis(), brightnessBannerUntil)) brightnessBannerUntil = 0;
+  if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
+  if (brightnessBannerUntil) {
     char msg[20];
     snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
     uint16_t bannerColor = rgb(0,200,255);
@@ -2822,7 +2842,7 @@ void loop() {
     gfx->drawRoundRect((SCREEN_W-bw-12)/2, SCREEN_H/2-10, bw+12, 20, 4, bannerColor);
     gfx->setCursor((SCREEN_W-bw)/2, SCREEN_H/2-4);
     gfx->print(msg);
-  } else if (millis() < autoPageBannerUntil) {
+  } else if (autoPageBannerUntil) {
     const char *msg = autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
     uint16_t bannerColor = autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
     gfx->setTextSize(1);
