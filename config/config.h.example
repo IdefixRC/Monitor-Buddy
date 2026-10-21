@@ -96,3 +96,24 @@
 #define SHOW_MOON     true   // moon phase
 #define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
 #define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)
+
+// ── Build-only options ──────────────────────────────────────
+// These are compiled in. The web flasher doesn't know about them, and
+// settings it saved on the board don't change them.
+//
+// Clock: true shows 1-12 with AM/PM, false shows 00-23.
+#define CLOCK_12H false
+
+// Night mode: from NIGHT_START_HOUR to NIGHT_END_HOUR (local time, 0-23,
+// may cross midnight) the backlight drops to NIGHT_BRIGHTNESS (8-255) and
+// the face looks sleepy. A touch restores your brightness for 30 s; that
+// touch only wakes the screen. Stays off until the clock has synced.
+#define NIGHT_MODE       false
+#define NIGHT_START_HOUR 23
+#define NIGHT_END_HOUR   7
+#define NIGHT_BRIGHTNESS 8
+
+// Setup hotspot. The password (8-63 characters) is shown on the Buddy's
+// screen while the hotspot is open, so a random one costs nothing.
+// #define AP_SSID "Monitor-Buddy-Setup"
+// #define AP_PASS "buddy1234"

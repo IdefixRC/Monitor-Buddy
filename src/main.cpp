@@ -149,9 +149,43 @@
 // Access-point shown when the portal is open.
 // AP_PASS must be 8-63 characters (WPA2 minimum) or the AP will
 // refuse to start. Use "" only if you want an open AP.
-#define AP_SSID   "Monitor-Buddy-Setup"
-#define AP_PASS   "buddy1234"
+// Both can be set in config.h; the password is shown on the setup screen.
+#ifndef AP_SSID
+  #define AP_SSID   "Monitor-Buddy-Setup"
+#endif
+#ifndef AP_PASS
+  #define AP_PASS   "buddy1234"
+#endif
 #define AWM_HOSTNAME "Monitor-Buddy"
+
+// ── Personal-build options (config.h) ───────────────────────
+// CLOCK_12H       true shows 1-12 with AM/PM instead of 00-23.
+// NIGHT_MODE      true dims the backlight and gives the face a sleepy look
+//                 from NIGHT_START_HOUR until NIGHT_END_HOUR (local time).
+//                 A touch brings the normal brightness back for
+//                 NIGHT_WAKE_MS. Off until the clock has synced over NTP.
+// NIGHT_BRIGHTNESS backlight level at night, 8-255.
+#ifndef CLOCK_12H
+  #define CLOCK_12H false
+#endif
+#ifndef NIGHT_MODE
+  #define NIGHT_MODE false
+#endif
+#ifndef NIGHT_START_HOUR
+  #define NIGHT_START_HOUR 23
+#endif
+#ifndef NIGHT_END_HOUR
+  #define NIGHT_END_HOUR 7
+#endif
+#ifndef NIGHT_BRIGHTNESS
+  #define NIGHT_BRIGHTNESS 8
+#endif
+#ifndef NIGHT_WAKE_MS
+  #define NIGHT_WAKE_MS 30000UL
+#endif
+static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
+static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
+static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
 
 // How long the portal stays open with nobody using it, in seconds.
 // The timer is reset by any connected AP client and by every HTTP
@@ -214,10 +248,11 @@ static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
-// Background fetch task. Stack sized from the measured high-water mark: an
-// HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
+// Background fetch task. Upstream sized this at 7 KB from a measured 3.3 KB
+// high-water mark with certificate checks off. Verifying the server's
+// certificate chain needs more, so this build goes back to the original 12 KB.
 // If "[net] ... stack free" ever drops below 2048 bytes, raise this.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 12288;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
@@ -323,6 +358,10 @@ void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
+void writeBacklight(uint8_t level);
+uint8_t backlightTarget();
+void nightWake();
+void updateNightMode();
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -646,6 +685,12 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
+bool     clockTrusted    = false;   // set by the first NTP sync and never cleared:
+                                    // the system clock stays right through the 6 h resyncs
+bool     nightActive     = false;   // inside the NIGHT_START/END window
+bool     nightWoken      = false;   // a touch at night lifts the dimming...
+uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
+uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
 volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
@@ -696,7 +741,7 @@ float pressPulse   = 0.0f;
 // and the draw functions read netView only, so a frame never mixes old and new
 // values. Plain values only (no String), so a copy never touches the heap.
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
-struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
+struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github; };
 
@@ -909,6 +954,33 @@ void seedClockFromCompileTime() {
   clockStartDays    = daysFromCivil(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
 }
 
+// The local wall-clock time now, for the clock, date, moon and night mode.
+// Once NTP has synced, it reads the system clock, which SNTP keeps right and
+// the TZ rule turns into local time, so a daylight-saving change shows the
+// moment it happens. Before that, it runs on from the compile-time seed.
+// days = days since 1970-01-01 of the local date.
+struct LocalNow { uint8_t hour, min, sec, wday, month, mday; int32_t year, days; };
+
+LocalNow localNow() {
+  LocalNow n;
+  struct tm lt;
+  time_t t = time(nullptr);
+  if (clockTrusted && localtime_r(&t, &lt) != nullptr && lt.tm_year > 100) {
+    n.hour = lt.tm_hour; n.min = lt.tm_min; n.sec = lt.tm_sec;
+    n.year = lt.tm_year + 1900; n.month = lt.tm_mon + 1; n.mday = lt.tm_mday;
+    n.days = daysFromCivil(n.year, n.month, n.mday);
+  } else {
+    uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
+    uint32_t total   = clockStartSeconds + elapsed;
+    uint32_t sod     = total % 86400UL;
+    n.hour = sod / 3600UL; n.min = (sod / 60UL) % 60UL; n.sec = sod % 60UL;
+    n.days = clockStartDays + (int32_t)(total / 86400UL);
+    civilFromDays(n.days, &n.year, &n.month, &n.mday);
+  }
+  n.wday = (uint8_t)(((n.days % 7) + 11) % 7);   // 1970-01-01 was a Thursday (4)
+  return n;
+}
+
 // ── Drawing primitives ────────────────────────────────────
 
 void centeredText(const char *text, int y, uint8_t size) {
@@ -1070,7 +1142,8 @@ void syncNTP() {
   clockStartMillis  = millis();
   clockStartSeconds = sod;
   clockStartDays    = daysFromCivil(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
-  ntpSynced   = true;
+  ntpSynced    = true;
+  clockTrusted = true;
   lastNtpSyncMs = millis();
   Serial.printf("NTP synced: %02d:%02d:%02d (%s / %s)\n",
                 ti.tm_hour, ti.tm_min, ti.tm_sec, settings.tzRule, settings.tzName);
@@ -1121,6 +1194,9 @@ void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color) {
 
 bool fetchWeather() {
   if (!ensureWifi()) return false;
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();     // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
@@ -1132,13 +1208,13 @@ bool fetchWeather() {
   String tzEncoded = String(settings.tzName);
   tzEncoded.replace("/", "%2F");
   tzEncoded.replace("+", "%2B");
-  String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
+  String weatherUrl = String("https://api.open-meteo.com/v1/forecast?")
     + "latitude=" + latEnc + "&longitude=" + lonEnc
     + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day"
     + "&temperature_unit=" + (settings.tempFahrenheit ? "fahrenheit" : "celsius")
     + "&wind_speed_unit=" + (settings.windMph ? "mph" : "kmh")
     + "&timezone=" + tzEncoded;
-  if (!http.begin(weatherUrl))
+  if (!http.begin(client, weatherUrl))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   JsonDocument doc;
@@ -1168,7 +1244,7 @@ bool fetchWeather() {
 bool fetchStock() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -1194,6 +1270,7 @@ bool fetchStock() {
   s.open      = doc["o"].as<float>();    // "o" → open
   s.high      = doc["h"].as<float>();    // "h" → high
   s.low       = doc["l"].as<float>();    // "l" → low
+  s.prevClose = doc["pc"].as<float>();   // "pc" → previous close (0 if missing)
   s.updatedAt = millis();
   s.valid     = true;
   publishNetData(netShared.stock, s);
@@ -1206,7 +1283,7 @@ bool fetchGithub() {
   if (!githubConfigured()) return false;
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -1611,14 +1688,22 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 }
 
 void drawClock() {
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  uint32_t sod     = (clockStartSeconds+elapsed)%86400UL;
-  uint8_t hh = sod/3600UL, mm = (sod/60UL)%60UL, ss = sod%60UL;
+  const LocalNow now = localNow();
+  uint8_t hh = now.hour, mm = now.min, ss = now.sec;
+  const bool pm = hh >= 12;
+  if (CLOCK_12H) { hh %= 12; if (hh == 0) hh = 12; }
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
-  drawDigit(8,   Y, hh/10, W, H, T, COL_TIME);
+  // 12-hour: no leading zero (" 9:41", not "09:41").
+  if (!CLOCK_12H || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
   drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
+  if (CLOCK_12H) {
+    // AM/PM above the seconds, top-aligned with the digits.
+    gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
+    gfx->setCursor(282, Y + 4);
+    gfx->print(pm ? "PM" : "AM");
+  }
   if ((ss%2)==0) {
     gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
     gfx->fillRoundRect(134, Y+62, 11, 11, 5, COL_TIME);
@@ -1639,11 +1724,9 @@ void drawClock() {
 void drawDatePage() {
   static const char *wd[]  = {"SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"};
   static const char *mon[] = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"};
-  uint32_t elapsedSec = (millis()-clockStartMillis)/1000UL;
-  int32_t days = clockStartDays + (int32_t)((clockStartSeconds+elapsedSec)/86400UL);
-  int32_t year; uint8_t month, day;
-  civilFromDays(days, &year, &month, &day);
-  uint8_t weekday = (uint8_t)((days+4)%7);
+  const LocalNow now = localNow();
+  int32_t year = now.year; uint8_t month = now.month, day = now.mday;
+  uint8_t weekday = now.wday;
   gfx->fillScreen(BG);
   centeredTextColor(wd[weekday], 14, 4, COL_DATE_WD);
   char line[24];
@@ -1738,9 +1821,12 @@ void drawMoonDisc(int cx, int cy, int radius, float phase, uint16_t color) {
 
 void drawMoon() {
   const float syn = 29.53058867f;
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  float days = (float)clockStartDays + ((float)clockStartSeconds+(float)elapsed)/86400.0f;
-  float age  = fmod(days-10962.7597f, syn);
+  const LocalNow now = localNow();
+  // Local days since 1970 with the time of day as the fraction. 10962.7597 is
+  // the 2000-01-06 18:14 UTC new moon on the same scale.
+  double days = (double)now.days
+              + ((double)now.hour * 3600.0 + now.min * 60.0 + now.sec) / 86400.0;
+  float age  = (float)fmod(days - 10962.7597, (double)syn);
   if (age < 0.0f) age += syn;
   float phase       = age/syn;
   int   illumination = (int)round((1.0f-cos(phase*6.2831853f))*50.0f);
@@ -1763,7 +1849,11 @@ void drawStock() {
   if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
   snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
-  uint16_t priceCol = (s.price >= s.open) ? COL_PRICE_UP : COL_PRICE_DOWN;
+  // Up/down is measured against yesterday's close, like any quote screen;
+  // the open is only a stand-in if Finnhub left "pc" out.
+  const float ref = s.prevClose > 0.0f ? s.prevClose : s.open;
+  const bool  up  = s.price >= ref;
+  uint16_t priceCol = up ? COL_PRICE_UP : COL_PRICE_DOWN;
   centeredTextColor(pbuf, 26, 6, priceCol);      // big price (up=green/down=red in semantic)
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
@@ -1772,8 +1862,16 @@ void drawStock() {
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
-  gfx->setCursor(14, 124 - 4 * tsize);                   // keep it vertically centred
+  gfx->setCursor(14, 112 - 4 * tsize);                   // centred on the ticker + change block
   gfx->print(settings.ticker);
+  // Day change in percent under the ticker, e.g. "+0.35%".
+  if (ref > 0.0f) {
+    char cbuf[12];
+    snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (s.price - ref) / ref * 100.0f);
+    gfx->setTextSize(2); gfx->setTextColor(priceCol);
+    gfx->setCursor(14, 132);
+    gfx->print(cbuf);
+  }
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
   gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
@@ -2195,7 +2293,7 @@ void loadDisplaySettings() {
 
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(backlightTarget());
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = millis() + 1200;
@@ -2281,6 +2379,14 @@ void readTouch() {
       touchSwipeDone = false;
       touchWasDown = true;
       touchPortalArmed = true;   // this press is eligible to open the portal
+      // Night mode is dimming: this press only wakes the screen, so a tap in
+      // the dark doesn't also flip the page or change the face.
+      if (backlightTarget() < brightnessLevel) {
+        nightWake();
+        touchSwipeDone = true;   // ignore the rest of this press
+        touchMoved = true;       // and don't count its release as a tap
+        touchPortalArmed = false;
+      }
       return;
     }
     // A page swipe already fired for this press: the rest of the contact is
@@ -2352,11 +2458,49 @@ void updateAutoPage() {
   if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
 }
 
-// Returns the current clock hour (0-23) derived from the running clock.
+// Returns the current local hour (0-23).
 static uint8_t currentClockHour() {
-  uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
-  uint32_t sod     = (clockStartSeconds + elapsed) % 86400UL;
-  return (uint8_t)(sod / 3600UL);
+  return localNow().hour;
+}
+
+// ── Night mode ────────────────────────────────────────────
+// Writes the backlight only when the level changes.
+void writeBacklight(uint8_t level) {
+  if (level == backlightOut) return;
+  ledcWrite(LCD_BL, level);
+  backlightOut = level;
+}
+
+// The backlight level for right now: the user's brightness, or the night
+// level while night mode is dimming. Never brighter than the user's level.
+uint8_t backlightTarget() {
+  if (nightWoken && millis() - nightWokenAt >= NIGHT_WAKE_MS) nightWoken = false;
+  if (!NIGHT_MODE || !nightActive || nightWoken) return brightnessLevel;
+  return brightnessLevel < NIGHT_BRIGHTNESS ? brightnessLevel : (uint8_t)NIGHT_BRIGHTNESS;
+}
+
+// A touch while dimmed: full brightness again for NIGHT_WAKE_MS.
+void nightWake() {
+  if (!NIGHT_MODE || !nightActive) return;
+  nightWoken   = true;
+  nightWokenAt = millis();
+}
+
+// Called every loop. Waits for a real clock, so a Buddy that never reached
+// NTP isn't dimmed at the wrong hours.
+void updateNightMode() {
+  if (NIGHT_MODE && clockTrusted) {
+    const uint8_t h = currentClockHour();
+    const bool inWindow = (NIGHT_START_HOUR <= NIGHT_END_HOUR)
+        ? (h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR)
+        : (h >= NIGHT_START_HOUR || h < NIGHT_END_HOUR);   // window crosses midnight
+    if (inWindow != nightActive) {
+      nightActive = inWindow;
+      faceMood = inWindow ? MOOD_SLEEPY : MOOD_NORMAL;      // a tap still changes it
+      Serial.printf("Night mode: %s\n", inWindow ? "on" : "off");
+    }
+  }
+  writeBacklight(backlightTarget());
 }
 
 // ── Background fetch task ────────────────────────────────
@@ -2428,7 +2572,7 @@ void netTask(void *) {
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
         && weatherPacer.ready(now)) {
       runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
-      ran = true;
+      ran = usedTls = true;
     } else if (settings.pages[PAGE_GITHUB] && githubConfigured()
         && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
         && githubPacer.ready(now)) {
@@ -2498,7 +2642,7 @@ void setup() {
   lcdRegInit();
   display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -2568,7 +2712,7 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to
   // LittleFS. AWM serves those in preference to its built-in, multilingual
@@ -2639,6 +2783,7 @@ void loop() {
 
   updateAutoPage();
   updateFaceTimers();
+  updateNightMode();
 
   // Retry NTP if Wi-Fi came up after boot, and resync every 6 h to
   // correct drift and to undo any UTC-only resync done by AWM.
