@@ -699,7 +699,7 @@ float pressPulse   = 0.0f;
 // and the draw functions read netView only, so a frame never mixes old and new
 // values. Plain values only (no String), so a copy never touches the heap.
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
-struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
+struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github; };
 
@@ -1235,6 +1235,7 @@ bool fetchStock() {
   s.open      = doc["o"].as<float>();    // "o" → open
   s.high      = doc["h"].as<float>();    // "h" → high
   s.low       = doc["l"].as<float>();    // "l" → low
+  s.prevClose = doc["pc"].as<float>();   // "pc" → previous close (0 if missing)
   s.updatedAt = millis();
   s.valid     = true;
   publishNetData(netShared.stock, s);
@@ -1805,7 +1806,11 @@ void drawStock() {
   if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
   snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
-  uint16_t priceCol = (s.price >= s.open) ? COL_PRICE_UP : COL_PRICE_DOWN;
+  // Up/down is measured against yesterday's close, like any quote screen;
+  // the open is only a stand-in if Finnhub left "pc" out.
+  const float ref = s.prevClose > 0.0f ? s.prevClose : s.open;
+  const bool  up  = s.price >= ref;
+  uint16_t priceCol = up ? COL_PRICE_UP : COL_PRICE_DOWN;
   centeredTextColor(pbuf, 26, 6, priceCol);      // big price (up=green/down=red in semantic)
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
@@ -1814,8 +1819,16 @@ void drawStock() {
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
-  gfx->setCursor(14, 124 - 4 * tsize);                   // keep it vertically centred
+  gfx->setCursor(14, (ref > 0.0f ? 112 : 124) - 4 * tsize);  // centred, with or without the % line
   gfx->print(settings.ticker);
+  // Day change in percent under the ticker, e.g. "+0.35%".
+  if (ref > 0.0f) {
+    char cbuf[12];
+    snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (s.price - ref) / ref * 100.0f);
+    gfx->setTextSize(2); gfx->setTextColor(priceCol);
+    gfx->setCursor(14, 132);
+    gfx->print(cbuf);
+  }
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
   gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
