@@ -647,6 +647,8 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
+bool     clockTrusted    = false;   // set by the first NTP sync and never cleared:
+                                    // the system clock stays right through the 6 h resyncs
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
 volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
@@ -910,6 +912,33 @@ void seedClockFromCompileTime() {
   clockStartDays    = daysFromCivil(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
 }
 
+// The local wall-clock time now, for the clock, date and moon pages.
+// Once NTP has synced, it reads the system clock, which SNTP keeps right and
+// the TZ rule turns into local time, so a daylight-saving change shows the
+// moment it happens. Before that, it runs on from the compile-time seed.
+// days = days since 1970-01-01 of the local date.
+struct LocalNow { uint8_t hour, min, sec, wday, month, mday; int32_t year, days; };
+
+LocalNow localNow() {
+  LocalNow n;
+  struct tm lt;
+  time_t t = time(nullptr);
+  if (clockTrusted && localtime_r(&t, &lt) != nullptr && lt.tm_year > 100) {
+    n.hour = lt.tm_hour; n.min = lt.tm_min; n.sec = lt.tm_sec;
+    n.year = lt.tm_year + 1900; n.month = lt.tm_mon + 1; n.mday = lt.tm_mday;
+    n.days = daysFromCivil(n.year, n.month, n.mday);
+  } else {
+    uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
+    uint32_t total   = clockStartSeconds + elapsed;
+    uint32_t sod     = total % 86400UL;
+    n.hour = sod / 3600UL; n.min = (sod / 60UL) % 60UL; n.sec = sod % 60UL;
+    n.days = clockStartDays + (int32_t)(total / 86400UL);
+    civilFromDays(n.days, &n.year, &n.month, &n.mday);
+  }
+  n.wday = (uint8_t)(((n.days % 7) + 11) % 7);   // 1970-01-01 was a Thursday (4)
+  return n;
+}
+
 // ── Drawing primitives ────────────────────────────────────
 
 void centeredText(const char *text, int y, uint8_t size) {
@@ -1071,7 +1100,8 @@ void syncNTP() {
   clockStartMillis  = millis();
   clockStartSeconds = sod;
   clockStartDays    = daysFromCivil(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
-  ntpSynced   = true;
+  ntpSynced    = true;
+  clockTrusted = true;
   lastNtpSyncMs = millis();
   Serial.printf("NTP synced: %02d:%02d:%02d (%s / %s)\n",
                 ti.tm_hour, ti.tm_min, ti.tm_sec, settings.tzRule, settings.tzName);
@@ -1615,9 +1645,8 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 }
 
 void drawClock() {
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  uint32_t sod     = (clockStartSeconds+elapsed)%86400UL;
-  uint8_t hh = sod/3600UL, mm = (sod/60UL)%60UL, ss = sod%60UL;
+  const LocalNow now = localNow();
+  const uint8_t hh = now.hour, mm = now.min, ss = now.sec;
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
@@ -1643,11 +1672,9 @@ void drawClock() {
 void drawDatePage() {
   static const char *wd[]  = {"SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"};
   static const char *mon[] = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"};
-  uint32_t elapsedSec = (millis()-clockStartMillis)/1000UL;
-  int32_t days = clockStartDays + (int32_t)((clockStartSeconds+elapsedSec)/86400UL);
-  int32_t year; uint8_t month, day;
-  civilFromDays(days, &year, &month, &day);
-  uint8_t weekday = (uint8_t)((days+4)%7);
+  const LocalNow now = localNow();
+  int32_t year = now.year; uint8_t month = now.month, day = now.mday;
+  uint8_t weekday = now.wday;
   gfx->fillScreen(BG);
   centeredTextColor(wd[weekday], 14, 4, COL_DATE_WD);
   char line[24];
@@ -1742,9 +1769,13 @@ void drawMoonDisc(int cx, int cy, int radius, float phase, uint16_t color) {
 
 void drawMoon() {
   const float syn = 29.53058867f;
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  float days = (float)clockStartDays + ((float)clockStartSeconds+(float)elapsed)/86400.0f;
-  float age  = fmod(days-10962.7597f, syn);
+  const LocalNow now = localNow();
+  // Days since 1970 UTC; 10962.7597 is the 2000-01-06 18:14 UTC new moon on
+  // that scale. Before NTP, the local seed is the best there is (hours off).
+  double days = clockTrusted
+      ? (double)time(nullptr) / 86400.0
+      : (double)now.days + ((double)now.hour * 3600.0 + now.min * 60.0 + now.sec) / 86400.0;
+  float age  = (float)fmod(days - 10962.7597, (double)syn);
   if (age < 0.0f) age += syn;
   float phase       = age/syn;
   int   illumination = (int)round((1.0f-cos(phase*6.2831853f))*50.0f);
@@ -2356,11 +2387,9 @@ void updateAutoPage() {
   if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
 }
 
-// Returns the current clock hour (0-23) derived from the running clock.
+// Returns the current local hour (0-23).
 static uint8_t currentClockHour() {
-  uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
-  uint32_t sod     = (clockStartSeconds + elapsed) % 86400UL;
-  return (uint8_t)(sod / 3600UL);
+  return localNow().hour;
 }
 
 // ── Background fetch task ────────────────────────────────
