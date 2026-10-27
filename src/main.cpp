@@ -214,10 +214,11 @@ static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
-// Background fetch task. Stack sized from the measured high-water mark: an
-// HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
+// Background fetch task. With certificate checks off, an HTTPS fetch used
+// about 3.3 KB; verifying the server's chain takes it to about 3.8 KB
+// (measured: 8.4 KB unused of 12 KB). 12 KB keeps a wide margin.
 // If "[net] ... stack free" ever drops below 2048 bytes, raise this.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 12288;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
@@ -1121,6 +1122,9 @@ void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color) {
 
 bool fetchWeather() {
   if (!ensureWifi()) return false;
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();     // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
@@ -1132,13 +1136,13 @@ bool fetchWeather() {
   String tzEncoded = String(settings.tzName);
   tzEncoded.replace("/", "%2F");
   tzEncoded.replace("+", "%2B");
-  String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
+  String weatherUrl = String("https://api.open-meteo.com/v1/forecast?")
     + "latitude=" + latEnc + "&longitude=" + lonEnc
     + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day"
     + "&temperature_unit=" + (settings.tempFahrenheit ? "fahrenheit" : "celsius")
     + "&wind_speed_unit=" + (settings.windMph ? "mph" : "kmh")
     + "&timezone=" + tzEncoded;
-  if (!http.begin(weatherUrl))
+  if (!http.begin(client, weatherUrl))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   JsonDocument doc;
@@ -1168,7 +1172,7 @@ bool fetchWeather() {
 bool fetchStock() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -1206,7 +1210,7 @@ bool fetchGithub() {
   if (!githubConfigured()) return false;
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -2428,7 +2432,7 @@ void netTask(void *) {
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
         && weatherPacer.ready(now)) {
       runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
-      ran = true;
+      ran = usedTls = true;
     } else if (settings.pages[PAGE_GITHUB] && githubConfigured()
         && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
         && githubPacer.ready(now)) {
