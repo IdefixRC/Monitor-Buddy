@@ -787,6 +787,13 @@ float clampFloat(float v, float lo, float hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+// True once millis() has reached `deadline`. Comparing the signed difference
+// keeps working across the millis() wrap at ~49.7 days of uptime, where a
+// plain `now > deadline` stops the blink, glance and auto-advance timers.
+static inline bool timeReached(uint32_t now, uint32_t deadline) {
+  return (int32_t)(now - deadline) >= 0;
+}
+
 // ── LCD init sequence for the AXS15231B panel ─────────────
 
 void lcdRegInit() {
@@ -2233,7 +2240,7 @@ void setBrightness(int level) {
   ledcWrite(LCD_BL, brightnessLevel);
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
-  brightnessBannerUntil = millis() + 1200;
+  brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
   Serial.printf("Brightness: %u/255\n", brightnessLevel);
 }
 
@@ -2254,7 +2261,7 @@ void flushBrightnessSave(bool now) {
 
 void triggerDoubleTap() {
   autoPageEnabled = !autoPageEnabled;
-  autoPageBannerUntil = millis() + 1400;
+  autoPageBannerUntil = (millis() + 1400) | 1;     // 0 means no banner
   if (autoPageEnabled) nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
   Serial.printf("Auto-advance: %s\n", autoPageEnabled ? "ON" : "OFF");
 }
@@ -2369,11 +2376,11 @@ void readTouch() {
 
 void updateFaceTimers() {
   uint32_t now = millis();
-  if (now > nextBlink) {
+  if (timeReached(now, nextBlink)) {
     blinkUntil = now + (random(0,6)==0 ? 220 : 105);
     nextBlink  = now + 1000 + random(0, 2600);
   }
-  if (now > nextGlance) {
+  if (timeReached(now, nextGlance)) {
     faceTargetX = (float)random(-8, 9);
     faceTargetY = (float)random(-4, 5);
     nextGlance  = now + 650 + random(0, 1500);
@@ -2384,7 +2391,7 @@ void updateFaceTimers() {
 }
 
 void updateAutoPage() {
-  if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
+  if (autoPageEnabled && timeReached(millis(), nextAutoPage)) switchApp(1);
 }
 
 // Returns the current local hour (0-23).
@@ -2699,7 +2706,11 @@ void loop() {
     default: drawGithub();    break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
-  if (millis() < brightnessBannerUntil) {
+  // A deadline is cleared once it passes, so it never goes stale long enough
+  // for the signed comparison in timeReached() to wrap.
+  if (brightnessBannerUntil && timeReached(millis(), brightnessBannerUntil)) brightnessBannerUntil = 0;
+  if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
+  if (brightnessBannerUntil) {
     char msg[20];
     snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
     uint16_t bannerColor = rgb(0,200,255);
@@ -2710,7 +2721,7 @@ void loop() {
     gfx->drawRoundRect((SCREEN_W-bw-12)/2, SCREEN_H/2-10, bw+12, 20, 4, bannerColor);
     gfx->setCursor((SCREEN_W-bw)/2, SCREEN_H/2-4);
     gfx->print(msg);
-  } else if (millis() < autoPageBannerUntil) {
+  } else if (autoPageBannerUntil) {
     const char *msg = autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
     uint16_t bannerColor = autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
     gfx->setTextSize(1);
