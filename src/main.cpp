@@ -146,11 +146,18 @@
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
-// Access-point shown when the portal is open.
-// AP_PASS must be 8-63 characters (WPA2 minimum) or the AP will
-// refuse to start. Use "" only if you want an open AP.
-#define AP_SSID   "Monitor-Buddy-Setup"
-#define AP_PASS   "buddy1234"
+// Access-point shown when the portal is open. Both can be set in config.h.
+// AP_PASS: 8-26 characters (WPA2 needs at least 8, and the setup screen shows
+// up to 26), or "" only if you want an open AP. AP_SSID: 1-26 characters.
+#ifndef AP_SSID
+  #define AP_SSID   "Monitor-Buddy-Setup"
+#endif
+#ifndef AP_PASS
+  #define AP_PASS   "buddy1234"
+#endif
+static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <= 27),
+              "AP_PASS must be empty or 8-26 characters");
+static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 #define AWM_HOSTNAME "Monitor-Buddy"
 
 // How long the portal stays open with nobody using it, in seconds.
