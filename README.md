@@ -41,11 +41,11 @@ The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-print
 
 ## 2. What you need
 
-| Item                                                                          | Quantity | Where                                                                |
-| ----------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------- |
-| 3D-printed holder: `Monitor-Buddy_flat.STL` **or** `Monitor-Buddy_recess.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3241960-monitor-buddy) |
-| Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx)             |
-| USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html)  |
+| Item                                                                          | Quantity | Where                                                                                                                |
+| ----------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| 3D-printed holder: `Monitor-Buddy_flat.STL` **or** `Monitor-Buddy_recess.STL` | 1        | [MakerWorld](https://makerworld.com/en/models/3241960-monitor-buddy)                                                 |
+| Waveshare ESP32-C6-Touch-LCD-1.47                                             | 1        | [AliExpress](https://s.click.aliexpress.com/e/_c33mPWKx) · [Amazon](https://www.amazon.com/dp/B0F8B8VJR6)            |
+| USB-C cable (power and flashing)                                              | 1        | [AliExpress](https://www.aliexpress.com/item/1005008819293735.html) · [Amazon](https://www.amazon.com/dp/B0CMP2LSP2) |
 
 **IMPORTANT:** Please make sure you purchase the touchscreen version of the ESP-32-C6  (see link above). Non-touchscreen versions are smaller and will not fit the holder. In addition, the code will not work as intended **!!**
 
