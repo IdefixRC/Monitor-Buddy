@@ -1520,7 +1520,7 @@ void updateFacePhysics(float tiltX, float tiltY) {
   breathVal = sin(now / 800.0f) * 3.5f;
 
   // Blink (both eyes together, off the left eye's timer).
-  if (now > leftEye.nextBlinkTime) {
+  if (timeReached(now, leftEye.nextBlinkTime)) {
     leftEye.blinking = rightEye.blinking = true;
     leftEye.lastBlink = now;
     leftEye.nextBlinkTime = now + random(2000, 6000);
