@@ -423,3 +423,28 @@ test("badges match a group or list path to its top-level key and back", () => {
   assert.deepEqual(badgesFor("coins", { added: ["coins.style"] }), ["new"]);
   assert.deepEqual(badgesFor("pages.moon", { added: ["pages.face"] }), []);
 });
+
+// ── The flows pass the board's supported paths on (spec §5.3) ──
+
+test("every form built from a GET passes that GET's supported paths", () => {
+  const fromGet = appSource.match(/newFormState\(fromBoard\(got\.config\)[^)]*\)/g) || [];
+  assert.ok(fromGet.length >= 3, "the GET-based forms");
+  for (const call of fromGet) assert.match(call, /supported: supportedPaths\(got\.config\)/, call);
+});
+
+test("afterFlash sends what the flash added to the review form", () => {
+  assert.match(appSource, /newlyOffered\(f\.supported, now\)/);
+  assert.match(appSource, /f\.supported = now/);
+});
+
+test("the page switches are drawn only for supported pages", () => {
+  assert.match(appSource, /PAGE_KEYS\.filter\(\(p\) => offered\(f, `pages\.\$\{p\}`\)\)/);
+});
+
+test("the backup import leaves out what the board doesn't support", () => {
+  assert.match(appSource, /unsupportedKeys\(cfg, f\.supported\)/);
+  assert.ok(typeof S.form.backupPartly === "function");
+  const text = S.form.backupPartly(11, ["wind_unit"]);
+  assert.match(text, /wind_unit/);
+  assert.doesNotMatch(text, /!|\bplease\b|\bsimply\b|\bjust\b/i);
+});
