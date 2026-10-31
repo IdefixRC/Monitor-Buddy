@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   KEYS, PAGE_KEYS, validateConfig, validateWifi, mergeConfig,
   makeBackup, readBackup, backupFileName, BadBackup,
+  BASELINE_PATHS, supportedPaths, filterSupported, unsupportedKeys, newlyOffered, flattenPaths,
 } from "../web/js/settings.js";
 
 const DEFAULTS = {
@@ -300,4 +301,47 @@ test("backup file name uses the date", () => {
 });
 test("backup file name zero-pads month and day", () => {
   assert.equal(backupFileName(new Date(2026, 0, 3, 23, 59)), "monitor-buddy-settings-2026-01-03.json");
+});
+
+// -- supported paths (spec §5.3) ------------------------------------------
+
+test("BASELINE_PATHS are 1.2.0's 18 paths", () => {
+  assert.deepEqual([...BASELINE_PATHS], ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+    "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
+    "pages.weather", "pages.moon", "pages.stock", "pages.github"]);
+  assert.ok(Object.isFrozen(BASELINE_PATHS));
+});
+
+test("a 1.2.0 GET supports exactly the baseline", () => {
+  assert.deepEqual([...supportedPaths(DEFAULTS)].sort(), [...BASELINE_PATHS].sort());
+});
+
+test("supportedPaths ignores keys the flasher doesn't know and lists only reported pages", () => {
+  const s = supportedPaths({ theme: 2, later: 1, pages: { face: true, coin: true } });
+  assert.deepEqual([...s], ["theme", "pages.face"]);
+});
+
+test("filterSupported keeps only supported paths", () => {
+  const supported = new Set(BASELINE_PATHS.filter((p) => p !== "wind_unit" && p !== "pages.moon"));
+  const out = filterSupported(DEFAULTS, supported);
+  assert.equal(Object.hasOwn(out, "wind_unit"), false);
+  assert.equal(Object.hasOwn(out.pages, "moon"), false);
+  assert.equal(out.pages.face, true);
+  assert.equal(out.theme, 2);
+});
+
+test("unsupportedKeys names the top-level keys that lost something", () => {
+  const supported = new Set(BASELINE_PATHS.filter((p) => p !== "wind_unit" && p !== "pages.moon"));
+  assert.deepEqual(unsupportedKeys(DEFAULTS, supported), ["wind_unit", "pages"]);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(BASELINE_PATHS)), []);
+});
+
+test("newlyOffered lists what a flash adds", () => {
+  assert.deepEqual(newlyOffered(new Set(["a", "b"]), new Set(["a", "b", "c"])), ["c"]);
+  assert.deepEqual(newlyOffered(new Set(["a"]), new Set(["a"])), []);
+});
+
+test("flattenPaths opens groups and keeps lists and unknown keys whole", () => {
+  assert.deepEqual(flattenPaths({ theme: 3, pages: { moon: false }, later: [1] }),
+    [["theme", 3], ["pages.moon", false], ["later", [1]]]);
 });

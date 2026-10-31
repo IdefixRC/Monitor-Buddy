@@ -614,7 +614,7 @@ static const uint8_t FACE_MOOD_COUNT = 9;
 static const uint32_t PAGE_AUTO_INTERVAL_MS = 8000;
 static const uint16_t FG = RGB565_WHITE;
 static const uint16_t BG = RGB565_BLACK;
-// Landscape, turned 180° for a right-side mount (settings.mountRight, applied
+// Landscape, turned 180° for a right-side mount (settings.mount, applied
 // in setup()). Drives the display and the touch mapping; tiltSign flips the
 // IMU tilt to match.
 uint8_t screenRotation = 1;
@@ -1183,8 +1183,8 @@ bool fetchWeather() {
   String weatherUrl = String("https://api.open-meteo.com/v1/forecast?")
     + "latitude=" + latEnc + "&longitude=" + lonEnc
     + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day"
-    + "&temperature_unit=" + (settings.tempFahrenheit ? "fahrenheit" : "celsius")
-    + "&wind_speed_unit=" + (settings.windMph ? "mph" : "kmh")
+    + "&temperature_unit=" + (settings.tempUnit == TEMP_FAHRENHEIT ? "fahrenheit" : "celsius")
+    + "&wind_speed_unit=" + (settings.windUnit == WIND_MPH ? "mph" : "kmh")
     + "&timezone=" + tzEncoded;
   if (!http.begin(client, weatherUrl))
     return false;
@@ -1738,13 +1738,13 @@ void drawWeather() {
   drawWeatherIcon(250, 66, w.code, w.isDay, COL_WICON);
   gfx->setTextSize(8); gfx->setTextColor(COL_TEMP);
   gfx->setCursor(14, 34); gfx->print(w.temp);
-  gfx->setTextSize(3); gfx->print(settings.tempFahrenheit ? "F" : "C");
+  gfx->setTextSize(3); gfx->print(settings.tempUnit == TEMP_FAHRENHEIT ? "F" : "C");
   gfx->setTextSize(2); gfx->setTextColor(COL_WSUB);
   gfx->setCursor(14, 116); gfx->print(weatherCodeText(w.code));
   gfx->setTextColor(COL_LABEL);
   gfx->setCursor(14,  140); gfx->print("H "); gfx->print(w.humidity); gfx->print("%");
   // Wind, right-aligned: same 14 px gap from the right edge as humidity has from the left.
-  { String wu = settings.windMph ? "MPH" : "KMH";
+  { String wu = settings.windUnit == WIND_MPH ? "MPH" : "KMH";
     String windStr = String("W ") + w.wind + wu;
     int windW = (int)windStr.length() * 12;          // size-2 chars are 12 px wide
     gfx->setCursor(SCREEN_W - 14 - windW, 140);
@@ -1967,7 +1967,7 @@ void maintainWifi() {
 // and everything on a board that has no /config.json (a source build).
 Settings defaultsFromConfig() {
   Settings d{};
-  d.mountRight = MOUNT_IS_RIGHT;
+  d.mount = MOUNT_IS_RIGHT ? MOUNT_RIGHT : MOUNT_LEFT;
   d.theme      = THEME;
   strlcpy(d.githubUser, GITHUB_USER, sizeof(d.githubUser));
   strlcpy(d.tzName,     TIMEZONE,    sizeof(d.tzName));
@@ -1981,8 +1981,8 @@ Settings defaultsFromConfig() {
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
-  d.tempFahrenheit = TEMP[0] == 'f';
-  d.windMph        = strcmp(WIND, "mph") == 0;
+  d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
+  d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
       SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB};
   memcpy(d.pages, pages, sizeof(pages));
@@ -2548,8 +2548,8 @@ void setup() {
   // begin() mounts LittleFS again later; that is a no-op once mounted.
   if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed - using config.h values");
   loadSettings();
-  screenRotation = settings.mountRight ? 3 : 1;
-  tiltSign       = settings.mountRight ? -1.0f : 1.0f;
+  screenRotation = settings.mount == MOUNT_RIGHT ? 3 : 1;
+  tiltSign       = settings.mount == MOUNT_RIGHT ? -1.0f : 1.0f;
   setenv("TZ", settings.tzRule, 1);
   tzset();
   applyTheme();   // themed colours from settings.theme

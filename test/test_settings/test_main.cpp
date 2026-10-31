@@ -9,7 +9,7 @@ void tearDown() {}
 
 static Settings makeDefaults() {
   Settings s{};
-  s.mountRight = false;
+  s.mount = MOUNT_LEFT;
   s.theme = 2;
   strcpy(s.githubUser, "IdefixRC");
   strcpy(s.tzName, "Asia/Singapore");
@@ -18,8 +18,8 @@ static Settings makeDefaults() {
   strcpy(s.stockKey, "");
   strcpy(s.lat, "1.3119");
   strcpy(s.lon, "103.8149");
-  s.tempFahrenheit = false;
-  s.windMph = false;
+  s.tempUnit = TEMP_CELSIUS;
+  s.windUnit = WIND_KMH;
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) s.pages[i] = true;
   return s;
 }
@@ -85,7 +85,7 @@ static void test_load_applies_every_key() {
     "\"moon\":false,\"stock\":true,\"github\":true}}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
-  TEST_ASSERT_TRUE(out.mountRight);
+  TEST_ASSERT_EQUAL(MOUNT_RIGHT, out.mount);
   TEST_ASSERT_EQUAL(4, out.theme);
   TEST_ASSERT_EQUAL_STRING("octo-cat", out.githubUser);
   TEST_ASSERT_EQUAL_STRING("Europe/Berlin", out.tzName);
@@ -94,8 +94,8 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL_STRING("abc123", out.stockKey);
   TEST_ASSERT_EQUAL_STRING("48.1374", out.lat);
   TEST_ASSERT_EQUAL_STRING("11.5755", out.lon);
-  TEST_ASSERT_TRUE(out.tempFahrenheit);
-  TEST_ASSERT_TRUE(out.windMph);
+  TEST_ASSERT_EQUAL(TEMP_FAHRENHEIT, out.tempUnit);
+  TEST_ASSERT_EQUAL(WIND_MPH, out.windUnit);
   TEST_ASSERT_FALSE(out.pages[1]);
   TEST_ASSERT_FALSE(out.pages[4]);
   TEST_ASSERT_TRUE(out.pages[5]);
@@ -253,7 +253,7 @@ static void test_merge_rejects_url_breaking_characters() {
 
 static void test_round_trip_through_json() {
   Settings s = makeDefaults();
-  s.mountRight = true; s.theme = 0; s.windMph = true; s.pages[3] = false;
+  s.mount = MOUNT_RIGHT; s.theme = 0; s.windUnit = WIND_MPH; s.pages[3] = false;
   strcpy(s.tzRule, "EST5EDT,M3.2.0,M11.1.0");
   JsonDocument file;
   deserializeJson(file, dump(s));
@@ -346,6 +346,51 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
   TEST_ASSERT_FALSE(tzRuleFromOffset(8, tiny, sizeof tiny));
 }
 
+// ── The @MB line budget (spec §4.6) ───────────────────────
+
+// The largest GET reply today, plus room for the keys spec §8 plans (about
+// 400 bytes of config at their largest, about 150 of added paths), must fit
+// the 2,048-byte reply buffer with a quarter to spare.
+static void test_largest_get_reply_fits_with_room() {
+  Settings s = makeDefaults();
+  s.mount = MOUNT_RIGHT; s.theme = 4;
+  memset(s.githubUser, 'a', 39); s.githubUser[39] = '\0';
+  memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
+  memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
+  memset(s.ticker, 'A', 10);     s.ticker[10] = '\0';
+  memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  strcpy(s.lat, "-12.34567890123");
+  strcpy(s.lon, "-123.4567890123");
+  s.tempUnit = TEMP_FAHRENHEIT;
+  JsonDocument d;
+  d["ok"] = true; d["cmd"] = "GET"; d["id"] = 4294967295UL;
+  d["v"] = CONFIG_VERSION; d["stored"] = true;
+  settingsToJson(s, d["config"].to<JsonObject>());
+  JsonArray added = d["added"].to<JsonArray>();
+  const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
+                       "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
+                       "pages.weather", "pages.moon", "pages.stock", "pages.github"};
+  for (const char *k : all) added.add(k);
+  size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400 + 150);
+}
+
+// The largest SET line the flasher sends: the whole config plus Wi-Fi.
+static void test_largest_set_line_fits_with_room() {
+  Settings s = makeDefaults();
+  memset(s.githubUser, 'a', 39); s.githubUser[39] = '\0';
+  memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
+  memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
+  memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  JsonDocument d;
+  d["id"] = 4294967295UL;
+  settingsToJson(s, d["config"].to<JsonObject>());
+  d["wifi"]["ssid"] = std::string(32, 's');
+  d["wifi"]["password"] = std::string(63, 'p');
+  size_t line = 8 + measureJson(d) + 1;   // "@MB SET " + JSON + "\n"
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_tz_rule_whole_hours_east);
@@ -374,5 +419,7 @@ int main(int, char **) {
   RUN_TEST(test_wifi_open_network);
   RUN_TEST(test_wifi_password_is_required);
   RUN_TEST(test_wifi_rejects_bad_input);
+  RUN_TEST(test_largest_get_reply_fits_with_room);
+  RUN_TEST(test_largest_set_line_fits_with_room);
   return UNITY_END();
 }

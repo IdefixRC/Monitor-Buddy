@@ -5,8 +5,8 @@ import { S } from "./strings.js";
 import { BuddyPort, change, probe } from "./serial.js";
 import { sameMac, watchForTrouble } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
-import { parseManifest, offered, updateFor } from "./releases.js";
-import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup } from "./settings.js";
+import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
+import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered } from "./settings.js";
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
@@ -14,7 +14,7 @@ import { checkStock, checkGithub } from "./checks.js";
 import { createFace } from "./face.js";
 import { createPreview, THEMES } from "./preview.js";
 import {
-  DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
+  DEFAULTS, FLOWS, newFormState, offered, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
@@ -417,7 +417,7 @@ function showHome() {
 async function startChange() {
   const got = await readGet();
   if (!got) return;
-  app.form = newFormState(fromBoard(got.config), { flow: "change", info: app.info, added: got.added || [] });
+  app.form = newFormState(fromBoard(got.config), { flow: "change", info: app.info, added: got.added || [], supported: supportedPaths(got.config) });
   showForm();
 }
 
@@ -425,13 +425,15 @@ async function startChange() {
 async function startFlashFlow(flow) {
   let config = DEFAULTS;
   let added = [];
+  let supported;
   if (app.info) {
     const got = await readGet();
     if (!got) return;
     config = fromBoard(got.config);
     added = got.added || [];
+    supported = supportedPaths(got.config);
   }
-  app.form = newFormState(config, { flow, info: app.info, added });
+  app.form = newFormState(config, { flow, info: app.info, added, supported });
   app.form.version = app.releases[0].version;
   showForm();
 }
@@ -499,7 +501,7 @@ async function startFresh() {
     choice: true,
     next: (empty) => {
       app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
-        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got) });
+        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got), supported: supportedPaths(got.config) });
       app.form.version = app.releases[0].version;
       showForm();
     },
@@ -962,7 +964,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } }))));
 
     // 4. Pages.
-    const pageRows = PAGE_KEYS.map((p) => switchRow({
+    const pageRows = PAGE_KEYS.filter((p) => offered(f, `pages.${p}`)).map((p) => switchRow({
       label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
       set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
     }));
@@ -1202,9 +1204,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       report(e);
       return showForm({ say: e instanceof BadBackup ? S.form.badBackup : S.form.badFile, tone: "error" });
     }
+    const left = unsupportedKeys(cfg, f.supported);
+    cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
     markImported(Object.keys(cfg));
-    showForm({ say: S.form.backupImported(Object.keys(cfg).length) });
+    showForm({ say: left.length
+      ? S.form.backupPartly(Object.keys(cfg).length, left)
+      : S.form.backupImported(Object.keys(cfg).length) });
   }
 
   function markImported(keys) {
@@ -1442,22 +1448,29 @@ async function afterFlash(entry, ui) {
       // unless this firmware brings settings the saved ones predate. Those get
       // the same review as after an update.
       const added = got.added || [];
-      app.form = newFormState(fromBoard(got.config), { flow: added.length ? "review" : "change", info, added });
+      app.form = newFormState(fromBoard(got.config), { flow: added.length ? "review" : "change", info, added, supported: supportedPaths(got.config) });
       app.form.installed = info.fw;
       if (added.length) return showForm({ say: S.form.say.review });
       app.form.installed = null;
       return showResult("saved", { installed: info.fw });
     }
-    app.form = newFormState(fromBoard(got.config), { flow: "setup", info, added: got.added || [] });
+    app.form = newFormState(fromBoard(got.config), { flow: "setup", info, added: got.added || [], supported: supportedPaths(got.config) });
     app.form.installed = info.fw;
     return showForm({ say: S.form.say.setup });
   }
   const f = app.form;
-  f.config = mergeConfig(fromBoard(got.config), f.config);
+  // What the new firmware understands decides what is sent; anything it has
+  // that the form didn't offer goes to the review form first (on a fresh
+  // install "added" is empty, so this is the only way the user sees it).
+  const now = supportedPaths(got.config);
+  const fresh = newlyOffered(f.supported, now);
+  f.supported = now;
+  f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
   f.installed = info.fw;
   app.expectDrop = false;
-  if (got.added && got.added.length) {
-    f.added = got.added;
+  const added = [...new Set([...(got.added || []), ...fresh])];
+  if (added.length) {
+    f.added = added;
     f.flow = "review";
     return showForm({ say: S.form.say.review });
   }
@@ -1569,7 +1582,7 @@ async function loadManifest() {
     const r = await fetch("firmware/releases.json", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     app.manifest = parseManifest(await r.json());
-    app.releases = offered(app.manifest, BETA);
+    app.releases = offeredReleases(app.manifest, BETA);
   } catch (e) {
     app.manifestError = true;
     report(e);

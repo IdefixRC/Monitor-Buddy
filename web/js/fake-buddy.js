@@ -14,12 +14,14 @@
 //   lost=SET         the reply to SET is lost (change() then verifies)
 //   seterror=key     SET refuses with an error on that key
 //   nowifi           the board has no saved Wi-Fi
+//   keys=1.2.0       the board knows only 1.2.0's settings (GET reports only those, SET skips the rest)
+//   missing=a,b      the board lacks these paths until it is flashed (then it knows everything)
 //   fw=1.1.9         the firmware version INFO reports (to see the update ribbon)
 // A Wi-Fi password of "wrongpass" never connects.
 import { NoReply } from "./serial.js";
 import { FlashError, NotABuddy } from "./flasher.js";
 import { DEFAULTS } from "./form.js";
-import { mergeConfig, validateConfig, validateWifi } from "./settings.js";
+import { BASELINE_PATHS, supportedPaths, filterSupported, mergeConfig, validateConfig, validateWifi } from "./settings.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,6 +42,11 @@ export function fakeDevice(params) {
     restarting: false,
     booting: params.has("boot"),
   };
+  // The paths the firmware on the fake board knows (spec §5.3, C3, C6b).
+  const everything = () => supportedPaths(DEFAULTS);
+  const missing = (params.get("missing") || "").split(",").filter(Boolean);
+  let knows = params.get("keys") === "1.2.0" ? new Set(BASELINE_PATHS) : everything();
+  for (const p of missing) knows.delete(p);
   const failOnce = new Set(params.get("flashfail") ? [params.get("flashfail")] : []);
   const loseOnce = new Set(params.get("lost") ? [params.get("lost")] : []);
   const noReturn = new Set(params.get("noreturn") ? [params.get("noreturn")] : []);
@@ -124,15 +131,16 @@ export function fakeDevice(params) {
       switch (cmd) {
         case "INFO": return info();
         case "GET":
-          return { ok: true, cmd, v: board.cfg_v, stored: board.stored, config: structuredClone(board.config), added: [...board.added] };
+          return { ok: true, cmd, v: board.cfg_v, stored: board.stored, config: filterSupported(board.config, knows), added: [...board.added] };
         case "SET": {
           if (noReturn.delete("SET")) stayAway = true;
+          const patch = body.config ? filterSupported(body.config, knows) : null;
           const errors = {};
           if (params.get("seterror")) errors[params.get("seterror")] = "rejected by the fake Buddy";
-          if (body.config) Object.assign(errors, validateConfig(body.config).errors);
+          if (patch) Object.assign(errors, validateConfig(patch).errors);
           if (body.wifi) Object.assign(errors, validateWifi(body.wifi).errors);
           if (Object.keys(errors).length) return { ok: false, cmd, errors };
-          if (body.config) { board.config = mergeConfig(board.config, body.config); board.stored = true; board.added = []; }
+          if (patch) { board.config = mergeConfig(board.config, patch); board.stored = true; board.added = []; }
           if (body.wifi) board.wifi = { saved: true, ssid: body.wifi.ssid, password: body.wifi.password };
           this._restart();
           return { ok: true, cmd };
@@ -214,6 +222,7 @@ export function fakeDevice(params) {
     say("Restarting the Buddy");
     board.answers = true;
     board.fw = params.get("newfw") || "1.2.0-rc1";
+    knows = everything();
     board.added = (params.get("added") || "").split(",").filter(Boolean);
     if (board.added.length) board.cfg_v = 2;
     await sleep(300);

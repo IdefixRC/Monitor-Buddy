@@ -1,0 +1,48 @@
+{
+  "settings": {
+    "defaults": {"mount":"left","theme":2,"github_user":"","tz_name":"Asia/Singapore","tz_rule":"<+08>-8","ticker":"AAPL","stock_key":"","lat":"1.3119","lon":"103.8149","temp_unit":"celsius","wind_unit":"kmh","pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":true,"stock":true,"github":true}},
+    "cases": [
+      {"name":"a theme in range","op":"merge","patch":{"theme":4},"ok":true,"config":{"theme":4}},
+      {"name":"a theme out of range","op":"merge","patch":{"theme":9},"ok":false,"errors":{"theme":"must be a whole number 0-4"}},
+      {"name":"theme as text","op":"merge","patch":{"theme":"2"},"ok":false,"errors":{"theme":"must be a whole number 0-4"}},
+      {"name":"mount up","op":"merge","patch":{"mount":"up"},"ok":false,"errors":{"mount":"must be \"left\" or \"right\""}},
+      {"name":"units","op":"merge","patch":{"temp_unit":"kelvin","wind_unit":"knots"},"ok":false,"errors":{"temp_unit":"must be \"celsius\" or \"fahrenheit\"","wind_unit":"must be \"kmh\" or \"mph\""}},
+      {"name":"github user too long","op":"merge","patch":{"github_user":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"ok":false,"errors":{"github_user":"0-39 characters: letters, digits and -"}},
+      {"name":"ticker lower case","op":"merge","patch":{"ticker":"aapl"},"ok":false,"errors":{"ticker":"1-10 characters: A-Z, 0-9, . and -"}},
+      {"name":"stock key with url characters","op":"merge","patch":{"stock_key":"abc&symbol=X"},"ok":false,"errors":{"stock_key":"0-64 characters: letters, digits, _ and -"}},
+      {"name":"tz rule with a space","op":"merge","patch":{"tz_rule":"EST 5"},"ok":false,"errors":{"tz_rule":"1-64 characters of a POSIX TZ rule"}},
+      {"name":"lat out of range, lon hex","op":"merge","patch":{"lat":"95","lon":"0x10"},"ok":false,"errors":{"lat":"a number from -90 to 90","lon":"a number from -180 to 180"}},
+      {"name":"one page off, the rest unchanged","op":"merge","patch":{"pages":{"moon":false}},"ok":true,"config":{"pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":false,"stock":true,"github":true}}},
+      {"name":"a page that isn't a bool","op":"merge","patch":{"pages":{"clock":"yes"}},"ok":false,"errors":{"pages.clock":"must be true or false"}},
+      {"name":"pages that aren't an object","op":"merge","patch":{"pages":true},"ok":false,"errors":{"pages":"must be an object"}},
+      {"name":"unknown keys, unknown pages and v are skipped","op":"merge","patch":{"v":3,"later":1,"pages":{"coin":true}},"ok":true,"config":{"theme":2}},
+      {"name":"a config that isn't an object","op":"merge","patch":[1,2],"ok":false,"errors":{"config":"must be an object"}},
+      {"name":"null for a key is an error","op":"merge","patch":{"ticker":null},"ok":false,"errors":{"ticker":"1-10 characters: A-Z, 0-9, . and -"}},
+      {"name":"a file missing a key and a page","op":"load","file":{"mount":"left","theme":3,"github_user":"","tz_name":"Asia/Singapore","tz_rule":"<+08>-8","stock_key":"","lat":"1.3119","lon":"103.8149","temp_unit":"celsius","wind_unit":"kmh","pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":true,"stock":true}},"added":["ticker","pages.github"],"invalid":{},"config":{"theme":3,"ticker":"AAPL"}},
+      {"name":"a file with a bad theme and bad pages","op":"load","file":{"theme":7,"pages":5},"added":["mount","github_user","tz_name","tz_rule","ticker","stock_key","lat","lon","temp_unit","wind_unit"],"invalid":{"theme":"must be a whole number 0-4","pages":"must be an object"},"config":{"theme":2}},
+      {"name":"a file with unknown keys","op":"load","file":{"mount":"right","theme":2,"github_user":"","tz_name":"Asia/Singapore","tz_rule":"<+08>-8","ticker":"AAPL","stock_key":"","lat":"1.3119","lon":"103.8149","temp_unit":"celsius","wind_unit":"kmh","pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":true,"stock":true,"github":true,"coin":true},"night":{"enabled":true}},"added":[],"invalid":{},"config":{"mount":"right"}},
+      {"name":"a null page is unchanged","op":"merge","patch":{"pages":{"moon":null,"face":false}},"ok":true,"config":{"pages":{"face":false,"clock":true,"date":true,"weather":true,"moon":true,"stock":true,"github":true}}}
+    ]
+  },
+  "demo": {
+    "defaults": {"theme":2,"flags":{"a":true,"b":false},"night":{"enabled":false,"start":23,"end":7,"brightness":8},"names":["AAPL"],"coins":[{"pair":"BTC-USD","style":"coinbase"}]},
+    "cases": [
+      {"name":"a group field","op":"merge","patch":{"flags":{"b":true}},"ok":true,"config":{"flags":{"a":true,"b":true}}},
+      {"name":"a group check against the current value","op":"merge","patch":{"night":{"start":7}},"ok":false,"errors":{"night":"start and end must differ"}},
+      {"name":"a group check that passes","op":"merge","current":{"night":{"end":6}},"patch":{"night":{"start":7}},"ok":true,"config":{"night":{"enabled":false,"start":7,"end":6,"brightness":8}}},
+      {"name":"a bad group field skips the check","op":"merge","patch":{"night":{"start":24,"end":24}},"ok":false,"errors":{"night.start":"a whole hour 0-23","night.end":"a whole hour 0-23"}},
+      {"name":"a value list is replaced whole","op":"merge","patch":{"names":["MSFT","BRK.B"]},"ok":true,"config":{"names":["MSFT","BRK.B"]}},
+      {"name":"an empty list","op":"merge","patch":{"names":[]},"ok":false,"errors":{"names":"1-5 entries"}},
+      {"name":"six entries","op":"merge","patch":{"names":["A","B","C","D","E","F"]},"ok":false,"errors":{"names":"1-5 entries"}},
+      {"name":"a bad value entry","op":"merge","patch":{"names":["AAPL","aapl"]},"ok":false,"errors":{"names[1]":"1-10 characters: A-Z, 0-9, . and -"}},
+      {"name":"records take the entry default","op":"merge","patch":{"coins":[{"pair":"SOL-EUR"},{"pair":"ETH-USD","style":"finnhub"}]},"ok":true,"config":{"coins":[{"pair":"SOL-EUR","style":"coinbase"},{"pair":"ETH-USD","style":"finnhub"}]}},
+      {"name":"bad records","op":"merge","patch":{"coins":[{"pair":"BTCUSD"},7,{"pair":"A-B","style":"x"}]},"ok":false,"errors":{"coins[0].pair":"3-21 characters: A-Z, 0-9 and one -","coins[1]":"must be an object","coins[2].style":"must be \"finnhub\" or \"coinbase\""}},
+      {"name":"a pair with two dashes","op":"merge","patch":{"coins":[{"pair":"A-B-C"}]},"ok":false,"errors":{"coins[0].pair":"3-21 characters: A-Z, 0-9 and one -"}},
+      {"name":"a list that isn't a list","op":"merge","patch":{"coins":{"pair":"BTC-USD"}},"ok":false,"errors":{"coins":"1-5 entries"}},
+      {"name":"a file with records missing a field","op":"load","file":{"theme":2,"flags":{"a":true,"b":false},"night":{"enabled":false,"start":23,"end":7,"brightness":8},"names":["AAPL"],"coins":[{"pair":"SOL-EUR"}]},"added":["coins.style"],"invalid":{},"config":{"coins":[{"pair":"SOL-EUR","style":"coinbase"}]}},
+      {"name":"a file with a bad entry keeps the default list","op":"load","file":{"theme":2,"flags":{"a":true,"b":false},"night":{"enabled":false,"start":23,"end":7,"brightness":8},"names":["MSFT","bad!"],"coins":[{"pair":"BTC-USD","style":"coinbase"}]},"added":[],"invalid":{"names[1]":"1-10 characters: A-Z, 0-9, . and -"},"config":{"names":["AAPL"]}},
+      {"name":"a file whose group breaks its check","op":"load","file":{"theme":2,"flags":{"a":true,"b":false},"night":{"enabled":true,"start":5,"end":5,"brightness":40},"names":["AAPL"],"coins":[{"pair":"BTC-USD","style":"coinbase"}]},"added":[],"invalid":{"night":"start and end must differ"},"config":{"night":{"enabled":false,"start":23,"end":7,"brightness":8}}},
+      {"name":"a null record field takes the entry default","op":"merge","patch":{"coins":[{"pair":"SOL-EUR","style":null}]},"ok":true,"config":{"coins":[{"pair":"SOL-EUR","style":"coinbase"}]}}
+    ]
+  }
+}

@@ -199,6 +199,7 @@ export const S = {
     skipped: (list) => `Skipped: ${list}.`,
     defaulted: (list) => `Not in this file, so left as they were: ${list}.`,
     backupImported: (n) => `Imported ${count(n, "setting", "settings")} from the backup.`,
+    backupPartly: (n, keys) => `Imported ${count(n, "setting", "settings")} from the backup. Left out, because your Buddy's firmware doesn't have them yet: ${[].concat(keys).map((k) => `\`${k}\``).join(", ")}. Update the firmware to use them.`,
     badBackup: "That file isn't a Monitor Buddy backup.",
     badFile: "I couldn't read that file.",
 
