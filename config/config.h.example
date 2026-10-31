@@ -96,3 +96,12 @@
 #define SHOW_MOON     true   // moon phase
 #define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
 #define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)
+
+// ── Setup hotspot (optional, source builds only) ────────────
+// The Wi-Fi network the Buddy opens for setup. Its password is shown on the
+// Buddy's screen while the hotspot is open, so a random one costs nothing.
+// AP_PASS: 8-26 characters (WPA2 needs at least 8, and the setup screen
+// shows up to 26), or "" for an open hotspot. AP_SSID: 1-26 characters.
+// The build stops with an error if either is out of range. Uncomment to set.
+// #define AP_SSID "Monitor-Buddy-Setup"
+// #define AP_PASS "buddy1234"

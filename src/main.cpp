@@ -146,11 +146,18 @@
 
 // OTHER CONFIGURATION ----> EDIT ONLY IF NECESSARY
 
-// Access-point shown when the portal is open.
-// AP_PASS must be 8-63 characters (WPA2 minimum) or the AP will
-// refuse to start. Use "" only if you want an open AP.
-#define AP_SSID   "Monitor-Buddy-Setup"
-#define AP_PASS   "buddy1234"
+// Access-point shown when the portal is open. Both can be set in config.h.
+// AP_PASS: 8-26 characters (WPA2 needs at least 8, and the setup screen shows
+// up to 26), or "" only if you want an open AP. AP_SSID: 1-26 characters.
+#ifndef AP_SSID
+  #define AP_SSID   "Monitor-Buddy-Setup"
+#endif
+#ifndef AP_PASS
+  #define AP_PASS   "buddy1234"
+#endif
+static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <= 27),
+              "AP_PASS must be empty or 8-26 characters");
+static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 #define AWM_HOSTNAME "Monitor-Buddy"
 
 // How long the portal stays open with nobody using it, in seconds.
@@ -214,10 +221,11 @@ static constexpr uint32_t GITHUB_RETRY_MAX_MS          = 120000UL;
 static constexpr uint32_t WEATHER_REFRESH_INTERVAL_MS = 15UL * 60UL * 1000UL;
 static constexpr uint32_t GITHUB_REFRESH_INTERVAL_MS  = 30UL * 60UL * 1000UL;
 
-// Background fetch task. Stack sized from the measured high-water mark: an
-// HTTPS fetch used about 3.3 KB of the original 12 KB, plus a 3 KB margin.
+// Background fetch task. With certificate checks off, an HTTPS fetch used
+// about 3.3 KB; verifying the server's chain takes it to about 3.8 KB
+// (measured: 8.4 KB unused of 12 KB). 12 KB keeps a wide margin.
 // If "[net] ... stack free" ever drops below 2048 bytes, raise this.
-static constexpr uint32_t    NET_TASK_STACK_BYTES = 7168;
+static constexpr uint32_t    NET_TASK_STACK_BYTES = 12288;
 static constexpr UBaseType_t NET_TASK_PRIORITY    = 1;     // same as loop()
 static constexpr uint32_t    NET_HEALTH_LOG_MS    = 5UL * 60UL * 1000UL;
 
@@ -646,6 +654,8 @@ bool     touchReady      = false;
 bool     autoPageEnabled  = true;
 bool     touchWasDown    = false;
 bool     ntpSynced       = false;
+bool     clockTrusted    = false;   // set by the first NTP sync and never cleared:
+                                    // the system clock stays right through the 6 h resyncs
 bool     touchPortalArmed = false;  // one-shot latch for touch-and-hold
 bool     portalNeedsRelease = false; // ignore the finger that opened the portal
 volatile uint8_t currentApp = 0;  // page shown (PAGE_*); also read by netTask
@@ -696,7 +706,7 @@ float pressPulse   = 0.0f;
 // and the draw functions read netView only, so a frame never mixes old and new
 // values. Plain values only (no String), so a copy never touches the heap.
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
-struct StockData   { bool valid; float price, open, high, low;   uint32_t updatedAt; };
+struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
 struct NetData     { WeatherData weather; StockData stock; GithubData github; };
 
@@ -782,6 +792,13 @@ void applyTheme() {
 
 float clampFloat(float v, float lo, float hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// True once millis() has reached `deadline`. Comparing the signed difference
+// keeps working across the millis() wrap at ~49.7 days of uptime, where a
+// plain `now > deadline` stops the blink, glance and auto-advance timers.
+static inline bool timeReached(uint32_t now, uint32_t deadline) {
+  return (int32_t)(now - deadline) >= 0;
 }
 
 // ── LCD init sequence for the AXS15231B panel ─────────────
@@ -907,6 +924,33 @@ void seedClockFromCompileTime() {
   localtime_r(&t, &lt);
   clockStartSeconds = (uint32_t)lt.tm_hour * 3600UL + (uint32_t)lt.tm_min * 60UL + lt.tm_sec;
   clockStartDays    = daysFromCivil(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
+}
+
+// The local wall-clock time now, for the clock, date and moon pages.
+// Once NTP has synced, it reads the system clock, which SNTP keeps right and
+// the TZ rule turns into local time, so a daylight-saving change shows the
+// moment it happens. Before that, it runs on from the compile-time seed.
+// days = days since 1970-01-01 of the local date.
+struct LocalNow { uint8_t hour, min, sec, wday, month, mday; int32_t year, days; };
+
+LocalNow localNow() {
+  LocalNow n;
+  struct tm lt;
+  time_t t = time(nullptr);
+  if (clockTrusted && localtime_r(&t, &lt) != nullptr && lt.tm_year > 100) {
+    n.hour = lt.tm_hour; n.min = lt.tm_min; n.sec = lt.tm_sec;
+    n.year = lt.tm_year + 1900; n.month = lt.tm_mon + 1; n.mday = lt.tm_mday;
+    n.days = daysFromCivil(n.year, n.month, n.mday);
+  } else {
+    uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
+    uint32_t total   = clockStartSeconds + elapsed;
+    uint32_t sod     = total % 86400UL;
+    n.hour = sod / 3600UL; n.min = (sod / 60UL) % 60UL; n.sec = sod % 60UL;
+    n.days = clockStartDays + (int32_t)(total / 86400UL);
+    civilFromDays(n.days, &n.year, &n.month, &n.mday);
+  }
+  n.wday = (uint8_t)(((n.days % 7) + 11) % 7);   // 1970-01-01 was a Thursday (4)
+  return n;
 }
 
 // ── Drawing primitives ────────────────────────────────────
@@ -1070,7 +1114,8 @@ void syncNTP() {
   clockStartMillis  = millis();
   clockStartSeconds = sod;
   clockStartDays    = daysFromCivil(ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
-  ntpSynced   = true;
+  ntpSynced    = true;
+  clockTrusted = true;
   lastNtpSyncMs = millis();
   Serial.printf("NTP synced: %02d:%02d:%02d (%s / %s)\n",
                 ti.tm_hour, ti.tm_min, ti.tm_sec, settings.tzRule, settings.tzName);
@@ -1121,6 +1166,9 @@ void drawWeatherIcon(int cx, int cy, int code, bool isDay, uint16_t color) {
 
 bool fetchWeather() {
   if (!ensureWifi()) return false;
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();     // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
@@ -1132,13 +1180,13 @@ bool fetchWeather() {
   String tzEncoded = String(settings.tzName);
   tzEncoded.replace("/", "%2F");
   tzEncoded.replace("+", "%2B");
-  String weatherUrl = String("http://api.open-meteo.com/v1/forecast?")
+  String weatherUrl = String("https://api.open-meteo.com/v1/forecast?")
     + "latitude=" + latEnc + "&longitude=" + lonEnc
     + "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day"
     + "&temperature_unit=" + (settings.tempFahrenheit ? "fahrenheit" : "celsius")
     + "&wind_speed_unit=" + (settings.windMph ? "mph" : "kmh")
     + "&timezone=" + tzEncoded;
-  if (!http.begin(weatherUrl))
+  if (!http.begin(client, weatherUrl))
     return false;
   if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   JsonDocument doc;
@@ -1168,7 +1216,7 @@ bool fetchWeather() {
 bool fetchStock() {
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -1194,6 +1242,7 @@ bool fetchStock() {
   s.open      = doc["o"].as<float>();    // "o" → open
   s.high      = doc["h"].as<float>();    // "h" → high
   s.low       = doc["l"].as<float>();    // "l" → low
+  s.prevClose = doc["pc"].as<float>();   // "pc" → previous close (0 if missing)
   s.updatedAt = millis();
   s.valid     = true;
   publishNetData(netShared.stock, s);
@@ -1206,7 +1255,7 @@ bool fetchGithub() {
   if (!githubConfigured()) return false;
   if (!ensureWifi()) return false;
   WiFiClientSecure client;
-  client.setInsecure();
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -1611,9 +1660,8 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 }
 
 void drawClock() {
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  uint32_t sod     = (clockStartSeconds+elapsed)%86400UL;
-  uint8_t hh = sod/3600UL, mm = (sod/60UL)%60UL, ss = sod%60UL;
+  const LocalNow now = localNow();
+  const uint8_t hh = now.hour, mm = now.min, ss = now.sec;
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
@@ -1639,11 +1687,9 @@ void drawClock() {
 void drawDatePage() {
   static const char *wd[]  = {"SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"};
   static const char *mon[] = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"};
-  uint32_t elapsedSec = (millis()-clockStartMillis)/1000UL;
-  int32_t days = clockStartDays + (int32_t)((clockStartSeconds+elapsedSec)/86400UL);
-  int32_t year; uint8_t month, day;
-  civilFromDays(days, &year, &month, &day);
-  uint8_t weekday = (uint8_t)((days+4)%7);
+  const LocalNow now = localNow();
+  int32_t year = now.year; uint8_t month = now.month, day = now.mday;
+  uint8_t weekday = now.wday;
   gfx->fillScreen(BG);
   centeredTextColor(wd[weekday], 14, 4, COL_DATE_WD);
   char line[24];
@@ -1738,9 +1784,13 @@ void drawMoonDisc(int cx, int cy, int radius, float phase, uint16_t color) {
 
 void drawMoon() {
   const float syn = 29.53058867f;
-  uint32_t elapsed = (millis()-clockStartMillis)/1000UL;
-  float days = (float)clockStartDays + ((float)clockStartSeconds+(float)elapsed)/86400.0f;
-  float age  = fmod(days-10962.7597f, syn);
+  const LocalNow now = localNow();
+  // Days since 1970 UTC; 10962.7597 is the 2000-01-06 18:14 UTC new moon on
+  // that scale. Before NTP, the local seed is the best there is (hours off).
+  double days = clockTrusted
+      ? (double)time(nullptr) / 86400.0
+      : (double)now.days + ((double)now.hour * 3600.0 + now.min * 60.0 + now.sec) / 86400.0;
+  float age  = (float)fmod(days - 10962.7597, (double)syn);
   if (age < 0.0f) age += syn;
   float phase       = age/syn;
   int   illumination = (int)round((1.0f-cos(phase*6.2831853f))*50.0f);
@@ -1763,7 +1813,11 @@ void drawStock() {
   if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
   snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
-  uint16_t priceCol = (s.price >= s.open) ? COL_PRICE_UP : COL_PRICE_DOWN;
+  // Up/down is measured against yesterday's close, like any quote screen;
+  // the open is only a stand-in if Finnhub left "pc" out.
+  const float ref = s.prevClose > 0.0f ? s.prevClose : s.open;
+  const bool  up  = s.price >= ref;
+  uint16_t priceCol = up ? COL_PRICE_UP : COL_PRICE_DOWN;
   centeredTextColor(pbuf, 26, 6, priceCol);      // big price (up=green/down=red in semantic)
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
@@ -1772,8 +1826,16 @@ void drawStock() {
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
-  gfx->setCursor(14, 124 - 4 * tsize);                   // keep it vertically centred
+  gfx->setCursor(14, (ref > 0.0f ? 112 : 124) - 4 * tsize);  // centred, with or without the % line
   gfx->print(settings.ticker);
+  // Day change in percent under the ticker, e.g. "+0.35%".
+  if (ref > 0.0f) {
+    char cbuf[12];
+    snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (s.price - ref) / ref * 100.0f);
+    gfx->setTextSize(2); gfx->setTextColor(priceCol);
+    gfx->setCursor(14, 132);
+    gfx->print(cbuf);
+  }
   // Open / High / Low on the right side.
   gfx->setTextSize(2); gfx->setTextColor(COL_VALUE);
   gfx->setCursor(150, 92);  gfx->print("OPEN  "); gfx->print(s.open, 2);
@@ -2198,7 +2260,7 @@ void setBrightness(int level) {
   ledcWrite(LCD_BL, brightnessLevel);
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
-  brightnessBannerUntil = millis() + 1200;
+  brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
   Serial.printf("Brightness: %u/255\n", brightnessLevel);
 }
 
@@ -2219,7 +2281,7 @@ void flushBrightnessSave(bool now) {
 
 void triggerDoubleTap() {
   autoPageEnabled = !autoPageEnabled;
-  autoPageBannerUntil = millis() + 1400;
+  autoPageBannerUntil = (millis() + 1400) | 1;     // 0 means no banner
   if (autoPageEnabled) nextAutoPage = millis() + PAGE_AUTO_INTERVAL_MS;
   Serial.printf("Auto-advance: %s\n", autoPageEnabled ? "ON" : "OFF");
 }
@@ -2334,11 +2396,11 @@ void readTouch() {
 
 void updateFaceTimers() {
   uint32_t now = millis();
-  if (now > nextBlink) {
+  if (timeReached(now, nextBlink)) {
     blinkUntil = now + (random(0,6)==0 ? 220 : 105);
     nextBlink  = now + 1000 + random(0, 2600);
   }
-  if (now > nextGlance) {
+  if (timeReached(now, nextGlance)) {
     faceTargetX = (float)random(-8, 9);
     faceTargetY = (float)random(-4, 5);
     nextGlance  = now + 650 + random(0, 1500);
@@ -2349,14 +2411,12 @@ void updateFaceTimers() {
 }
 
 void updateAutoPage() {
-  if (autoPageEnabled && millis() > nextAutoPage) switchApp(1);
+  if (autoPageEnabled && timeReached(millis(), nextAutoPage)) switchApp(1);
 }
 
-// Returns the current clock hour (0-23) derived from the running clock.
+// Returns the current local hour (0-23).
 static uint8_t currentClockHour() {
-  uint32_t elapsed = (millis() - clockStartMillis) / 1000UL;
-  uint32_t sod     = (clockStartSeconds + elapsed) % 86400UL;
-  return (uint8_t)(sod / 3600UL);
+  return localNow().hour;
 }
 
 // ── Background fetch task ────────────────────────────────
@@ -2428,7 +2488,7 @@ void netTask(void *) {
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
         && weatherPacer.ready(now)) {
       runFetch("weather", fetchWeather, weatherPacer, now, 0, FETCH_RETRY_MS);
-      ran = true;
+      ran = usedTls = true;
     } else if (settings.pages[PAGE_GITHUB] && githubConfigured()
         && (!netShared.github.valid || now - netShared.github.updatedAt >= GITHUB_REFRESH_INTERVAL_MS)
         && githubPacer.ready(now)) {
@@ -2666,7 +2726,11 @@ void loop() {
     default: drawGithub();    break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
-  if (millis() < brightnessBannerUntil) {
+  // A deadline is cleared once it passes, so it never goes stale long enough
+  // for the signed comparison in timeReached() to wrap.
+  if (brightnessBannerUntil && timeReached(millis(), brightnessBannerUntil)) brightnessBannerUntil = 0;
+  if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
+  if (brightnessBannerUntil) {
     char msg[20];
     snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
     uint16_t bannerColor = rgb(0,200,255);
@@ -2677,7 +2741,7 @@ void loop() {
     gfx->drawRoundRect((SCREEN_W-bw-12)/2, SCREEN_H/2-10, bw+12, 20, 4, bannerColor);
     gfx->setCursor((SCREEN_W-bw)/2, SCREEN_H/2-4);
     gfx->print(msg);
-  } else if (millis() < autoPageBannerUntil) {
+  } else if (autoPageBannerUntil) {
     const char *msg = autoPageEnabled ? "AUTO: ON" : "AUTO: OFF";
     uint16_t bannerColor = autoPageEnabled ? rgb(0,200,80) : rgb(200,60,60);
     gfx->setTextSize(1);
