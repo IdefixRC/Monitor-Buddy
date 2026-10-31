@@ -5,7 +5,7 @@ import { S } from "./strings.js";
 import { BuddyPort, change, probe } from "./serial.js";
 import { sameMac, watchForTrouble } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
-import { parseManifest, offered, updateFor } from "./releases.js";
+import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered } from "./settings.js";
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
@@ -1582,7 +1582,7 @@ async function loadManifest() {
     const r = await fetch("firmware/releases.json", { cache: "no-store" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     app.manifest = parseManifest(await r.json());
-    app.releases = offered(app.manifest, BETA);
+    app.releases = offeredReleases(app.manifest, BETA);
   } catch (e) {
     app.manifestError = true;
     report(e);

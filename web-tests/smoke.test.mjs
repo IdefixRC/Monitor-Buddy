@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { S } from "../web/js/strings.js";
 
 test("strings load and have the start texts", () => {
@@ -41,4 +42,14 @@ test("the form's error alert stays in the page instead of being un-hidden", () =
 test("leaving the form drops the strip's scroll padding", () => {
   const app = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
   assert.match(app, /removeProperty\("--strip-h"\)/);
+});
+
+test("every web/js module parses as an ES module", () => {
+  const dir = new URL("../web/js/", import.meta.url);
+  const files = readdirSync(dir).filter((f) => f.endsWith(".js"));
+  assert.ok(files.length >= 10, "found the modules");
+  for (const f of files) {
+    const r = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: readFileSync(new URL(f, dir)) });
+    assert.equal(r.status, 0, `${f}: ${String(r.stderr).split("\n").slice(0, 5).join("\n")}`);
+  }
 });
