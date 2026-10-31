@@ -37,8 +37,8 @@ export const SCHEMA = Object.freeze([
 export const KEYS = SCHEMA.map((f) => f.name);
 export const PAGE_KEYS = SCHEMA.find((f) => f.name === "pages").children.map((c) => c.name);
 
-// applyCoordinate: at most 15 characters (char lat[16]), only 0123456789.+- ,
-// then a plain decimal within the limit. The pattern is what strtod accepts
+// coordOk (lib/settings/schema.cpp): at most 15 characters (char lat[16]), only
+// 0123456789.+- , then a plain decimal within the limit. The pattern is what strtod accepts
 // from that character set; NaN, infinity, hex and exponents cannot get in.
 const COORD_MAX_LEN = 15;
 const COORD_CHARS = "0123456789.+-";

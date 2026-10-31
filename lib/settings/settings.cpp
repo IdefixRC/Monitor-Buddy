@@ -41,14 +41,15 @@ const char *const TEMP_WORDS[]  = {"celsius", "fahrenheit"};
 const char *const WIND_WORDS[]  = {"kmh", "mph"};
 const char *const MSG_PAGE = "must be true or false";
 
+// Names come from SETTINGS_PAGE_KEYS, so they are written once.
 const Field PAGE_FIELDS[SETTINGS_PAGE_COUNT] = {
-  schema::boolField("face",    0 * sizeof(bool), MSG_PAGE),
-  schema::boolField("clock",   1 * sizeof(bool), MSG_PAGE),
-  schema::boolField("date",    2 * sizeof(bool), MSG_PAGE),
-  schema::boolField("weather", 3 * sizeof(bool), MSG_PAGE),
-  schema::boolField("moon",    4 * sizeof(bool), MSG_PAGE),
-  schema::boolField("stock",   5 * sizeof(bool), MSG_PAGE),
-  schema::boolField("github",  6 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[0], 0 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[1], 1 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[2], 2 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[3], 3 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[4], 4 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[5], 5 * sizeof(bool), MSG_PAGE),
+  schema::boolField(SETTINGS_PAGE_KEYS[6], 6 * sizeof(bool), MSG_PAGE),
 };
 
 // Every setting, in 1.2.0's key order (GET and /config.json follow it).
