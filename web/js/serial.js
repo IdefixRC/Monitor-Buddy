@@ -1,6 +1,7 @@
 // A Web Serial session with a Monitor Buddy, speaking the @MB protocol.
 // Mirrors tools/mb_serial.py (command, read_reply, reconnect, drain, change,
 // verify_change). Browser only: it needs navigator.serial.
+import { flattenPaths } from "./settings.js";
 import { CHANGING, LineSplitter, answers, makeIdSource, parseReply, requestLine, sameMac } from "./protocol.js";
 
 export const BAUD = 115200;
@@ -382,15 +383,16 @@ export async function verifyChange(bp, cmd, body) {
     const got = await readOk(bp, "GET");
     if (!got) return { ok: false, detail: "GET did not answer" };
     const have = got.config || {};
-    for (const [key, value] of Object.entries(want)) {
-      if (key === "pages" && value && typeof value === "object") {
-        for (const [page, on] of Object.entries(value)) {
-          if ((have.pages || {})[page] !== on) {
-            return { ok: false, detail: `pages.${page} is not ${on} on the board` };
-          }
-        }
-      } else if (!same(value, have[key])) {
-        return { ok: false, detail: `${key} is not the requested value on the board` };
+    for (const [path, value] of flattenPaths(want)) {
+      const [top, field] = path.split(".");
+      const got = field === undefined ? have[top] : (have[top] || {})[field];
+      const equal = value !== null && typeof value === "object"
+        ? JSON.stringify(value) === JSON.stringify(got)
+        : same(value, got);
+      if (!equal) {
+        return { ok: false, detail: typeof value === "boolean" && field !== undefined
+          ? `${path} is not ${value} on the board`
+          : `${path} is not the requested value on the board` };
       }
     }
   }

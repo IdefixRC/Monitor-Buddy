@@ -2,7 +2,7 @@
 // choices, its errors and its help texts. Pure: no DOM, no Web Serial, so the
 // tests run it (web-tests/form.test.mjs). app.js draws the form.
 import { S } from "./strings.js";
-import { validateConfig, validateWifi } from "./settings.js";
+import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported } from "./settings.js";
 import { ruleForZone } from "./tz.js";
 import { pageList } from "./preview.js";
 
@@ -77,7 +77,7 @@ export function wifiChoices(info, path) {
 // A fresh form: the given config, Wi-Fi on with the default choice.
 // location: the location keys ("lat", "lon", "tz_name") the user has given
 // (picked, typed, imported); see locationMissing.
-export function newFormState(config, { flow, info = null, added = [], imported = [], location = [] } = {}) {
+export function newFormState(config, { flow, info = null, added = [], imported = [], location = [], supported = BASELINE_PATHS } = {}) {
   return {
     flow,
     config: structuredClone(config),
@@ -85,8 +85,14 @@ export function newFormState(config, { flow, info = null, added = [], imported =
     added: [...added],
     imported: [...imported],
     location: [...location],
+    supported: new Set(supported),
   };
 }
+
+// The form shows a setting only if the Buddy it will be sent to understands
+// it (spec §5.3): what its GET reported, or 1.2.0's set when there was no GET.
+// Every field added after 1.2.0 must be drawn only when this is true.
+export const offered = (state, path) => !!(state && state.supported && state.supported.has(path));
 
 // The keys that make up the location.
 export const LOCATION_KEYS = Object.freeze(["lat", "lon", "tz_name"]);
@@ -119,19 +125,19 @@ export function boardLocation(got) {
 // Wi-Fi" is off or "Keep the current Wi-Fi" is chosen, so the board's saved
 // network stays as it is.
 export function formToRequest(state) {
-  const req = { config: structuredClone(state.config) };
+  const req = { config: state.supported ? filterSupported(state.config, state.supported) : structuredClone(state.config) };
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") req.wifi = { ssid: w.ssid, password: w.password };
   return req;
 }
 
-// "pages.moon" (the firmware's path for one page) also matches "pages" (an
-// imported pages object), and "pages" matches any single page.
+// A path matches itself, and a top-level key matches every path under it and
+// back: "pages" <-> "pages.moon", "coins" <-> "coins[1].pair" or "coins.style".
+const topOf = (p) => String(p).split(/[.[]/)[0];
 function listed(list, key) {
   if (!list) return false;
   return [...list].some((k) => k === key
-    || (key.startsWith("pages.") && k === "pages")
-    || (key === "pages" && k.startsWith("pages.")));
+    || (topOf(k) === topOf(key) && (k === topOf(k) || key === topOf(key))));
 }
 
 // -> ("new" | "imported")[]

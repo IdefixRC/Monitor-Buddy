@@ -1,0 +1,19 @@
+{
+  "monitor_buddy_backup": 1,
+  "fw": "1.2.0-rc2",
+  "saved": "2026-10-12T13:37:00.000Z",
+  "config": {
+    "mount": "left",
+    "theme": 2,
+    "github_user": "octocat",
+    "tz_name": "Europe/Berlin",
+    "tz_rule": "CET-1CEST,M3.5.0,M10.5.0/3",
+    "ticker": "AVGO",
+    "stock_key": "0123456789abcdefghij0123456789abcdefghij",
+    "lat": "48.1374",
+    "lon": "11.5755",
+    "temp_unit": "celsius",
+    "wind_unit": "kmh",
+    "pages": { "face": true, "clock": true, "date": true, "weather": true, "moon": false, "stock": true, "github": true }
+  }
+}

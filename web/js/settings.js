@@ -228,3 +228,83 @@ export function backupFileName(now) {
   const pad = (n) => String(n).padStart(2, "0");
   return `monitor-buddy-settings-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
 }
+
+// ── Which settings the board understands (spec §5.3) ──────
+
+// The paths firmware 1.2.0 knows. Frozen on purpose, never derived from SCHEMA:
+// the live flasher can be ahead of the released firmware, and a form with no
+// GET to go by (path B) must not offer settings 1.2.0 would drop.
+export const BASELINE_PATHS = Object.freeze(["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+  "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
+  "pages.weather", "pages.moon", "pages.stock", "pages.github"]);
+
+// The paths a GET config reports that this flasher knows: plain keys by name,
+// group fields as "group.field", lists by name, record fields as "list.field"
+// (from the first entry).
+export function supportedPaths(config) {
+  const out = new Set();
+  if (!isPlainObject(config)) return out;
+  for (const f of SCHEMA) {
+    if (!Object.hasOwn(config, f.name)) continue;
+    const v = config[f.name];
+    if (f.kind === "group") {
+      if (isPlainObject(v)) for (const c of f.children) if (Object.hasOwn(v, c.name)) out.add(`${f.name}.${c.name}`);
+    } else if (f.kind === "list") {
+      if (!Array.isArray(v)) continue;
+      out.add(f.name);
+      if (f.fields && isPlainObject(v[0])) for (const c of f.fields) if (Object.hasOwn(v[0], c.name)) out.add(`${f.name}.${c.name}`);
+    } else {
+      out.add(f.name);
+    }
+  }
+  return out;
+}
+
+// `config` with only the supported paths (known keys only).
+export function filterSupported(config, supported) {
+  const known = knownOnly(isPlainObject(config) ? config : {});
+  const out = {};
+  for (const f of SCHEMA) {
+    if (!Object.hasOwn(known, f.name)) continue;
+    const v = known[f.name];
+    if (f.kind === "group") {
+      if (!isPlainObject(v)) {
+        if (f.children.some((c) => supported.has(`${f.name}.${c.name}`))) out[f.name] = v;
+        continue;
+      }
+      const g = {};
+      for (const c of f.children) if (Object.hasOwn(v, c.name) && supported.has(`${f.name}.${c.name}`)) g[c.name] = v[c.name];
+      if (Object.keys(g).length) out[f.name] = g;
+    } else if (!supported.has(f.name)) {
+      continue;
+    } else if (f.kind === "list" && f.fields && Array.isArray(v)) {
+      out[f.name] = v.map((e) => (isPlainObject(e)
+        ? Object.fromEntries(Object.entries(e).filter(([k]) => supported.has(`${f.name}.${k}`)))
+        : e));
+    } else {
+      out[f.name] = v;
+    }
+  }
+  return out;
+}
+
+// The top-level keys of `config` that filterSupported would cut, in schema order.
+export function unsupportedKeys(config, supported) {
+  const known = knownOnly(isPlainObject(config) ? config : {});
+  const kept = filterSupported(known, supported);
+  return Object.keys(known).filter((k) => JSON.stringify(known[k]) !== JSON.stringify(kept[k]));
+}
+
+// Paths `after` has and `before` hadn't: settings a flash brought.
+export const newlyOffered = (before, after) => [...after].filter((p) => !before.has(p));
+
+// [path, value] pairs: group fields one by one, everything else whole.
+export function flattenPaths(config) {
+  const out = [];
+  for (const [k, v] of Object.entries(isPlainObject(config) ? config : {})) {
+    const f = SCHEMA.find((x) => x.name === k);
+    if (f && f.kind === "group" && isPlainObject(v)) for (const [c, x] of Object.entries(v)) out.push([`${k}.${c}`, x]);
+    else out.push([k, v]);
+  }
+  return out;
+}

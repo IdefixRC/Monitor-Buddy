@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, probe, PROBE_WRITES } from "../web/js/serial.js";
+import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, probe, PROBE_WRITES, verifyChange } from "../web/js/serial.js";
 
 // A Web Serial port that never answers. With stall, writes never complete,
 // like a Buddy that doesn't read USB (boot loop, or Chrome's 255-byte buffer full).
@@ -241,4 +241,24 @@ test("reconnect() without a MAC doesn't take another board's port", async () => 
   const bp = new StubPort(Array(20).fill({ ok: true, cmd: "INFO", mac: "58:8c:81:5a:33:fc" }));
   await assert.rejects(bp.reconnect(1200), NoReply);
   assert.equal(bp.opens, 0);
+});
+
+// ── verifyChange after a lost SET reply: paths, not keys ──
+
+const boardWith = (config) => ({ command: async (cmd) => ({ ok: true, cmd, config }) });
+
+test("verifyChange checks group fields one by one, in 1.2.0's wording", async () => {
+  const bp = boardWith({ theme: 2, pages: { moon: false, face: true } });
+  assert.equal((await verifyChange(bp, "SET", { config: { pages: { moon: false } } })).ok, true);
+  const r = await verifyChange(bp, "SET", { config: { pages: { moon: true } } });
+  assert.deepEqual(r, { ok: false, detail: "pages.moon is not true on the board" });
+  const t = await verifyChange(bp, "SET", { config: { theme: 3 } });
+  assert.deepEqual(t, { ok: false, detail: "theme is not the requested value on the board" });
+});
+
+test("verifyChange compares a list whole", async () => {
+  const bp = boardWith({ later: ["A", "B"] });
+  assert.equal((await verifyChange(bp, "SET", { config: { later: ["A", "B"] } })).ok, true);
+  assert.deepEqual(await verifyChange(bp, "SET", { config: { later: ["A"] } }),
+    { ok: false, detail: "later is not the requested value on the board" });
 });

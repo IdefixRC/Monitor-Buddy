@@ -5,9 +5,9 @@ import {
   DEFAULTS, formToRequest, badgesFor, helpFor, wifiChoices, formErrors, fromBoard,
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
-  joinedWifi, resultKind, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery,
+  joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery,
 } from "../web/js/form.js";
-import { KEYS, mergeConfig } from "../web/js/settings.js";
+import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
 import { S } from "../web/js/strings.js";
 
@@ -394,4 +394,32 @@ test("every flow with a form has its texts", () => {
     assert.equal(typeof S.form.submit[flow], "string", `submit.${flow}`);
     assert.equal(typeof S.form.say[flow], "string", `say.${flow}`);
   }
+});
+
+// ── Supported paths in the form (spec §5.3) ───────────────
+
+test("a form without a board offers the baseline", () => {
+  const f = newFormState(DEFAULTS, { flow: "install" });
+  assert.deepEqual([...f.supported].sort(), [...BASELINE_PATHS].sort());
+});
+
+test("a form from a board offers what its GET reported", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", supported: ["theme", "pages.face"] });
+  assert.equal(offered(f, "theme"), true);
+  assert.equal(offered(f, "pages.moon"), false);
+});
+
+test("the request carries only supported paths", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", supported: BASELINE_PATHS.filter((p) => p !== "wind_unit") });
+  const r = formToRequest(f);
+  assert.equal(Object.hasOwn(r.config, "wind_unit"), false);
+  assert.equal(r.config.theme, DEFAULTS.theme);
+});
+
+test("badges match a group or list path to its top-level key and back", () => {
+  assert.deepEqual(badgesFor("pages.moon", { added: ["pages"] }), ["new"]);
+  assert.deepEqual(badgesFor("pages", { imported: ["pages.moon"] }), ["imported"]);
+  assert.deepEqual(badgesFor("coins[1].pair", { added: ["coins"] }), ["new"]);
+  assert.deepEqual(badgesFor("coins", { added: ["coins.style"] }), ["new"]);
+  assert.deepEqual(badgesFor("pages.moon", { added: ["pages.face"] }), []);
 });
