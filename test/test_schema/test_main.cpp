@@ -5,7 +5,10 @@
 #include <string.h>
 #include <string>
 #include <ArduinoJson.h>
+#include <fstream>
+#include <sstream>
 #include "schema.h"
+#include "settings.h"
 
 using namespace schema;
 
@@ -282,6 +285,99 @@ static void test_paths_ignore_duplicates_and_overflow() {
   TEST_ASSERT_EQUAL(Paths::MAX, p.count);
 }
 
+// ── The shared cases (test/fixtures/settings-cases.json) ──
+// The web suite runs the same file's merge cases against web/js/settings.js
+// (web-tests/schema.test.mjs), so the two sides can't drift apart.
+
+struct Engine {
+  const char *section;
+  size_t size;
+  void (*load)(const void *defaults, JsonVariantConst stored, void *out, Paths &added, JsonObject invalid);
+  bool (*merge)(const void *current, JsonVariantConst patch, void *out, JsonObject errors);
+  void (*toJson)(const void *s, JsonObject out);
+};
+
+static const Engine ENGINES[] = {
+  {"settings", sizeof(Settings),
+   [](const void *d, JsonVariantConst st, void *o, Paths &a, JsonObject inv) {
+     settingsLoad(*static_cast<const Settings *>(d), st, *static_cast<Settings *>(o), a, inv); },
+   [](const void *c, JsonVariantConst p, void *o, JsonObject e) {
+     return settingsMerge(*static_cast<const Settings *>(c), p, *static_cast<Settings *>(o), e); },
+   [](const void *s, JsonObject out) { settingsToJson(*static_cast<const Settings *>(s), out); }},
+  {"demo", sizeof(Demo),
+   [](const void *d, JsonVariantConst st, void *o, Paths &a, JsonObject inv) {
+     load(DEMO, DEMO_N, d, st, o, sizeof(Demo), a, inv); },
+   [](const void *c, JsonVariantConst p, void *o, JsonObject e) {
+     return merge(DEMO, DEMO_N, c, p, o, sizeof(Demo), e); },
+   [](const void *s, JsonObject out) { toJson(DEMO, DEMO_N, s, out); }},
+};
+
+alignas(16) static uint8_t bufDefaults[4096], bufCurrent[4096], bufOut[4096];
+
+static std::string text(JsonVariantConst v) { std::string s; serializeJson(v, s); return s; }
+
+static void expectConfig(const Engine &en, const void *s, JsonVariantConst want, const std::string &name) {
+  if (want.isNull()) return;
+  JsonDocument got;
+  en.toJson(s, got.to<JsonObject>());
+  for (JsonPairConst kv : want.as<JsonObjectConst>())
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(text(kv.value()).c_str(), text(got[kv.key()]).c_str(), name.c_str());
+}
+
+static void expectMap(JsonObjectConst want, JsonObjectConst got, const std::string &name) {
+  TEST_ASSERT_EQUAL_MESSAGE(want.size(), got.size(), (name + ": " + text(got)).c_str());
+  for (JsonPairConst kv : want)
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(kv.value().as<const char *>(), got[kv.key()].as<const char *>(),
+                                     (name + " @ " + kv.key().c_str()).c_str());
+}
+
+static void test_shared_cases() {
+  std::ifstream f("test/fixtures/settings-cases.json", std::ios::binary);
+  TEST_ASSERT_TRUE(f.good());
+  std::stringstream ss;
+  ss << f.rdbuf();
+  JsonDocument all;
+  TEST_ASSERT_FALSE(deserializeJson(all, ss.str()));
+  int ran = 0;
+  for (const Engine &en : ENGINES) {
+    JsonObjectConst sec = all[en.section];
+    TEST_ASSERT_FALSE_MESSAGE(sec.isNull(), en.section);
+    // Defaults: a zeroed struct with the section's full defaults merged in.
+    memset(bufOut, 0, sizeof bufOut);
+    JsonDocument e0;
+    TEST_ASSERT_TRUE_MESSAGE(en.merge(bufOut, sec["defaults"], bufDefaults, e0.to<JsonObject>()), en.section);
+    for (JsonObjectConst c : sec["cases"].as<JsonArrayConst>()) {
+      std::string name = std::string(en.section) + ": " + c["name"].as<const char *>();
+      if (strcmp(c["op"], "merge") == 0) {
+        // The settings the patch goes onto: the defaults, with "current" merged in if given.
+        if (c["current"].isNull()) {
+          memcpy(bufCurrent, bufDefaults, en.size);
+        } else {
+          JsonDocument ec;
+          TEST_ASSERT_TRUE_MESSAGE(en.merge(bufDefaults, c["current"], bufCurrent, ec.to<JsonObject>()), name.c_str());
+        }
+        JsonDocument errs;
+        bool ok = en.merge(bufCurrent, c["patch"], bufOut, errs.to<JsonObject>());
+        TEST_ASSERT_EQUAL_MESSAGE(c["ok"].as<bool>(), ok, (name + ": " + text(errs)).c_str());
+        if (!ok) expectMap(c["errors"].as<JsonObjectConst>(), errs.as<JsonObjectConst>(), name);
+        else expectConfig(en, bufOut, c["config"], name);
+      } else {
+        Paths added;
+        JsonDocument inv;
+        en.load(bufDefaults, c["file"], bufOut, added, inv.to<JsonObject>());
+        JsonArrayConst wantAdded = c["added"];
+        TEST_ASSERT_EQUAL_MESSAGE(wantAdded.size(), added.count, name.c_str());
+        for (JsonVariantConst k : wantAdded)
+          TEST_ASSERT_TRUE_MESSAGE(added.has(k.as<const char *>()), (name + " added " + k.as<const char *>()).c_str());
+        expectMap(c["invalid"].as<JsonObjectConst>(), inv.as<JsonObjectConst>(), name);
+        expectConfig(en, bufOut, c["config"], name);
+      }
+      ran++;
+    }
+  }
+  TEST_ASSERT_GREATER_THAN(20, ran);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_to_json_writes_every_kind_in_table_order);
@@ -305,5 +401,6 @@ int main() {
   RUN_TEST(test_load_group_not_an_object_and_bad_field);
   RUN_TEST(test_load_null_and_non_object_file_add_nothing);
   RUN_TEST(test_paths_ignore_duplicates_and_overflow);
+  RUN_TEST(test_shared_cases);
   return UNITY_END();
 }
