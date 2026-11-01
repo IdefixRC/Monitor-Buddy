@@ -5,7 +5,8 @@
 //           stock ticker, GitHub stats.  
 //           5 different themes available,
 //           Enable/Disable pages to customize your Buddy
-//           Touch swipe to change pages, 
+//           Touch swipe to change pages, tap the stock page
+//           to see the next stock,
 //           double tap to stop auto scrolling;
 //           WifiManager creates a Wi-Fi hotspot with a
 //           captive portal so you can set your Wi-Fi up;
@@ -299,6 +300,7 @@ void drawPageDots();
 void drawHeader(const char *title);
 void switchApp(int8_t delta);
 void buildPageList();
+void buildStockList();
 bool wifiConfigured();
 bool githubConfigured();
 bool stockConfigured();
@@ -708,11 +710,30 @@ float pressPulse   = 0.0f;
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
 struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
-struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+// One quote per stock slot (indexed like settings.stocks), so tapping back to
+// a stock shows its last value at once.
+struct NetData     { WeatherData weather; StockData stocks[SETTINGS_STOCK_MAX]; GithubData github; };
 
 NetData           netShared = {};
 NetData           netView   = {};
 SemaphoreHandle_t netMutex  = nullptr;
+
+// The stock slots that are on, in slot order, built once in setup(): taps,
+// fetching, the "2/5" hint and drawing use only these.
+uint8_t          stockActive[SETTINGS_STOCK_MAX];
+uint8_t          stockActiveCount = 0;
+volatile uint8_t stockSub         = 0;   // position in stockActive; read by netTask
+uint8_t          stockFetchIdx    = 0;   // the slot fetchStock() asks for (netTask only)
+
+void buildStockList() {
+  stockActiveCount = 0;
+  for (uint8_t i = 0; i < settings.stockCount && i < SETTINGS_STOCK_MAX; i++)
+    if (settings.stocks[i].on) stockActive[stockActiveCount++] = i;
+  if (stockSub >= stockActiveCount) stockSub = 0;
+}
+
+// The slot of the stock on screen.
+static uint8_t shownStock() { return stockActive[stockActiveCount ? stockSub % stockActiveCount : 0]; }
 
 // Store one fetch result for the UI. The lock covers only this copy.
 template <typename T>
@@ -980,6 +1001,15 @@ void drawPageDots() {
     else
       gfx->drawCircle(startX+i*16, SCREEN_H-12, 2, rgb(90,90,90));
   }
+  // "2/5" under the dots on a page with several entries.
+  if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
+    char hint[8];
+    formatSubHint(hint, sizeof hint, stockSub, stockActiveCount);
+    gfx->setTextSize(1);
+    gfx->setTextColor(rgb(90, 90, 90));
+    gfx->setCursor((SCREEN_W - (int)strlen(hint) * 6) / 2, SCREEN_H - 8);
+    gfx->print(hint);
+  }
 }
 
 void drawHeader(const char *title) {
@@ -1008,12 +1038,19 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 
 // ── App navigation ────────────────────────────────────────
 
+// The order pages are shown in, separate from their storage index (the coin
+// page joins after the stock page in phase 2).
+static const uint8_t PAGE_SHOW_ORDER[] = {PAGE_FACE, PAGE_CLOCK, PAGE_DATE, PAGE_WEATHER,
+                                          PAGE_MOON, PAGE_STOCK, PAGE_GITHUB};
+static_assert(sizeof(PAGE_SHOW_ORDER) == SETTINGS_PAGE_COUNT, "every page has a place in the order");
+
 // Build the list of enabled pages (in fixed order) from settings.pages.
 // Falls back to the Face page if everything is switched off, so the screen is
 // never left blank.
 void buildPageList() {
   pageCount = 0;
-  for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
+  for (uint8_t n = 0; n < SETTINGS_PAGE_COUNT; n++) {
+    const uint8_t i = PAGE_SHOW_ORDER[n];
     if (!settings.pages[i]) continue;
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
@@ -1042,7 +1079,7 @@ void switchApp(int8_t delta) {
 // non-empty ssid+password were parsed from it at begin().
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return settings.githubUser[0] != '\0'; }
-bool stockConfigured() { return settings.stockKey[0] != '\0'; }
+bool stockConfigured() { return settings.stockKey[0] != '\0' && stockActiveCount > 0; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -1215,13 +1252,14 @@ bool fetchWeather() {
 
 bool fetchStock() {
   if (!ensureWifi()) return false;
+  const uint8_t slot = stockFetchIdx;
   WiFiClientSecure client;
   client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  String url = String("https://finnhub.io/api/v1/quote?symbol=") + settings.ticker
+  String url = String("https://finnhub.io/api/v1/quote?symbol=") + settings.stocks[slot].symbol
              + "&token=" + settings.stockKey;
   if (!http.begin(client, url))
     return false;
@@ -1245,7 +1283,7 @@ bool fetchStock() {
   s.prevClose = doc["pc"].as<float>();   // "pc" → previous close (0 if missing)
   s.updatedAt = millis();
   s.valid     = true;
-  publishNetData(netShared.stock, s);
+  publishNetData(netShared.stocks[slot], s);
   return true;
 }
 
@@ -1809,7 +1847,9 @@ void drawMoon() {
 void drawStock() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  const StockData &s = netView.stock;
+  const uint8_t slot = shownStock();
+  const StockData &s = netView.stocks[slot];
+  const char *symbol = settings.stocks[slot].symbol;
   if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
   snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
@@ -1822,12 +1862,12 @@ void drawStock() {
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
   // the left column, which must end before the O/H/L block at x=150.
-  int tlen  = (int)strlen(settings.ticker);
+  int tlen  = (int)strlen(symbol);
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
   gfx->setCursor(14, (ref > 0.0f ? 112 : 124) - 4 * tsize);  // centred, with or without the % line
-  gfx->print(settings.ticker);
+  gfx->print(symbol);
   // Day change in percent under the ticker, e.g. "+0.35%".
   if (ref > 0.0f) {
     char cbuf[12];
@@ -2304,9 +2344,13 @@ void triggerFaceTap() {
     tapCount = 1;
   }
   lastTapMs = now;
-  // Single-tap behaviour
-  if (currentApp == 0) {
-    faceMood = (faceMood+1) % FACE_MOOD_COUNT;
+  // Single tap: the next entry on a page that has several (face moods, the
+  // stocks that are on), else the next page (spec stocks-and-coins §5.1).
+  if (currentApp == PAGE_FACE) {
+    faceMood = (faceMood + 1) % FACE_MOOD_COUNT;
+    pressPulse = 1.0f;
+  } else if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
+    stockSub = (stockSub + 1) % stockActiveCount;
     pressPulse = 1.0f;
   } else {
     switchApp(1);
@@ -2424,7 +2468,7 @@ static uint8_t currentClockHour() {
 
 // ── Background fetch task ────────────────────────────────
 // Owns the fetch schedule so loop() never waits on the network:
-//   stock   every STOCK_REFRESH_MS, only while the stock page is shown
+//   stock   the stock on screen, when its quote is STOCK_REFRESH_MS old
 //   weather prefetched every WEATHER_REFRESH_INTERVAL_MS
 //   GitHub  prefetched every GITHUB_REFRESH_INTERVAL_MS
 // A failed fetch backs off 10 s, 20 s, 40 s, ... (see FETCH_RETRY_MIN_MS). At
@@ -2482,10 +2526,15 @@ void netTask(void *) {
     // This task is netShared's only writer, so it may read it without the lock.
     const uint32_t now = millis();
     bool ran = false, usedTls = false;
-    // Weather and GitHub are paced by data age after a success (okWaitMs 0),
-    // stock by STOCK_REFRESH_MS; all three back off after a failure.
-    if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
-      runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
+    // Stock is paced by each stock's own age (okWaitMs 0), weather and GitHub by data age; all back off after a failure.
+    // The stock on screen, when its own quote is a minute old (or missing).
+    const uint8_t slot = shownStock();
+    const StockData &shownQuote = netShared.stocks[slot];
+    const bool stockDue = settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK
+        && (!shownQuote.valid || now - shownQuote.updatedAt >= STOCK_REFRESH_MS) && stockPacer.ready(now);
+    if (stockDue) {
+      stockFetchIdx = slot;
+      runFetch("stock", fetchStock, stockPacer, now, 0, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -2584,6 +2633,7 @@ void setup() {
   rightEye.init(FACE_RIGHT_CX, FACE_EYES_CY, 90, 90);
 
   // Build the enabled-page list from settings.pages.
+  buildStockList();
   buildPageList();
   // Seed the clock from the compile time as a safe fallback. syncNTP()
   // replaces it with the real time once Wi-Fi is up.

@@ -61,6 +61,14 @@ void test_follower_text_size() {
   TEST_ASSERT_EQUAL_UINT8(6, followerTextSize("123M"));
 }
 
+static void test_sub_hint() {
+  char b[8];
+  formatSubHint(b, sizeof b, 1, 5);  TEST_ASSERT_EQUAL_STRING("2/5", b);
+  formatSubHint(b, sizeof b, 0, 2);  TEST_ASSERT_EQUAL_STRING("1/2", b);
+  formatSubHint(b, sizeof b, 0, 1);  TEST_ASSERT_EQUAL_STRING("", b);
+  formatSubHint(b, sizeof b, 4, 5);  TEST_ASSERT_EQUAL_STRING("5/5", b);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_small_counts_are_digits);
@@ -71,5 +79,6 @@ int main(int, char **) {
   RUN_TEST(test_negative_is_zero);
   RUN_TEST(test_small_buffer_is_terminated);
   RUN_TEST(test_follower_text_size);
+  RUN_TEST(test_sub_hint);
   return UNITY_END();
 }

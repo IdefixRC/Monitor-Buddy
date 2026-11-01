@@ -20,3 +20,9 @@ void formatCount(long n, char *out, size_t len) {
 uint8_t followerTextSize(const char *formatted) {
   return (formatted && strlen(formatted) == 5) ? 5 : 6;
 }
+
+void formatSubHint(char *out, size_t outLen, uint8_t index, uint8_t count) {
+  if (outLen == 0) return;
+  if (count < 2) { out[0] = '\0'; return; }
+  snprintf(out, outLen, "%u/%u", (unsigned)(index + 1), (unsigned)count);
+}

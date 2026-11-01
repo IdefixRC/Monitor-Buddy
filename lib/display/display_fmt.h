@@ -17,3 +17,6 @@ void formatCount(long n, char *out, size_t len);
 // Text size for the big follower number: 5 for exactly 5 characters (5 digits
 // at size 6 would be 180 px and run off the 320 px screen from x=150), else 6.
 uint8_t followerTextSize(const char *formatted);
+
+// "2/5" under the page dots: index is 0-based; "" when there is only one.
+void formatSubHint(char *out, size_t outLen, uint8_t index, uint8_t count);
