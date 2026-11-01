@@ -23,7 +23,7 @@ struct Field {
   const char *const *words;  // Choice: allowed words, in index order
   uint8_t     wordCount;
   const char *error;         // message for any invalid value (Group: for a failed check)
-  bool (*check)(const uint8_t *value);  // optional; Text: the string, Group: the group
+  bool (*check)(const uint8_t *value);  // optional; Text: the string, Group: the group, List: the first entry
   const Field *children;     // Group: its fields; List: the entry's field(s)
   uint8_t     childCount;
   uint16_t    stride;        // Group: its size in bytes; List: one entry's size
@@ -59,8 +59,9 @@ constexpr Field groupField(const char *name, uint16_t at, uint16_t size, const F
 }
 constexpr Field listField(const char *name, uint16_t at, uint16_t countAt, uint16_t stride,
                           int16_t lo, int16_t hi, const Field *children, uint8_t count,
-                          const char *error, const void *entryDefault = nullptr) {
-  return Field{name, Kind::List, at, 0, lo, hi, nullptr, nullptr, 0, error, nullptr, children, count, stride,
+                          const char *error, const void *entryDefault = nullptr,
+                          bool (*check)(const uint8_t *) = nullptr) {
+  return Field{name, Kind::List, at, 0, lo, hi, nullptr, nullptr, 0, error, check, children, count, stride,
                countAt, entryDefault};
 }
 
@@ -74,6 +75,7 @@ struct Paths {
   uint8_t count = 0;
   bool has(const char *path) const;
   void add(const char *path);   // ignores duplicates and overflow
+  void remove(const char *path);   // no-op when absent
 };
 
 // out = defaults, then every valid value from `stored`. Missing → `added`,
