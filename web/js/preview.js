@@ -551,7 +551,7 @@ export function createPreview(container) {
   // Like a tap on the Buddy: the next stock on a stock page with several, else the next page.
   const next = () => {
     const stocks = activeStocks(config);
-    if (cycle.page === "stock" && stocks.length >= 2) { stockIdx = (stockIdx + 1) % stocks.length; draw(); }
+    if (cycle.page === "stock" && stocks.length >= 2) { stockIdx = (stockIdx + 1) % stocks.length; cycle.endHold(); cycle.schedule(); draw(); }
     else cycle.next();
   };
   button.addEventListener("click", next);
@@ -576,10 +576,10 @@ export function createPreview(container) {
     update,
     // Jump to the page a settings change affects and hold it (PageCycle.showPage).
     showPage(pageKey, holdMs = HOLD_MS) { return cycle.showPage(pageKey, holdMs); },
-    // Show stock slot `index` (a Check in the form) and hold the page.
-    showEntry(pageKey, index, holdMs = HOLD_MS) {
+    // Show the stock at `stockIndex` in config.stocks (a Check in the form) and hold the page.
+    showEntry(pageKey, stockIndex, holdMs = HOLD_MS) {
       if (pageKey === "stock") {
-        const at = activeStocks(config).findIndex((s) => s.slot === index);
+        const at = activeStocks(config).findIndex((s) => s.slot === stockIndex);
         if (at >= 0) stockIdx = at;
       }
       const shown = cycle.showPage(pageKey, holdMs);

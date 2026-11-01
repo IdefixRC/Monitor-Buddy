@@ -18,7 +18,7 @@ import {
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
-  stockSlots, moveSlot, applySlots, fieldState, STOCK_SLOTS,
+  stockSlots, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -1050,7 +1050,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         result.textContent = S.check.checking;
         result.dataset.state = "";
         check.disabled = true;
-        preview.showEntry("stock", i);
+        { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
         const res = await checkStock(window.fetch.bind(window), sym, f.config.stock_key);
         if (!alive || sym !== f.stockSlots[i].symbol) return;
         check.disabled = false;
@@ -1058,7 +1058,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
         if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
         refresh();
-        preview.showEntry("stock", i);
+        { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
       }, { "aria-label": `${S.form.check}, ${S.form.stockSlot(i + 1)}` });
       const el = h("div", { class: "slot" },
         h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),

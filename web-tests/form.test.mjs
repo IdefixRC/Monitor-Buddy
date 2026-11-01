@@ -6,7 +6,7 @@ import {
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
   joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery, setTicker,
-  stockSlots, slotsToStocks, moveSlot, applySlots, fieldState, STOCK_SLOTS,
+  stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -561,4 +561,13 @@ test("formErrors: after picking a release without stocks, a disabled slot's erro
   f.supported = new Set(BASELINE_PATHS);
   const e = formErrors(f, zones);
   assert.equal(e["stockslot.2"], undefined);
+});
+
+test("stockIndexOfSlot maps a form slot to its place in config.stocks", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  f.stockSlots = stockSlots([{ symbol: "AAPL", on: true }, { symbol: "", on: true }, { symbol: "MSFT", on: true }]);
+  applySlots(f);
+  assert.equal(stockIndexOfSlot(f, 2), 1);
+  assert.equal(stockIndexOfSlot(f, 1), -1);
+  assert.equal(stockIndexOfSlot(f, 0), 0);
 });

@@ -181,6 +181,9 @@ export function moveSlot(slots, i, dir) {
   return out;
 }
 
+// The index in config.stocks of form slot `slot`, or -1 when that slot isn't stored.
+export const stockIndexOfSlot = (state, slot) => (state.stockSlotOf || []).indexOf(slot);
+
 export function applySlots(state) {
   const { stocks, slotOf } = slotsToStocks(state.stockSlots);
   state.config.stocks = stocks;
