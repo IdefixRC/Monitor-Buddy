@@ -376,6 +376,8 @@ def parse_set_args(args):
                 raise ValueError("theme must be a whole number (0-4)") from None
         elif key == "stocks":
             symbols = [v.strip().upper() for v in value.split(",") if v.strip()]
+            if not symbols:
+                raise ValueError("stocks needs at least one ticker (e.g. stocks=AAPL,MSFT)")
             config["stocks"] = [{"symbol": sym, "on": True} for sym in symbols]
         elif key in CONFIG_KEYS:
             config[key] = value
@@ -403,8 +405,7 @@ def selftest(port):
     info = command(s, "INFO", rid=rid)
     check("INFO ok", info.get("ok") is True, info)
     check("INFO echoes cmd and id", info.get("cmd") == "INFO" and info.get("id") == rid, info)
-    check("INFO has fw, cfg_v 1, mac", bool(info.get("fw")) and info.get("cfg_v") == 1
-          and len(info.get("mac", "")) == 17, info)
+    check("INFO has fw and mac", bool(info.get("fw")) and len(info.get("mac", "")) == 17, info)
     check("INFO wifi block", {"saved", "ssid", "connected"} <= set(info.get("wifi", {})), info)
     r = ask(s, "@MB INFO", "INFO")
     check("bare INFO works and the reply has no id", r is not None and r.get("ok") is True, r)
@@ -414,6 +415,7 @@ def selftest(port):
     original = got.get("config", {})
     keys = expected_keys(got.get("v", 1))
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
+    check("INFO cfg_v matches GET v", info.get("cfg_v") == got.get("v"), (info.get("cfg_v"), got.get("v")))
     check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
     check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
     check("GET has a stored flag", isinstance(got.get("stored"), bool), got.get("stored"))

@@ -8,6 +8,15 @@ class ParseSetArgs(unittest.TestCase):
                          {"config": {"stocks": [{"symbol": "AAPL", "on": True},
                                                 {"symbol": "MSFT", "on": True}]}})
 
+    def test_stocks_skips_empty_parts(self):
+        self.assertEqual(mb_serial.parse_set_args(["stocks=a,,b,"])["config"]["stocks"],
+                         [{"symbol": "A", "on": True}, {"symbol": "B", "on": True}])
+
+    def test_stocks_needs_a_ticker(self):
+        for arg in ("stocks=", "stocks=,, ,"):
+            with self.assertRaisesRegex(ValueError, "at least one ticker"):
+                mb_serial.parse_set_args([arg])
+
     def test_ticker_still_works(self):
         self.assertEqual(mb_serial.parse_set_args(["ticker=AVGO"]), {"config": {"ticker": "AVGO"}})
 
