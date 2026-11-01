@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { readBackup, validateConfig, mergeConfig, BASELINE_PATHS, filterSupported, unsupportedKeys } from "../web/js/settings.js";
+import { readBackup, validateConfig, mergeConfig, withStocks, BASELINE_PATHS, filterSupported, unsupportedKeys } from "../web/js/settings.js";
 import { DEFAULTS, newFormState, offered } from "../web/js/form.js";
 import { parseConfigH } from "../web/js/configh.js";
 
@@ -13,7 +13,7 @@ test("C4: a 1.2.0 backup imports exactly as today", () => {
   const cfg = readBackup(backup);
   assert.deepEqual(cfg, backup.config);
   assert.equal(validateConfig(cfg).ok, true);
-  assert.deepEqual(mergeConfig(DEFAULTS, cfg), backup.config);
+  assert.deepEqual(mergeConfig(DEFAULTS, cfg), withStocks(backup.config));
 });
 
 test("C5: importing to a board without a key leaves only that key out", () => {

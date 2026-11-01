@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SCHEMA, KEYS, PAGE_KEYS, validateWith, mergeWith, knownWith } from "../web/js/settings.js";
+import { SCHEMA, KEYS, PAGE_KEYS, validateWith, mergeWith, knownWith, mergeConfig, validateConfig } from "../web/js/settings.js";
 
 const cases = JSON.parse(readFileSync(new URL("../test/fixtures/settings-cases.json", import.meta.url), "utf8"));
 
@@ -29,18 +29,20 @@ export const DEMO = [
       { name: "style", kind: "choice", words: ["finnhub", "coinbase"], error: 'must be "finnhub" or "coinbase"' }] },
 ];
 
-const SECTIONS = { settings: SCHEMA, demo: DEMO };
-
-for (const [section, schema] of Object.entries(SECTIONS)) {
+const SECTIONS = {
+  settings: { schema: SCHEMA, merge: mergeConfig, validate: validateConfig },
+  demo: { schema: DEMO, merge: (b, p) => mergeWith(DEMO, b, p), validate: (p, c) => validateWith(DEMO, p, c) },
+};
+for (const [section, { merge, validate }] of Object.entries(SECTIONS)) {
   const { defaults, cases: list } = cases[section];
   for (const c of list.filter((x) => x.op === "merge")) {
     test(`${section}: ${c.name}`, () => {
-      const current = mergeWith(schema, defaults, c.current || {});
-      const r = validateWith(schema, c.patch, current);
+      const current = merge(defaults, c.current || {});
+      const r = validate(c.patch, current);
       assert.equal(r.ok, c.ok, JSON.stringify(r.errors));
       if (!c.ok) assert.deepEqual(r.errors, c.errors);
       else if (c.config) {
-        const out = mergeWith(schema, current, c.patch);
+        const out = merge(current, c.patch);
         for (const [k, v] of Object.entries(c.config)) assert.deepEqual(out[k], v, k);
       }
     });

@@ -18,6 +18,7 @@ export const DEFAULTS = Object.freeze({
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",
   ticker: "AAPL",
+  stocks: Object.freeze([Object.freeze({ symbol: "AAPL", on: true })]),
   stock_key: "",
   lat: "1.3119",
   lon: "103.8149",

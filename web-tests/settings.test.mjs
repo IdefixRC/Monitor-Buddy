@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import {
   KEYS, PAGE_KEYS, validateConfig, validateWifi, mergeConfig,
   makeBackup, readBackup, backupFileName, BadBackup,
-  BASELINE_PATHS, supportedPaths, filterSupported, unsupportedKeys, newlyOffered, flattenPaths,
+  BASELINE_PATHS, supportedPaths, withStocks, PATHS_BY_CFG, pathsForCfg, installablePaths, filterSupported, unsupportedKeys, newlyOffered, flattenPaths,
 } from "../web/js/settings.js";
 
 const DEFAULTS = {
   mount: "left", theme: 2, github_user: "IdefixRC", tz_name: "Asia/Singapore", tz_rule: "<+08>-8",
-  ticker: "AAPL", stock_key: "", lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
+  ticker: "AAPL", stocks: [{ symbol: "AAPL", on: true }], stock_key: "", lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
   pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true },
 };
 
@@ -27,7 +27,7 @@ const good = (patch) => {
 // -- constants ------------------------------------------------------------
 
 test("KEYS are the firmware's keys in the firmware's order", () => {
-  assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+  assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks",
     "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"]);
 });
 
@@ -223,7 +223,7 @@ test("wifi must be an object", () => {
 // -- mergeConfig ------------------------------------------------------------
 
 test("merge changes only the patched key", () => {
-  assert.deepEqual(mergeConfig(DEFAULTS, { ticker: "AVGO" }), { ...DEFAULTS, ticker: "AVGO" });
+  assert.deepEqual(mergeConfig(DEFAULTS, { ticker: "AVGO" }), { ...DEFAULTS, ticker: "AVGO", stocks: [{ symbol: "AVGO", on: true }] });
 });
 test("merge keeps the other pages", () => {
   const m = mergeConfig(DEFAULTS, { pages: { stock: false } });
@@ -313,7 +313,8 @@ test("BASELINE_PATHS are 1.2.0's 18 paths", () => {
 });
 
 test("a 1.2.0 GET supports exactly the baseline", () => {
-  assert.deepEqual([...supportedPaths(DEFAULTS)].sort(), [...BASELINE_PATHS].sort());
+  const { stocks, ...v12 } = DEFAULTS;
+  assert.deepEqual([...supportedPaths(v12)].sort(), [...BASELINE_PATHS].sort());
 });
 
 test("supportedPaths ignores keys the flasher doesn't know and lists only reported pages", () => {
@@ -332,8 +333,9 @@ test("filterSupported keeps only supported paths", () => {
 
 test("unsupportedKeys names the top-level keys that lost something", () => {
   const supported = new Set(BASELINE_PATHS.filter((p) => p !== "wind_unit" && p !== "pages.moon"));
-  assert.deepEqual(unsupportedKeys(DEFAULTS, supported), ["wind_unit", "pages"]);
-  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(BASELINE_PATHS)), []);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, supported), ["stocks", "wind_unit", "pages"]);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(BASELINE_PATHS)), ["stocks"]);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(PATHS_BY_CFG[2])), []);
 });
 
 test("newlyOffered lists what a flash adds", () => {
@@ -344,4 +346,36 @@ test("newlyOffered lists what a flash adds", () => {
 test("flattenPaths opens groups and keeps lists and unknown keys whole", () => {
   assert.deepEqual(flattenPaths({ theme: 3, pages: { moon: false }, later: [1] }),
     [["theme", 3], ["pages.moon", false], ["later", [1]]]);
+});
+
+// -- stocks (spec stocks-and-coins §3) -------------------------------------
+
+test("KEYS has stocks right after ticker", () => {
+  assert.equal(KEYS[KEYS.indexOf("ticker") + 1], "stocks");
+});
+
+test("withStocks seeds stocks from a 1.2 config's ticker", () => {
+  assert.deepEqual(withStocks({ ticker: "AVGO" }).stocks, [{ symbol: "AVGO", on: true }]);
+  const has = { ticker: "IBM", stocks: [{ symbol: "MSFT", on: true }] };
+  assert.deepEqual(withStocks(has), has);
+  assert.equal(Object.hasOwn(withStocks({ theme: 2 }), "stocks"), false);
+});
+
+test("PATHS_BY_CFG: 1 is the frozen baseline, 2 adds the stocks", () => {
+  assert.equal(PATHS_BY_CFG[1], BASELINE_PATHS);
+  assert.deepEqual([...PATHS_BY_CFG[2]], [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"]);
+  assert.ok(Object.isFrozen(PATHS_BY_CFG) && Object.isFrozen(PATHS_BY_CFG[2]));
+});
+
+test("pathsForCfg picks the highest known format at or below", () => {
+  assert.equal(pathsForCfg(1), BASELINE_PATHS);
+  assert.equal(pathsForCfg(2), PATHS_BY_CFG[2]);
+  assert.equal(pathsForCfg(9), PATHS_BY_CFG[2]);
+  assert.equal(pathsForCfg(undefined), BASELINE_PATHS);
+});
+
+test("installablePaths is what any offered release supports", () => {
+  assert.equal(installablePaths([{ cfg_v: 1 }]).has("stocks"), false);
+  assert.equal(installablePaths([{ cfg_v: 1 }, { cfg_v: 2 }]).has("stocks.on"), true);
+  assert.equal(installablePaths([]).size, 0);
 });

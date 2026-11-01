@@ -12,6 +12,8 @@ const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const ALNUM = UPPER + "abcdefghijklmnopqrstuvwxyz" + DIGITS;
 export const MSG_OBJECT = "must be an object";
 const MSG_PAGE = "must be true or false";
+const MSG_STOCKS = "1-5 entries; the first is always on";
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 // Rows: { name, kind, ...rules }. kind: "bool" | "int" (min, max) | "choice"
 // (words) | "text" (min, max = length, chars, check?) | "coord" (max = limit) |
@@ -24,6 +26,13 @@ export const SCHEMA = Object.freeze([
   { name: "tz_name", kind: "text", min: 1, max: 64, chars: ALNUM + "/_+-", error: "1-64 characters: letters, digits and / _ + -" },
   { name: "tz_rule", kind: "text", min: 1, max: 64, chars: ALNUM + "<>+-:,./", error: "1-64 characters of a POSIX TZ rule" },
   { name: "ticker", kind: "text", min: 1, max: 10, chars: UPPER + DIGITS + ".-", error: "1-10 characters: A-Z, 0-9, . and -" },
+  { name: "stocks", kind: "list", min: 1, max: 5, error: MSG_STOCKS,
+    entryDefault: { symbol: "AAPL", on: true },
+    check: (entries) => isPlainObject(entries[0]) && entries[0].on !== false,
+    fields: [
+      { name: "symbol", kind: "text", min: 1, max: 10, chars: UPPER + DIGITS + ".-", error: "1-10 characters: A-Z, 0-9, . and -" },
+      { name: "on", kind: "bool", error: MSG_PAGE },
+    ] },
   { name: "stock_key", kind: "text", min: 0, max: 64, chars: ALNUM + "_-", error: "0-64 characters: letters, digits, _ and -" },
   { name: "lat", kind: "coord", max: 90, error: "a number from -90 to 90" },
   { name: "lon", kind: "coord", max: 180, error: "a number from -180 to 180" },
@@ -44,7 +53,6 @@ const COORD_MAX_LEN = 15;
 const COORD_CHARS = "0123456789.+-";
 const COORD_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)$/;
 
-const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const present = (o, k) => Object.hasOwn(o, k) && o[k] !== null;
 
 function coordinateError(v, limit, message) {
@@ -102,6 +110,8 @@ function listErrors(f, v, errors) {
       if (e) errors[`${at}.${c.name}`] = e;
     }
   });
+  const entryErrors = Object.keys(errors).some((k) => k.startsWith(`${f.name}[`));
+  if (!entryErrors && f.check && !f.check(v)) errors[f.name] = f.error;
 }
 
 // The firmware's settingsMerge for a (partial) config against `schema`:
@@ -174,7 +184,23 @@ export function mergeWith(schema, base, patch) {
   return out;
 }
 
-export const mergeConfig = (base, patch) => mergeWith(SCHEMA, base, patch);
+// mergeWith plus the ticker/stocks link (firmware settingsMerge does the same):
+// stocks in the patch set ticker; ticker alone replaces the first stock.
+export function mergeConfig(base, patch) {
+  const out = mergeWith(SCHEMA, base, patch);
+  const p = isPlainObject(patch) ? patch : {};
+  const first = Array.isArray(out.stocks) && isPlainObject(out.stocks[0]) ? out.stocks[0] : null;
+  if (first && Object.hasOwn(p, "stocks")) out.ticker = first.symbol;
+  else if (first && typeof p.ticker === "string") out.stocks = [{ ...first, symbol: p.ticker }, ...out.stocks.slice(1)];
+  return out;
+}
+
+// A 1.2 config (ticker, no stocks) as 1.3 sees it: the ticker is the first stock.
+export function withStocks(config) {
+  const out = structuredClone(isPlainObject(config) ? config : {});
+  if (typeof out.ticker === "string" && !Object.hasOwn(out, "stocks")) out.stocks = [{ symbol: out.ticker, on: true }];
+  return out;
+}
 
 // UTF-8 length: the firmware counts bytes (strlen).
 const byteLength = (s) => new TextEncoder().encode(s).length;
@@ -237,6 +263,30 @@ export function backupFileName(now) {
 export const BASELINE_PATHS = Object.freeze(["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
   "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
   "pages.weather", "pages.moon", "pages.stock", "pages.github"]);
+
+// What each settings format (releases.json "cfg_v", CONFIG_VERSION) knows.
+// An entry is frozen once a final release with that cfg_v exists; until 1.3
+// is released, entry 2 may still grow (spec stocks-and-coins §9).
+export const PATHS_BY_CFG = Object.freeze({
+  1: BASELINE_PATHS,
+  2: Object.freeze([...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"]),
+});
+const KNOWN_CFG = Object.keys(PATHS_BY_CFG).map(Number).sort((a, b) => a - b);
+
+// The paths a firmware with settings format `cfgV` supports.
+export function pathsForCfg(cfgV) {
+  const v = Number(cfgV);
+  if (!Number.isFinite(v)) return PATHS_BY_CFG[1];
+  const known = KNOWN_CFG.filter((k) => k <= v);
+  return PATHS_BY_CFG[known.length ? known[known.length - 1] : 1];
+}
+
+// Every path some offered release supports: what may be shown greyed out.
+export function installablePaths(releases) {
+  const out = new Set();
+  for (const e of releases || []) for (const p of pathsForCfg(e.cfg_v)) out.add(p);
+  return out;
+}
 
 // The paths a GET config reports that this flasher knows: plain keys by name,
 // group fields as "group.field", lists by name, record fields as "list.field"
