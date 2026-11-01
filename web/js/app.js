@@ -18,7 +18,7 @@ import {
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
-  stockSlots, slotsToStocks, moveSlot, applySlots, fieldState, STOCK_SLOTS,
+  stockSlots, moveSlot, applySlots, fieldState, STOCK_SLOTS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -1002,6 +1002,24 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
       set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; },
     });
+    const tickerResult = h("p", { class: "check__result", "aria-live": "polite" });
+    const tickerCheck = btn(S.form.check, async () => {
+      tickerResult.textContent = S.check.checking;
+      tickerResult.dataset.state = "";
+      tickerCheck.disabled = true;
+      if (preview && preview.showEntry) preview.showEntry("stock", 0);
+      const asked = [f.config.ticker, f.config.stock_key];
+      const res = await checkStock(window.fetch.bind(window), ...asked);
+      // Gone, or the ticker or key changed while it ran: the answer is stale.
+      if (!alive || asked[0] !== f.config.ticker || asked[1] !== f.config.stock_key) return;
+      tickerCheck.disabled = false;
+      tickerResult.textContent = stockMessage(res, f.config.ticker);
+      tickerResult.dataset.state = res.status === "ok" ? "ok" : "bad";
+      if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [asked[0]]: res.price } };
+      refresh();
+      if (preview && preview.showEntry) preview.showEntry("stock", 0);
+    });
+    const tickerOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
     const ticker = textField({
       key: "ticker", label: S.form.ticker, help: "ticker", value: f.config.ticker,
       attrs: { autocapitalize: "characters", class: "input input--upper" },
@@ -1009,6 +1027,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         f.config.ticker = upper(v, input);
         f.stockSlots[0] = { ...f.stockSlots[0], symbol: f.config.ticker };
         applySlots(f);
+        tickerResult.textContent = "";
       },
     });
     const slotRows = f.stockSlots.map((_, i) => {
@@ -1019,12 +1038,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         set: (v, el) => { f.stockSlots[i] = { ...f.stockSlots[i], symbol: upper(v, el) }; applySlots(f); result.textContent = ""; },
       });
       const onSwitch = i === 0 ? null : switchRow({
-        label: S.form.slotOn, checked: f.stockSlots[i].on, badgeKey: "stocks", errorKey: `stockslot.${i}`,
+        label: S.form.slotOn, checked: f.stockSlots[i].on, badgeKey: "stocks",
         set: (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); },
       });
       const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}` }); };
-      const up = btn(S.form.moveUp, () => move(-1), { kind: "link" });
-      const down = btn(S.form.moveDown, () => move(1), { kind: "link" });
+      const label = (t) => `${t}, ${S.form.stockSlot(i + 1)}`;
+      const up = btn(S.form.moveUp, () => move(-1), { kind: "link", "aria-label": label(S.form.moveUp) });
+      const down = btn(S.form.moveDown, () => move(1), { kind: "link", "aria-label": label(S.form.moveDown) });
       const check = btn(S.form.check, async () => {
         const sym = f.stockSlots[i].symbol;
         result.textContent = S.check.checking;
@@ -1039,7 +1059,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
         refresh();
         if (preview && preview.showEntry) preview.showEntry("stock", i);
-      });
+      }, { "aria-label": `${S.form.check}, ${S.form.stockSlot(i + 1)}` });
       const el = h("div", { class: "slot" },
         h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),
         h("div", { class: "slot__tools" }, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null, check),
@@ -1048,7 +1068,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       return { el, input, onSwitch, up, down, check, i };
     });
     const slotsNote = note("", "note--info");
-    const tickerBlock = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
+    const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
+    const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
     const slotsBlock = h("div", { class: "slots" }, slotRows.map((r) => r.el));
     form.append(section(S.form.sections.stock, tickerBlock, slotsBlock, slotsNote));
     refreshers.push(() => {
@@ -1056,8 +1077,11 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       const firstWith = app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes("stocks"));
       // "on": the slots replace the single ticker field, and the key moves above them.
       if (st === "on" && stockKey.el.parentNode !== slotsBlock) slotsBlock.prepend(stockKey.el);
-      if (st !== "on" && stockKey.el.parentNode !== tickerBlock) tickerBlock.append(stockKey.el);
+      if (st !== "on" && stockKey.el.parentNode !== tickerGrid) tickerGrid.append(stockKey.el);
       tickerBlock.hidden = st === "on";
+      const tickerNone = !f.config.ticker || !f.config.stock_key;
+      tickerCheck.disabled = tickerNone;
+      tickerOff.hidden = !tickerNone;
       slotsBlock.hidden = st === "hidden";
       slotsNote.hidden = st !== "greyed";
       slotsNote.textContent = st === "greyed" && firstWith ? S.form.needsNewer(firstWith.version) : "";

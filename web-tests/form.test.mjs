@@ -535,3 +535,30 @@ test("formErrors: an empty slot that is on, and a bad ticker in slot 3", () => {
   assert.equal(e["stockslot.1"], S.errors.stockSlotEmpty);
   assert.ok(e["stockslot.2"]);
 });
+
+test("formErrors: stock errors are not reported when stocks aren't offered", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: BASELINE_PATHS });
+  f.config.ticker = "";
+  const e = formErrors(f, zones);
+  assert.ok(e.ticker);
+  assert.deepEqual(Object.keys(e).filter((k) => k === "stocks" || k.startsWith("stocks[") || k.startsWith("stockslot.")), []);
+});
+
+test("formErrors: with stocks on, slot 1 carries the ticker and list errors", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  f.stockSlots[0] = { symbol: "", on: true };
+  applySlots(f);
+  const e = formErrors(f, zones);
+  assert.ok(e["stockslot.0"]);
+  assert.equal(e.ticker, undefined);
+  assert.equal(e.stocks, undefined);
+});
+
+test("formErrors: after picking a release without stocks, a disabled slot's error is gone", () => {
+  const f = newFormState(DEFAULTS, { flow: "fresh", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  f.stockSlots[2] = { symbol: "", on: true };
+  applySlots(f);
+  f.supported = new Set(BASELINE_PATHS);
+  const e = formErrors(f, zones);
+  assert.equal(e["stockslot.2"], undefined);
+});

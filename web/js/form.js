@@ -247,8 +247,22 @@ export function formErrors(state, zones) {
     out[`stockslot.${slot}`] = msg;
   }
   (state.stockSlots || []).forEach((s, i) => {
-    if (i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
+    if (fieldState(state, "stocks") === "on" && i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
   });
+  if (fieldState(state, "stocks") !== "on") {
+    // Not offered by the deciding firmware: the list is not validated.
+    for (const key of Object.keys(out)) {
+      if (key === "stocks" || key.startsWith("stocks[") || key.startsWith("stockslot.")) delete out[key];
+    }
+  } else {
+    // One field per stock: slot 1 carries the ticker's and the list's errors.
+    for (const key of ["ticker", "stocks"]) {
+      if (key in out) {
+        if (!out["stockslot.0"]) out["stockslot.0"] = out[key];
+        delete out[key];
+      }
+    }
+  }
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }
