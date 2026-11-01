@@ -2,7 +2,7 @@
 // choices, its errors and its help texts. Pure: no DOM, no Web Serial, so the
 // tests run it (web-tests/form.test.mjs). app.js draws the form.
 import { S } from "./strings.js";
-import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported } from "./settings.js";
+import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported, withStocks } from "./settings.js";
 import { ruleForZone } from "./tz.js";
 import { pageList } from "./preview.js";
 
@@ -49,9 +49,6 @@ export function afterRecovery(got) {
 
 const PLACEHOLDER_KEY = "xxxxxxx"; // STOCKKEY in config.h.example before 1.2
 
-// A board's GET config as the form shows it. A board running an older release
-// build without a saved key reports the old template's placeholder, which is no
-// key at all.
 // Set the ticker and keep the first stock in step (the board stores them as one).
 export function setTicker(config, symbol) {
   config.ticker = symbol;
@@ -60,8 +57,11 @@ export function setTicker(config, symbol) {
   }
 }
 
+// A board's GET config as the form shows it. A board running an older release
+// build without a saved key reports the old template's placeholder, which is no
+// key at all. A 1.2 board's ticker seeds the first stock.
 export function fromBoard(config) {
-  const out = structuredClone(config || {});
+  const out = withStocks(config || {});
   if (out.stock_key === PLACEHOLDER_KEY) out.stock_key = "";
   return out;
 }
@@ -86,8 +86,8 @@ export function wifiChoices(info, path) {
 // A fresh form: the given config, Wi-Fi on with the default choice.
 // location: the location keys ("lat", "lon", "tz_name") the user has given
 // (picked, typed, imported); see locationMissing.
-export function newFormState(config, { flow, info = null, added = [], imported = [], location = [], supported = BASELINE_PATHS } = {}) {
-  return {
+export function newFormState(config, { flow, info = null, added = [], imported = [], location = [], supported = BASELINE_PATHS, teaser = [] } = {}) {
+  const state = {
     flow,
     config: structuredClone(config),
     wifi: { configure: true, choice: wifiChoices(info, flow)[0].value, ssid: "", password: "" },
@@ -95,7 +95,11 @@ export function newFormState(config, { flow, info = null, added = [], imported =
     imported: [...imported],
     location: [...location],
     supported: new Set(supported),
+    teaser: new Set(teaser || []),
   };
+  state.stockSlots = stockSlots(state.config.stocks);
+  state.stockSlotOf = slotsToStocks(state.stockSlots).slotOf;
+  return state;
 }
 
 // The form shows a setting only if the Buddy it will be sent to understands
@@ -137,7 +141,59 @@ export function formToRequest(state) {
   const req = { config: state.supported ? filterSupported(state.config, state.supported) : structuredClone(state.config) };
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") req.wifi = { ssid: w.ssid, password: w.password };
+  // The board stores ticker as the first stock; send them in step (spec §3.1).
+  const st = req.config.stocks;
+  if (Array.isArray(st) && st[0] && typeof st[0].symbol === "string") req.config.ticker = st[0].symbol;
   return req;
+}
+
+// ── Stock slots (spec stocks-and-coins §6.1) ──────────────
+// Five slots in the form; the board stores the filled ones in slot order,
+// switched-off ones included (on: false). Slot 1 is always on.
+export const STOCK_SLOTS = 5;
+
+export function stockSlots(stocks) {
+  const list = Array.isArray(stocks) ? stocks : [];
+  return Array.from({ length: STOCK_SLOTS }, (_, i) => {
+    const e = list[i];
+    if (!e || typeof e.symbol !== "string") return { symbol: "", on: i === 0 };
+    return { symbol: e.symbol, on: i === 0 ? true : e.on !== false };
+  });
+}
+
+export function slotsToStocks(slots) {
+  const stocks = [];
+  const slotOf = [];
+  slots.forEach((s, i) => {
+    if (!s.symbol) return;
+    stocks.push({ symbol: s.symbol, on: i === 0 ? true : !!s.on });
+    slotOf.push(i);
+  });
+  return { stocks, slotOf };
+}
+
+export function moveSlot(slots, i, dir) {
+  const j = i + dir;
+  if (i < 0 || j < 0 || i >= slots.length || j >= slots.length) return slots;
+  const out = slots.map((s) => ({ ...s }));
+  [out[i], out[j]] = [out[j], out[i]];
+  out[0].on = true;
+  return out;
+}
+
+export function applySlots(state) {
+  const { stocks, slotOf } = slotsToStocks(state.stockSlots);
+  state.config.stocks = stocks;
+  state.config.ticker = state.stockSlots[0].symbol;
+  state.stockSlotOf = slotOf;
+}
+
+// "on": the deciding firmware supports it; "greyed": an installable release
+// does (drawn disabled with S.form.needsNewer); "hidden": neither (spec §6.4).
+export function fieldState(state, path) {
+  if (state.supported && state.supported.has(path)) return "on";
+  if (state.teaser && state.teaser.has(path)) return "greyed";
+  return "hidden";
 }
 
 // A path matches itself, and a top-level key matches every path under it and
@@ -182,6 +238,17 @@ export function formErrors(state, zones) {
   const out = {};
   const { errors } = validateConfig(state.config);
   for (const [key, raw] of Object.entries(errors)) out[key] = fieldMessage(key, raw);
+  // Stock slots: list errors point at their slot; an empty slot that is on is an error.
+  for (const [key, msg] of Object.entries(out)) {
+    const m = /^stocks\[(\d+)\]/.exec(key);
+    if (!m) continue;
+    delete out[key];
+    const slot = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
+    out[`stockslot.${slot}`] = msg;
+  }
+  (state.stockSlots || []).forEach((s, i) => {
+    if (i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
+  });
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }

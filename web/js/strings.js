@@ -163,6 +163,11 @@ export const S = {
   },
 
   form: {
+    stockSlot: (n) => `Stock ${n}`,
+    slotOn: "On",
+    moveUp: "Move up",
+    moveDown: "Move down",
+    needsNewer: (version) => `Available from firmware ${version}. Update your Buddy, or pick ${version} or newer below when updating.`,
     say: {
       change: "Here's how I'm set up. Change what you like and I'll show it on my screen.",
       update: "Want to change anything while I update? Pick the version at the bottom.",
@@ -287,7 +292,7 @@ export const S = {
     lon: "Your location in decimal degrees, for the weather. South and west are negative. Example: Munich is 48.1374 / 11.5755.",
     tz_name: "The time zone name, for example `Europe/Berlin`. I use it for the weather and pick the matching clock rule, including daylight saving.",
     tz_rule: "Advanced: the exact rule my clock uses, including daylight saving. It's filled in from the time zone; you only need to change it in rare cases.",
-    stocks: "Up to five stocks for the stock page. The first one is always on; the others can be switched off.",
+    stocks: "Up to five stocks. A tap on the Buddy's stock page shows the next one; switched-off slots keep their ticker.",
     temp_unit: "Celsius or Fahrenheit, for the weather page.",
     wind_unit: "km/h or mph, for the weather page.",
     pages: "Choose which pages I show and cycle through. If you turn them all off, I keep the face on so the screen is never empty.",
@@ -316,6 +321,7 @@ export const S = {
 
   // Field errors, keyed like the firmware's SET errors.
   errors: {
+    stockSlotEmpty: "Fill in a ticker, or switch this slot off.",
     mount: "Choose left or right.",
     theme: "Choose one of the five themes.",
     github_user: "Up to 39 letters, digits and dashes.",
