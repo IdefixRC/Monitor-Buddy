@@ -52,6 +52,14 @@ const PLACEHOLDER_KEY = "xxxxxxx"; // STOCKKEY in config.h.example before 1.2
 // A board's GET config as the form shows it. A board running an older release
 // build without a saved key reports the old template's placeholder, which is no
 // key at all.
+// Set the ticker and keep the first stock in step (the board stores them as one).
+export function setTicker(config, symbol) {
+  config.ticker = symbol;
+  if (Array.isArray(config.stocks) && config.stocks[0]) {
+    config.stocks = [{ ...config.stocks[0], symbol }, ...config.stocks.slice(1)];
+  }
+}
+
 export function fromBoard(config) {
   const out = structuredClone(config || {});
   if (out.stock_key === PLACEHOLDER_KEY) out.stock_key = "";

@@ -5,7 +5,7 @@ import {
   DEFAULTS, formToRequest, badgesFor, helpFor, wifiChoices, formErrors, fromBoard,
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
-  joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery,
+  joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery, setTicker,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -447,4 +447,13 @@ test("the backup import leaves out what the board doesn't support", () => {
   const text = S.form.backupPartly(11, ["wind_unit"]);
   assert.match(text, /wind_unit/);
   assert.doesNotMatch(text, /!|\bplease\b|\bsimply\b|\bjust\b/i);
+});
+
+test("editing the ticker keeps the first stock in step (afterFlash keeps it)", () => {
+  const cfg = structuredClone(DEFAULTS);
+  setTicker(cfg, "AVGO");
+  assert.deepEqual(cfg.stocks, [{ symbol: "AVGO", on: true }]);
+  const v12 = { ...structuredClone(DEFAULTS), ticker: "IBM" };
+  delete v12.stocks;   // what a 1.2 board's GET looks like
+  assert.equal(mergeConfig(fromBoard(v12), cfg).ticker, "AVGO");
 });

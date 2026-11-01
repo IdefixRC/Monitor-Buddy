@@ -17,7 +17,7 @@ import {
   DEFAULTS, FLOWS, newFormState, offered, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor, locationSummary, locationMissing, afterRecovery,
+  previewPageFor, locationSummary, locationMissing, afterRecovery, setTicker,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -1015,7 +1015,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
           input.value = up;
           try { input.setSelectionRange(at, at); } catch { /* not every input type allows it */ }
         }
-        f.config.ticker = up;
+        setTicker(f.config, up);
         clearStock();
       },
     });
