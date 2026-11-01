@@ -6,7 +6,7 @@ import { BuddyPort, change, probe } from "./serial.js";
 import { sameMac, watchForTrouble } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
-import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered } from "./settings.js";
+import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered, pathsForCfg, installablePaths } from "./settings.js";
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
@@ -17,7 +17,8 @@ import {
   DEFAULTS, FLOWS, newFormState, offered, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor, locationSummary, locationMissing, afterRecovery, setTicker,
+  previewPageFor, locationSummary, locationMissing, afterRecovery,
+  stockSlots, slotsToStocks, moveSlot, applySlots, fieldState, STOCK_SLOTS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -425,15 +426,14 @@ async function startChange() {
 async function startFlashFlow(flow) {
   let config = DEFAULTS;
   let added = [];
-  let supported;
   if (app.info) {
     const got = await readGet();
     if (!got) return;
     config = fromBoard(got.config);
     added = got.added || [];
-    supported = supportedPaths(got.config);
   }
-  app.form = newFormState(config, { flow, info: app.info, added, supported });
+  // The release about to go on decides what the form offers, not the running board.
+  app.form = newFormState(config, { flow, info: app.info, added, supported: pathsForCfg(app.releases[0].cfg_v) });
   app.form.version = app.releases[0].version;
   showForm();
 }
@@ -501,7 +501,7 @@ async function startFresh() {
     choice: true,
     next: (empty) => {
       app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
-        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got), supported: supportedPaths(got.config) });
+        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got), supported: pathsForCfg(app.releases[0].cfg_v) });
       app.form.version = app.releases[0].version;
       showForm();
     },
@@ -692,6 +692,7 @@ const NARROW = "(max-width: 900px)";
 
 function showForm({ say: message = "", tone = "", focus } = {}) {
   const f = app.form;
+  f.teaser = installablePaths(app.releases);
   const flow = FLOWS[f.flow];
   const choices = wifiChoices(app.info, f.flow);
   if (!choices.some((c) => c.value === f.wifi.choice)) f.wifi.choice = choices[0].value;
@@ -705,6 +706,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   let currentErrors = {};
   let preview;
   let bubble;
+  let slotInputs = [];   // the stock slot inputs, for focus after a move
   // False once this drawing of the form is gone (redrawn or left), so a check
   // or an import that finishes late doesn't touch a destroyed preview.
   let alive = true;
@@ -985,50 +987,89 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       githubHidden.hidden = !(pages.github && !f.config.github_user);
     });
 
-    // 5. Stock.
-    const stockResult = h("p", { class: "check__result", "aria-live": "polite" });
-    const stockCheck = btn(S.form.check, async () => {
-      stockResult.textContent = S.check.checking;
-      stockResult.dataset.state = "";
-      stockCheck.disabled = true;
-      jumpFor("check.stock"); // show the stock page while it checks
-      const asked = [f.config.ticker, f.config.stock_key];
-      const res = await checkStock(window.fetch.bind(window), ...asked);
-      // Gone, or the ticker or key changed while it ran: the answer is stale.
-      if (!alive || asked[0] !== f.config.ticker || asked[1] !== f.config.stock_key) return;
-      stockCheck.disabled = false;
-      stockResult.textContent = stockMessage(res, f.config.ticker);
-      stockResult.dataset.state = res.status === "ok" ? "ok" : "bad";
-      if (res.status === "ok") app.live = { ...app.live, price: res.price };
-      refresh();
-      jumpFor("check.stock"); // a fresh result: hold the page again, with the live price on it
+    // 5. Stock: five slots on firmware that has them, today's single ticker
+    // otherwise; slots greyed with a note when only a newer release has them.
+    const upper = (v, input) => {
+      const up = v.toUpperCase().trim();
+      if (input.value !== up) {
+        const at = input.selectionStart;
+        input.value = up;
+        try { input.setSelectionRange(at, at); } catch { /* not every input type allows it */ }
+      }
+      return up;
+    };
+    const stockKey = textField({
+      key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
+      set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; },
     });
-    const stockOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
-    const clearStock = () => { delete app.live.price; stockResult.textContent = ""; };
     const ticker = textField({
       key: "ticker", label: S.form.ticker, help: "ticker", value: f.config.ticker,
       attrs: { autocapitalize: "characters", class: "input input--upper" },
       set: (v, input) => {
-        const up = v.toUpperCase().trim();
-        if (input.value !== up) {
-          const at = input.selectionStart;
-          input.value = up;
-          try { input.setSelectionRange(at, at); } catch { /* not every input type allows it */ }
-        }
-        setTicker(f.config, up);
-        clearStock();
+        f.config.ticker = upper(v, input);
+        f.stockSlots[0] = { ...f.stockSlots[0], symbol: f.config.ticker };
+        applySlots(f);
       },
     });
-    const stockKey = textField({
-      key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
-      set: (v) => { f.config.stock_key = v.trim(); clearStock(); },
+    const slotRows = f.stockSlots.map((_, i) => {
+      const result = h("p", { class: "check__result", "aria-live": "polite" });
+      const input = textField({
+        key: `stockslot.${i}`, label: S.form.stockSlot(i + 1), help: "stocks", value: f.stockSlots[i].symbol,
+        attrs: { autocapitalize: "characters", class: "input input--upper" },
+        set: (v, el) => { f.stockSlots[i] = { ...f.stockSlots[i], symbol: upper(v, el) }; applySlots(f); result.textContent = ""; },
+      });
+      const onSwitch = i === 0 ? null : switchRow({
+        label: S.form.slotOn, checked: f.stockSlots[i].on, badgeKey: "stocks", errorKey: `stockslot.${i}`,
+        set: (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); },
+      });
+      const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}` }); };
+      const up = btn(S.form.moveUp, () => move(-1), { kind: "link" });
+      const down = btn(S.form.moveDown, () => move(1), { kind: "link" });
+      const check = btn(S.form.check, async () => {
+        const sym = f.stockSlots[i].symbol;
+        result.textContent = S.check.checking;
+        result.dataset.state = "";
+        check.disabled = true;
+        if (preview && preview.showEntry) preview.showEntry("stock", i);
+        const res = await checkStock(window.fetch.bind(window), sym, f.config.stock_key);
+        if (!alive || sym !== f.stockSlots[i].symbol) return;
+        check.disabled = false;
+        result.textContent = stockMessage(res, sym);
+        result.dataset.state = res.status === "ok" ? "ok" : "bad";
+        if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
+        refresh();
+        if (preview && preview.showEntry) preview.showEntry("stock", i);
+      });
+      const el = h("div", { class: "slot" },
+        h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),
+        h("div", { class: "slot__tools" }, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null, check),
+        result);
+      slotInputs[i] = input.input;
+      return { el, input, onSwitch, up, down, check, i };
     });
-    form.append(section(S.form.sections.stock, h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el),
-      h("div", { class: "check" }, stockCheck, stockOff, stockResult)));
+    const slotsNote = note("", "note--info");
+    const tickerBlock = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
+    const slotsBlock = h("div", { class: "slots" }, slotRows.map((r) => r.el));
+    form.append(section(S.form.sections.stock, tickerBlock, slotsBlock, slotsNote));
     refreshers.push(() => {
-      const off = !f.config.ticker || !f.config.stock_key;
-      stockCheck.disabled = off;
-      stockOff.hidden = !off;
+      const st = fieldState(f, "stocks");
+      const firstWith = app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes("stocks"));
+      // "on": the slots replace the single ticker field, and the key moves above them.
+      if (st === "on" && stockKey.el.parentNode !== slotsBlock) slotsBlock.prepend(stockKey.el);
+      if (st !== "on" && stockKey.el.parentNode !== tickerBlock) tickerBlock.append(stockKey.el);
+      tickerBlock.hidden = st === "on";
+      slotsBlock.hidden = st === "hidden";
+      slotsNote.hidden = st !== "greyed";
+      slotsNote.textContent = st === "greyed" && firstWith ? S.form.needsNewer(firstWith.version) : "";
+      for (const r of slotRows) {
+        const greyed = st === "greyed";
+        r.el.hidden = greyed && r.i === 0;   // slot 1 is the ticker field while greyed
+        const off = r.i > 0 && !f.stockSlots[r.i].on;
+        r.input.input.disabled = greyed || off;
+        if (r.onSwitch) r.onSwitch.input.disabled = greyed;
+        r.up.disabled = r.down.disabled = greyed;
+        r.check.disabled = greyed || off || !f.stockSlots[r.i].symbol || !f.config.stock_key;
+      }
     });
 
     // 6. GitHub.
@@ -1091,9 +1132,10 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       const syncVersion = () => {
         const entry = app.releases.find((e) => e.version === f.version) || app.releases[0];
         if (entry && entry.notes) { notesLink.href = entry.notes; notesLink.hidden = false; } else notesLink.hidden = true;
+        f.supported = new Set(pathsForCfg(entry.cfg_v));   // the firmware about to go on decides (spec §6.4)
         cfgNote.hidden = !addsSettings(entry, app.info);
       };
-      select.addEventListener("change", () => { f.version = select.value; syncVersion(); });
+      select.addEventListener("change", () => { f.version = select.value; syncVersion(); refresh(); });
       form.append(section(S.form.sections.firmware,
         h("div", { class: "field" }, h("div", { class: "field__head" }, h("label", { for: id }, S.form.version)),
           h("div", { class: "input-row" }, select, notesLink)),
@@ -1148,6 +1190,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
 
     refresh();
     if (focus === "wifi") (f.wifi.choice === "new" ? ssid.input : configure.input).focus();
+    const slotAt = /^stockslot\.(\d+)$/.exec(focus || "");
+    if (slotAt && slotInputs[Number(slotAt[1])]) slotInputs[Number(slotAt[1])].focus();
   });
 
   function refresh() {
@@ -1184,6 +1228,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       return showForm({ say: S.form.badFile, tone: "error" });
     }
     f.config = mergeConfig(f.config, res.config);
+    f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
@@ -1207,6 +1252,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const left = unsupportedKeys(cfg, f.supported);
     cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
+    f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
       ? S.form.backupPartly(Object.keys(cfg).length, left)

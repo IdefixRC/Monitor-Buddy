@@ -433,6 +433,19 @@ test("every form built from a GET passes that GET's supported paths", () => {
   for (const call of fromGet) assert.match(call, /supported: supportedPaths\(got\.config\)/, call);
 });
 
+test("flash flows take supported from the picked release, not the running board", () => {
+  assert.match(appSource, /function startFlashFlow[\s\S]*?supported: pathsForCfg\(app\.releases\[0\]\.cfg_v\)/);
+  assert.match(appSource, /flow: "fresh"[\s\S]*?supported: pathsForCfg\(app\.releases\[0\]\.cfg_v\)/);
+});
+
+test("changing the firmware version recomputes what the form offers", () => {
+  assert.match(appSource, /f\.supported = new Set\(pathsForCfg\(entry\.cfg_v\)\)/);
+});
+
+test("the form knows what an installable release could add", () => {
+  assert.match(appSource, /f\.teaser = installablePaths\(app\.releases\)/);
+});
+
 test("afterFlash sends what the flash added to the review form", () => {
   assert.match(appSource, /newlyOffered\(f\.supported, now\)/);
   assert.match(appSource, /f\.supported = now/);

@@ -1663,6 +1663,45 @@ select.input {
 .check__result[data-state="ok"] { color: var(--ok); }
 .check__result[data-state="bad"] { color: var(--danger); }
 
+/* The stock slots: a column of rows, each a ticker, its On switch and its tools. */
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.slot {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-2);
+}
+
+.slot__main {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.slot__main > .field {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.slot__tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.slot .check__result {
+  margin-top: 0.4rem;
+}
+
+
 /* The buttons stay in reach at the bottom of a long form. */
 .form-foot {
   position: sticky;
