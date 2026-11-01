@@ -1007,7 +1007,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       tickerResult.textContent = S.check.checking;
       tickerResult.dataset.state = "";
       tickerCheck.disabled = true;
-      if (preview && preview.showEntry) preview.showEntry("stock", 0);
+      preview.showEntry("stock", 0);
       const asked = [f.config.ticker, f.config.stock_key];
       const res = await checkStock(window.fetch.bind(window), ...asked);
       // Gone, or the ticker or key changed while it ran: the answer is stale.
@@ -1017,7 +1017,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       tickerResult.dataset.state = res.status === "ok" ? "ok" : "bad";
       if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [asked[0]]: res.price } };
       refresh();
-      if (preview && preview.showEntry) preview.showEntry("stock", 0);
+      preview.showEntry("stock", 0);
     });
     const tickerOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
     const ticker = textField({
@@ -1050,7 +1050,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         result.textContent = S.check.checking;
         result.dataset.state = "";
         check.disabled = true;
-        if (preview && preview.showEntry) preview.showEntry("stock", i);
+        preview.showEntry("stock", i);
         const res = await checkStock(window.fetch.bind(window), sym, f.config.stock_key);
         if (!alive || sym !== f.stockSlots[i].symbol) return;
         check.disabled = false;
@@ -1058,7 +1058,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
         if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
         refresh();
-        if (preview && preview.showEntry) preview.showEntry("stock", i);
+        preview.showEntry("stock", i);
       }, { "aria-label": `${S.form.check}, ${S.form.stockSlot(i + 1)}` });
       const el = h("div", { class: "slot" },
         h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),

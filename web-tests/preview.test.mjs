@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, formatSubHint } from "../web/js/preview.js";
 import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
@@ -151,6 +151,7 @@ test("which page a setting jumps to", () => {
   for (const k of ["temp_unit", "wind_unit", "city", "lat", "lon"]) assert.equal(previewPageFor(k, cfg), "weather", k);
   for (const k of ["tz_name", "tz_rule"]) assert.equal(previewPageFor(k, cfg), "clock", k);
   for (const k of ["ticker", "stock_key"]) assert.equal(previewPageFor(k, cfg), "stock", k);
+  assert.equal(previewPageFor("stockslot.2", cfg), "stock", "typing in a stock slot");
   assert.equal(previewPageFor("github_user", cfg), "github");
   assert.equal(previewPageFor("mount", cfg), "face");
   assert.equal(previewPageFor("theme", cfg), "moon", "clock and date are off: the first themed page that is on");
@@ -208,4 +209,9 @@ test("followerTextSize: 5 for exactly five characters, else 6", () => {
 test("a 5-digit follower count fits the screen at its size", () => {
   const f = formatCount(24553);
   assert.ok(150 + textWidth(f, followerTextSize(f)) <= 320);
+});
+
+test("formatSubHint mirrors the firmware", () => {
+  assert.equal(formatSubHint(1, 5), "2/5");
+  assert.equal(formatSubHint(0, 1), "");
 });

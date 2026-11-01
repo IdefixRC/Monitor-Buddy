@@ -336,6 +336,7 @@ export function previewPageFor(key, config) {
     }
     default: break;
   }
+  if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
   if (typeof key === "string" && key.startsWith("pages.")) {
     const page = key.slice("pages.".length);
     return config && config.pages && config.pages[page] === true ? page : null;

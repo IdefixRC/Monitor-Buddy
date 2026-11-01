@@ -253,9 +253,23 @@ function drawMoon(c, now) {
 const DASH = "—";
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 
-function drawStock(c, config, live) {
-  const price = isNum(live.price) ? `$${live.price.toFixed(2)}` : `$${DASH}`;
-  const ticker = String(config.ticker || "").toUpperCase().slice(0, 10);
+// formatSubHint in lib/display/display_fmt.cpp. KEEP IN SYNC.
+export function formatSubHint(index, count) {
+  return count < 2 ? "" : `${index + 1}/${count}`;
+}
+
+// The stocks that are on, in slot order, each with its slot (0-4).
+const activeStocks = (config) => (Array.isArray(config.stocks) ? config.stocks : [])
+  .map((s, slot) => ({ ...s, slot })).filter((s) => s.symbol && s.on !== false);
+
+const tickerOf = (config, entry) =>
+  String(entry ? entry.symbol : config.ticker || "").toUpperCase().slice(0, 10);
+const priceOf = (live, ticker) => (live.prices ? live.prices[ticker] : undefined);
+
+function drawStock(c, config, live, entry) {
+  const ticker = tickerOf(config, entry);
+  const p = priceOf(live, ticker);
+  const price = isNum(p) ? `$${p.toFixed(2)}` : `$${DASH}`;
   let tsize = 4;
   while (tsize > 1 && ticker.length * 6 * tsize > 132) tsize--;
   // Without open/high/low the colour is the "up" one (price >= open).
@@ -411,7 +425,7 @@ export class PageCycle {
 }
 
 // createPreview(container) -> { update(config, live?), showPage(page, holdMs?), setCompact(on), destroy() }.
-// live is { price?, followers?, repos? } from successful checks.
+// live is { prices?: {SYMBOL: price}, followers?, repos? } from successful checks.
 export function createPreview(container) {
   const id = `buddy-preview-${++uid}`;
   const figure = document.createElement("figure");
@@ -465,6 +479,7 @@ export function createPreview(container) {
   let live = {};
   let face = null;
   let tick = 0;
+  let stockIdx = 0;
   let compact = false;
   // The pause button's text sits in its own span, so the compact strip can
   // show the icon alone and keep the accessible name.
@@ -493,6 +508,8 @@ export function createPreview(container) {
     const key = cycle.page;
     const c = themeColors(config.theme);
     const now = new Date();
+    const stocks = activeStocks(config);
+    const entry = stocks.length ? stocks[stockIdx % stocks.length] : null;
     if (key === "face") {
       page.innerHTML = "";
       if (!face) face = createFace(faceHost);
@@ -503,16 +520,20 @@ export function createPreview(container) {
         : key === "date" ? drawDate(c, now)
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)
-        : key === "stock" ? drawStock(c, config, live)
+        : key === "stock" ? drawStock(c, config, live, entry)
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
+    if (key === "stock" && stocks.length >= 2) {
+      dotLayer.innerHTML += centred(formatSubHint(stockIdx % stocks.length, stocks.length), SCREEN_H - 8, 1, DOT_OFF);
+    }
 
     let text = S.pageNames[key];
-    if (key === "stock" && config.ticker) text += ` · ${String(config.ticker).toUpperCase()}`;
+    const shownTicker = tickerOf(config, entry);
+    if (key === "stock" && shownTicker) text += ` · ${shownTicker}`;
     if (key === "github") text += ` · ${config.github_user}`;
     const sample = (key === "weather")
-      || (key === "stock" && !isNum(live.price))
+      || (key === "stock" && !isNum(priceOf(live, shownTicker)))
       || (key === "github" && !isNum(live.followers));
     if (sample) text += ` (${S.previewSample})`;
     caption.textContent = text;
@@ -527,7 +548,12 @@ export function createPreview(container) {
   // The clock's seconds and colon change every second.
   tick = setInterval(() => { if (cycle.page === "clock") draw(); }, 1000);
 
-  const next = () => cycle.next();
+  // Like a tap on the Buddy: the next stock on a stock page with several, else the next page.
+  const next = () => {
+    const stocks = activeStocks(config);
+    if (cycle.page === "stock" && stocks.length >= 2) { stockIdx = (stockIdx + 1) % stocks.length; draw(); }
+    else cycle.next();
+  };
   button.addEventListener("click", next);
   const togglePause = () => { cycle.setPaused(!cycle.paused); syncPause(); };
   pause.addEventListener("click", togglePause);
@@ -537,6 +563,7 @@ export function createPreview(container) {
   function update(nextConfig, nextLive) {
     config = nextConfig || DEFAULT_CONFIG;
     live = nextLive || {};
+    stockIdx = Math.min(stockIdx, Math.max(0, activeStocks(config).length - 1));
     cycle.setPages(pageList(config));
     layout();
     draw();
@@ -549,6 +576,16 @@ export function createPreview(container) {
     update,
     // Jump to the page a settings change affects and hold it (PageCycle.showPage).
     showPage(pageKey, holdMs = HOLD_MS) { return cycle.showPage(pageKey, holdMs); },
+    // Show stock slot `index` (a Check in the form) and hold the page.
+    showEntry(pageKey, index, holdMs = HOLD_MS) {
+      if (pageKey === "stock") {
+        const at = activeStocks(config).findIndex((s) => s.slot === index);
+        if (at >= 0) stockIdx = at;
+      }
+      const shown = cycle.showPage(pageKey, holdMs);
+      draw();
+      return shown;
+    },
     // The screen alone, without the holder and the monitor (the phone strip).
     setCompact(on) { compact = !!on; layout(); },
     destroy() {
