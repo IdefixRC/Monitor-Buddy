@@ -103,7 +103,8 @@ export function newFormState(config, { flow, info = null, added = [], imported =
 }
 
 // The form shows a setting only if the Buddy it will be sent to understands
-// it (spec §5.3): what its GET reported, or 1.2.0's set when there was no GET.
+// it (spec §5.3): the running board's GET for Change settings; the firmware
+// picked at the bottom for flash flows; 1.2.0's set when neither is known.
 // Every field added after 1.2.0 must be drawn only when this is true.
 export const offered = (state, path) => !!(state && state.supported && state.supported.has(path));
 
@@ -234,6 +235,49 @@ export function fieldMessage(key, raw) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Errors on stocks keyed like the form: stocks[k]... -> stockslot.<slot of k>.
+// With stocks offered, `ticker` and the list's own error land on slot 1 (an
+// existing message there wins); without, every stock key is dropped.
+// Works for both the form's own errors and the Buddy's SET errors.
+export function remapStockErrors(state, errors) {
+  const out = { ...errors };
+  for (const [key, msg] of Object.entries(out)) {
+    const m = /^stocks\[(\d+)\]/.exec(key);
+    if (!m) continue;
+    delete out[key];
+    const slot = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
+    out[`stockslot.${slot}`] = msg;
+  }
+  if (fieldState(state, "stocks") !== "on") {
+    // Not offered by the deciding firmware: the list is not validated.
+    for (const key of Object.keys(out)) {
+      if (key === "stocks" || key.startsWith("stocks[") || key.startsWith("stockslot.")) delete out[key];
+    }
+  } else {
+    for (const key of ["ticker", "stocks"]) {
+      if (key in out) {
+        if (!out["stockslot.0"]) out["stockslot.0"] = out[key];
+        delete out[key];
+      }
+    }
+  }
+  return out;
+}
+
+// Delete, in place, the raw server errors (keyed stocks[k]..., ticker, stocks)
+// that belong to form slot `slot`, so editing that slot clears them.
+export function dropSlotErrors(state, errors, slot) {
+  for (const key of Object.keys(errors)) {
+    const m = /^stocks\[(\d+)\]/.exec(key);
+    if (m) {
+      const at = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
+      if (at === slot) delete errors[key];
+    } else if (slot === 0 && (key === "ticker" || key === "stocks")) {
+      delete errors[key];
+    }
+  }
+}
+
 // Every error in the form, keyed like the firmware's: { key: message }.
 // zones: the time zone table; a zone that isn't in it is an error, since the
 // clock rule comes from it.
@@ -242,30 +286,12 @@ export function formErrors(state, zones) {
   const { errors } = validateConfig(state.config);
   for (const [key, raw] of Object.entries(errors)) out[key] = fieldMessage(key, raw);
   // Stock slots: list errors point at their slot; an empty slot that is on is an error.
-  for (const [key, msg] of Object.entries(out)) {
-    const m = /^stocks\[(\d+)\]/.exec(key);
-    if (!m) continue;
-    delete out[key];
-    const slot = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
-    out[`stockslot.${slot}`] = msg;
-  }
+  const mapped = remapStockErrors(state, out);
+  for (const key of Object.keys(out)) delete out[key];
+  Object.assign(out, mapped);
   (state.stockSlots || []).forEach((s, i) => {
     if (fieldState(state, "stocks") === "on" && i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
   });
-  if (fieldState(state, "stocks") !== "on") {
-    // Not offered by the deciding firmware: the list is not validated.
-    for (const key of Object.keys(out)) {
-      if (key === "stocks" || key.startsWith("stocks[") || key.startsWith("stockslot.")) delete out[key];
-    }
-  } else {
-    // One field per stock: slot 1 carries the ticker's and the list's errors.
-    for (const key of ["ticker", "stocks"]) {
-      if (key in out) {
-        if (!out["stockslot.0"]) out["stockslot.0"] = out[key];
-        delete out[key];
-      }
-    }
-  }
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }

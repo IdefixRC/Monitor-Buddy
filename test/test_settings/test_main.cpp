@@ -354,7 +354,7 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
 // ── The @MB line budget (spec §4.6) ───────────────────────
 
 // The largest GET reply today, plus room for the keys spec §8 plans (about
-// 400 bytes of config at their largest, about 150 of added paths), must fit
+// 300 bytes of config at their largest, about 100 of added paths), must fit
 // the 2,048-byte reply buffer with a quarter to spare.
 static void test_largest_get_reply_fits_with_room() {
   Settings s = makeDefaults();

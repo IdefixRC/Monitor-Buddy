@@ -68,9 +68,9 @@
 // ------------------------------------------------------------
 //  HOW TO USE
 // ------------------------------------------------------------
-// To customize Monitor-Buddy to you (GitHub user, timezone, stock
-// ticker + Finnhub API key, weather location, theme, which pages to
-// show): copy  config/config.h.example  to  config/config.h  and edit
+// To customize Monitor-Buddy to you (GitHub user, timezone, stocks (up to
+// five, set in the web flasher) + Finnhub API key, weather location,
+// theme, which pages to show): copy  config/config.h.example  to  config/config.h  and edit
 // the values there. config/config.h is gitignored so your API key
 // never lands on GitHub.
 //
@@ -80,6 +80,7 @@
 // Swipe left/right to move through the different pages
 // Double Tap to disable and enable auto scrolling
 // On the Face Page: single press the screen to switch to different faces
+// Stock page: tap for the next stock
 //
 // Enjoy and have fun with Monitor-Buddy
 //

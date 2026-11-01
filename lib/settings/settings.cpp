@@ -90,6 +90,7 @@ const uint8_t SETTINGS_FIELD_COUNT = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_F
 }  // namespace
 
 // ticker and stocks name the same first stock (spec stocks-and-coins §3.1).
+static_assert(sizeof(Settings::ticker) == sizeof(Stock::symbol), "ticker and the first stock are copied into each other");
 static void tickerFromStocks(Settings &s) { memcpy(s.ticker, s.stocks[0].symbol, sizeof(s.ticker)); }
 
 void settingsLoad(const Settings &defaults, JsonVariantConst stored,

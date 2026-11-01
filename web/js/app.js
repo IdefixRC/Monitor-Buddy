@@ -19,6 +19,7 @@ import {
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
   stockSlots, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
+  remapStockErrors, dropSlotErrors,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -712,7 +713,12 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   let alive = true;
   f.location = f.location || [];
 
-  const touch = (key) => { f.touched.add(key); delete f.serverErrors[key]; };
+  const touch = (key) => {
+    f.touched.add(key);
+    delete f.serverErrors[key];
+    const at = /^stockslot\.(\d+)$/.exec(key);
+    if (at) dropSlotErrors(f, f.serverErrors, Number(at[1]));
+  };
   const gave = (...keys) => { f.location = [...new Set([...f.location, ...keys])]; touch("location"); };
   // The preview jumps to the page a changed setting affects and holds it there
   // (previewPageFor; the hold and resume live in preview.js).
@@ -998,11 +1004,16 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       }
       return up;
     };
+    // The Check results, made before the key's setter so a key change can clear them all.
+    const tickerResult = h("p", { class: "check__result", "aria-live": "polite" });
+    const slotResults = f.stockSlots.map(() => h("p", { class: "check__result", "aria-live": "polite" }));
+    const clearChecks = () => {
+      for (const el of [tickerResult, ...slotResults]) { el.textContent = ""; el.dataset.state = ""; }
+    };
     const stockKey = textField({
       key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
-      set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; },
+      set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; clearChecks(); },
     });
-    const tickerResult = h("p", { class: "check__result", "aria-live": "polite" });
     const tickerCheck = btn(S.form.check, async () => {
       tickerResult.textContent = S.check.checking;
       tickerResult.dataset.state = "";
@@ -1031,7 +1042,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       },
     });
     const slotRows = f.stockSlots.map((_, i) => {
-      const result = h("p", { class: "check__result", "aria-live": "polite" });
+      const result = slotResults[i];
       const input = textField({
         key: `stockslot.${i}`, label: S.form.stockSlot(i + 1), help: "stocks", value: f.stockSlots[i].symbol,
         attrs: { autocapitalize: "characters", class: "input input--upper" },
@@ -1221,7 +1232,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   function refresh() {
     if (!alive) return;
     const errs = formErrors(f, app.zones);
-    for (const [k, raw] of Object.entries(f.serverErrors)) errs[k] = fieldMessage(k, raw);
+    for (const [k, raw] of Object.entries(remapStockErrors(f, f.serverErrors))) errs[k] = fieldMessage(k, raw);
     currentErrors = errs;
     for (const [key, slot] of slots) {
       const msg = errs[key];
@@ -1317,7 +1328,7 @@ async function saveSettings() {
   if (!res.ok) {
     app.expectDrop = false;
     if (res.reply && res.reply.errors) {
-      f.serverErrors = res.reply.errors;
+      f.serverErrors = remapStockErrors(f, res.reply.errors);
       f.submitted = true;
       return showForm({ say: S.form.setErrors, tone: "error" });
     }

@@ -7,6 +7,7 @@ import {
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
   joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery, setTicker,
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
+  remapStockErrors, dropSlotErrors,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -570,4 +571,39 @@ test("stockIndexOfSlot maps a form slot to its place in config.stocks", () => {
   assert.equal(stockIndexOfSlot(f, 2), 1);
   assert.equal(stockIndexOfSlot(f, 1), -1);
   assert.equal(stockIndexOfSlot(f, 0), 0);
+});
+
+// ── Server errors on stocks ───────────────────────────────
+
+const STOCKS_ON = [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"];
+
+test("remapStockErrors: stocks[k] points at the slot that was sent as entry k", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: STOCKS_ON });
+  f.stockSlots = stockSlots([{ symbol: "A", on: true }, { symbol: "", on: true }, { symbol: "C", on: true }]);
+  applySlots(f);
+  assert.deepEqual(remapStockErrors(f, { "stocks[1].symbol": "x" }), { "stockslot.2": "x" });
+});
+
+test("remapStockErrors: with stocks on, ticker and the list land on slot 1; an existing message wins", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: STOCKS_ON });
+  assert.deepEqual(remapStockErrors(f, { ticker: "t" }), { "stockslot.0": "t" });
+  assert.deepEqual(remapStockErrors(f, { stocks: "l" }), { "stockslot.0": "l" });
+  assert.deepEqual(remapStockErrors(f, { "stocks[0].symbol": "s", ticker: "t" }), { "stockslot.0": "s" });
+  assert.deepEqual(remapStockErrors(f, { theme: "y" }), { theme: "y" });
+});
+
+test("remapStockErrors: drops stock keys when stocks aren't offered", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: BASELINE_PATHS });
+  assert.deepEqual(remapStockErrors(f, { stocks: "l", "stocks[0].on": "o", "stockslot.1": "z", ticker: "t" }), { ticker: "t" });
+});
+
+test("dropSlotErrors: clears the raw server keys of one slot", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: STOCKS_ON });
+  f.stockSlots = stockSlots([{ symbol: "A", on: true }, { symbol: "", on: true }, { symbol: "C", on: true }]);
+  applySlots(f);
+  const errs = { "stocks[1].symbol": "x", "stocks[0].symbol": "y", ticker: "t", stocks: "l", theme: "q" };
+  dropSlotErrors(f, errs, 2);
+  assert.deepEqual(errs, { "stocks[0].symbol": "y", ticker: "t", stocks: "l", theme: "q" });
+  dropSlotErrors(f, errs, 0);
+  assert.deepEqual(errs, { theme: "q" });
 });
