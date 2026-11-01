@@ -52,6 +52,15 @@ const Field PAGE_FIELDS[SETTINGS_PAGE_COUNT] = {
   schema::boolField(SETTINGS_PAGE_KEYS[6], 6 * sizeof(bool), MSG_PAGE),
 };
 
+const char *const MSG_STOCKS = "1-5 entries; the first is always on";
+const Stock STOCK_DEFAULT = {"AAPL", true};   // a record that leaves out a field gets these
+bool firstStockOn(const uint8_t *entries) { return reinterpret_cast<const Stock *>(entries)[0].on; }
+const Field STOCK_FIELDS[] = {
+  schema::textField("symbol", offsetof(Stock, symbol), sizeof(Stock::symbol), 1,
+                    UPPER_ DIGITS_ ".-", "1-10 characters: A-Z, 0-9, . and -"),
+  schema::boolField("on", offsetof(Stock, on), "must be true or false"),
+};
+
 // Every setting, in 1.2.0's key order (GET and /config.json follow it).
 // The messages are 1.2.0's, word for word: web/js/settings.js and
 // test/fixtures/settings-cases.json depend on them.
@@ -66,6 +75,8 @@ const Field SETTINGS_FIELDS[] = {
                     ALNUM_ "<>+-:,./", "1-64 characters of a POSIX TZ rule"),
   schema::textField("ticker", AT(ticker), sizeof(Settings::ticker), 1,
                     UPPER_ DIGITS_ ".-", "1-10 characters: A-Z, 0-9, . and -"),
+  schema::listField("stocks", AT(stocks), AT(stockCount), sizeof(Stock), 1, SETTINGS_STOCK_MAX,
+                    STOCK_FIELDS, 2, MSG_STOCKS, &STOCK_DEFAULT, firstStockOn),
   schema::textField("stock_key", AT(stockKey), sizeof(Settings::stockKey), 0,
                     ALNUM_ "_-", "0-64 characters: letters, digits, _ and -"),
   schema::coordField("lat", AT(lat), sizeof(Settings::lat), 90, "a number from -90 to 90"),
@@ -78,16 +89,35 @@ const uint8_t SETTINGS_FIELD_COUNT = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_F
 
 }  // namespace
 
+// ticker and stocks name the same first stock (spec stocks-and-coins §3.1).
+static void tickerFromStocks(Settings &s) { memcpy(s.ticker, s.stocks[0].symbol, sizeof(s.ticker)); }
+
 void settingsLoad(const Settings &defaults, JsonVariantConst stored,
                   Settings &out, AddedKeys &added, JsonObject invalid) {
   schema::load(SETTINGS_FIELDS, SETTINGS_FIELD_COUNT, &defaults, stored, &out, sizeof(Settings),
                added, invalid);
+  JsonObjectConst obj = stored.as<JsonObjectConst>();
+  if (!obj.isNull() && obj["stocks"].isNull() && !obj["ticker"].isNull()) {
+    // A 1.2 file: its ticker becomes the first stock. Nothing was lost, so
+    // stocks isn't reported as new.
+    memcpy(out.stocks[0].symbol, out.ticker, sizeof(out.ticker));
+    out.stocks[0].on = true;
+    out.stockCount = 1;
+    added.remove("stocks");
+  } else {
+    tickerFromStocks(out);   // stocks win
+  }
 }
 
 bool settingsMerge(const Settings &current, JsonVariantConst patch,
                    Settings &out, JsonObject errors) {
-  return schema::merge(SETTINGS_FIELDS, SETTINGS_FIELD_COUNT, &current, patch, &out,
-                       sizeof(Settings), errors);
+  if (!schema::merge(SETTINGS_FIELDS, SETTINGS_FIELD_COUNT, &current, patch, &out,
+                     sizeof(Settings), errors))
+    return false;
+  JsonObjectConst obj = patch.as<JsonObjectConst>();
+  if (!obj["stocks"].isNull()) tickerFromStocks(out);   // stocks win over ticker
+  else if (!obj["ticker"].isNull()) memcpy(out.stocks[0].symbol, out.ticker, sizeof(out.ticker));
+  return true;
 }
 
 void settingsToJson(const Settings &s, JsonObject out) {

@@ -8,10 +8,17 @@
 #include <stdint.h>
 #include "schema.h"
 
-static const int CONFIG_VERSION = 1;
+static const int CONFIG_VERSION = 2;
 static const uint8_t SETTINGS_PAGE_COUNT = 7;
 // Index order matches the PAGE_* ids in main.cpp (face = 0 ... github = 6).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
+
+static const uint8_t SETTINGS_STOCK_MAX = 5;
+// One stock slot. A slot switched off keeps its symbol; the device skips it.
+struct Stock {
+  char symbol[11];
+  bool on;
+};
 
 // Choice settings are stored as the index of their word.
 enum : uint8_t { MOUNT_LEFT = 0, MOUNT_RIGHT = 1 };
@@ -24,7 +31,9 @@ struct Settings {
   char    githubUser[40];     // "" hides the GitHub page
   char    tzName[65];         // IANA name, for the weather request
   char    tzRule[65];         // POSIX TZ rule, for the clock
-  char    ticker[11];
+  char    ticker[11];         // copy of stocks[0].symbol, kept for firmware 1.2
+  Stock   stocks[SETTINGS_STOCK_MAX];   // slot order; stocks[0] is always on
+  uint8_t stockCount;                   // 1-5
   char    stockKey[65];
   char    lat[16];
   char    lon[16];

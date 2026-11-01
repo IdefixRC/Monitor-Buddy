@@ -1976,6 +1976,9 @@ Settings defaultsFromConfig() {
   else if (!tzRuleFromOffset(TZ_OFFSET_HOURS, d.tzRule, sizeof(d.tzRule)))
     strlcpy(d.tzRule, "UTC0", sizeof(d.tzRule));
   strlcpy(d.ticker,   TICKER,   sizeof(d.ticker));
+  strlcpy(d.stocks[0].symbol, TICKER, sizeof(d.stocks[0].symbol));   // config.h's ticker is the first stock
+  d.stocks[0].on = true;
+  d.stockCount   = 1;
   // Before 1.2 the template's key was the placeholder "xxxxxxx": no key at all,
   // so it hides the stock page like "" does (the web flasher maps it the same).
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));

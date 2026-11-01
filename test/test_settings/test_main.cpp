@@ -15,6 +15,7 @@ static Settings makeDefaults() {
   strcpy(s.tzName, "Asia/Singapore");
   strcpy(s.tzRule, "<+08>-8");
   strcpy(s.ticker, "AAPL");
+  strcpy(s.stocks[0].symbol, "AAPL"); s.stocks[0].on = true; s.stockCount = 1;
   strcpy(s.stockKey, "");
   strcpy(s.lat, "1.3119");
   strcpy(s.lon, "103.8149");
@@ -55,6 +56,9 @@ static void test_to_json_writes_every_key() {
   TEST_ASSERT_EQUAL_STRING("Asia/Singapore", d["tz_name"]);
   TEST_ASSERT_EQUAL_STRING("<+08>-8", d["tz_rule"]);
   TEST_ASSERT_EQUAL_STRING("AAPL", d["ticker"]);
+  TEST_ASSERT_EQUAL_STRING("AAPL", d["stocks"][0]["symbol"]);
+  TEST_ASSERT_TRUE(d["stocks"][0]["on"].as<bool>());
+  TEST_ASSERT_EQUAL(1, d["stocks"].size());
   TEST_ASSERT_EQUAL_STRING("", d["stock_key"]);
   TEST_ASSERT_EQUAL_STRING("1.3119", d["lat"]);
   TEST_ASSERT_EQUAL_STRING("103.8149", d["lon"]);
@@ -79,7 +83,7 @@ static void test_load_applies_every_key() {
   deserializeJson(file,
     "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"github_user\":\"octo-cat\","
     "\"tz_name\":\"Europe/Berlin\",\"tz_rule\":\"CET-1CEST,M3.5.0,M10.5.0/3\","
-    "\"ticker\":\"AVGO\",\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
+    "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
     "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
     "\"moon\":false,\"stock\":true,\"github\":true}}");
@@ -160,6 +164,7 @@ static void test_merge_partial_changes_only_that_key() {
   TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
   Settings expected = makeDefaults();
   strcpy(expected.ticker, "AVGO");
+  strcpy(expected.stocks[0].symbol, "AVGO");
   TEST_ASSERT_EQUAL_STRING(dump(expected).c_str(), dump(out).c_str());
 }
 
@@ -358,6 +363,8 @@ static void test_largest_get_reply_fits_with_room() {
   memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
   memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
   memset(s.ticker, 'A', 10);     s.ticker[10] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
+  s.stockCount = SETTINGS_STOCK_MAX;
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
   strcpy(s.lat, "-12.34567890123");
   strcpy(s.lon, "-123.4567890123");
@@ -367,12 +374,12 @@ static void test_largest_get_reply_fits_with_room() {
   d["v"] = CONFIG_VERSION; d["stored"] = true;
   settingsToJson(s, d["config"].to<JsonObject>());
   JsonArray added = d["added"].to<JsonArray>();
-  const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
+  const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks", "stock_key",
                        "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
                        "pages.weather", "pages.moon", "pages.stock", "pages.github"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400 + 150);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 300 + 100);
 }
 
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
@@ -381,6 +388,8 @@ static void test_largest_set_line_fits_with_room() {
   memset(s.githubUser, 'a', 39); s.githubUser[39] = '\0';
   memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
   memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
+  s.stockCount = SETTINGS_STOCK_MAX;
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
   JsonDocument d;
   d["id"] = 4294967295UL;
@@ -388,7 +397,7 @@ static void test_largest_set_line_fits_with_room() {
   d["wifi"]["ssid"] = std::string(32, 's');
   d["wifi"]["password"] = std::string(63, 'p');
   size_t line = 8 + measureJson(d) + 1;   // "@MB SET " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 300);
 }
 
 int main(int, char **) {

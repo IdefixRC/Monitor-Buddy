@@ -37,26 +37,32 @@ static std::string dump120(const v120::Settings &s) {
   return out;
 }
 
-// C1 + C2: the current code loads a 1.2.0 file with nothing added or invalid,
-// and writes it back byte for byte, exactly as 1.2.0's code does.
-static void test_c1_c2_a_1_2_0_file_loads_and_writes_back_unchanged() {
-  const std::string file = readFixture("config-1.2.0.json");
+// K1 + K2: 1.3 loads a 1.2 file with nothing invalid and nothing reported as
+// new in phase 1 (the ticker moves into stocks quietly), and writes it back as
+// 1.2's text plus "v":2 and the stocks list.
+static void test_k1_k2_a_1_2_0_file_loads_and_gains_stocks() {
   JsonDocument doc;
-  TEST_ASSERT_FALSE(deserializeJson(doc, file));
-
+  TEST_ASSERT_FALSE(deserializeJson(doc, readFixture("config-1.2.0.json")));
   Settings defaults{}, out{};
   AddedKeys added;
   JsonDocument inv;
   settingsLoad(defaults, doc.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL(0, added.count);
   TEST_ASSERT_EQUAL(0, inv.size());
-  TEST_ASSERT_EQUAL_STRING(file.c_str(), dumpNew(out).c_str());
+  TEST_ASSERT_EQUAL_STRING(readFixture("config-1.3-from-1.2.json").c_str(), dumpNew(out).c_str());
+}
 
+// K3: 1.2 reads what 1.3 wrote back and gets its own settings.
+static void test_k3_1_2_0_loads_what_1_3_writes() {
+  JsonDocument doc;
+  TEST_ASSERT_FALSE(deserializeJson(doc, readFixture("config-1.3-from-1.2.json")));
   v120::Settings d120{}, o120{};
   v120::AddedKeys a120;
   JsonDocument i120;
   v120::settingsLoad(d120, doc.as<JsonVariantConst>(), o120, a120, i120.to<JsonObject>());
-  TEST_ASSERT_EQUAL_STRING(dump120(o120).c_str(), dumpNew(out).c_str());
+  TEST_ASSERT_EQUAL(0, a120.count);
+  TEST_ASSERT_EQUAL(0, i120.size());
+  TEST_ASSERT_EQUAL_STRING(readFixture("config-1.2.0.json").c_str(), dump120(o120).c_str());
 }
 
 // C7: 1.2.0 loads a file written by a later firmware: the new keys are
@@ -73,9 +79,7 @@ static void test_c7_1_2_0_loads_a_future_file() {
   TEST_ASSERT_EQUAL_STRING(readFixture("config-1.2.0.json").c_str(), dump120(o120).c_str());
 }
 
-// The current firmware does the same with the future file (it has none of
-// the future keys yet).
-static void test_current_code_ignores_future_keys() {
+static void test_current_code_loads_a_future_file() {
   JsonDocument doc;
   TEST_ASSERT_FALSE(deserializeJson(doc, readFixture("config-future.json")));
   Settings defaults{}, out{};
@@ -84,13 +88,16 @@ static void test_current_code_ignores_future_keys() {
   settingsLoad(defaults, doc.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL(0, added.count);
   TEST_ASSERT_EQUAL(0, inv.size());
-  TEST_ASSERT_EQUAL_STRING(readFixture("config-1.2.0.json").c_str(), dumpNew(out).c_str());
+  TEST_ASSERT_EQUAL(3, out.stockCount);
+  TEST_ASSERT_EQUAL_STRING("AVGO", out.ticker);
+  TEST_ASSERT_FALSE(out.stocks[2].on);
 }
 
 int main() {
   UNITY_BEGIN();
-  RUN_TEST(test_c1_c2_a_1_2_0_file_loads_and_writes_back_unchanged);
+  RUN_TEST(test_k1_k2_a_1_2_0_file_loads_and_gains_stocks);
   RUN_TEST(test_c7_1_2_0_loads_a_future_file);
-  RUN_TEST(test_current_code_ignores_future_keys);
+  RUN_TEST(test_k3_1_2_0_loads_what_1_3_writes);
+  RUN_TEST(test_current_code_loads_a_future_file);
   return UNITY_END();
 }
