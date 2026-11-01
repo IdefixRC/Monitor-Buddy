@@ -6,6 +6,7 @@ import {
   redactLog, stockMessage, githubMessage, addsSettings, newFormState,
   locationMissing, boardLocation, LOCATION_KEYS, parseRich, escapeRich,
   joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery, setTicker,
+  stockSlots, slotsToStocks, moveSlot, applySlots, fieldState, STOCK_SLOTS,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -456,4 +457,68 @@ test("editing the ticker keeps the first stock in step (afterFlash keeps it)", (
   const v12 = { ...structuredClone(DEFAULTS), ticker: "IBM" };
   delete v12.stocks;   // what a 1.2 board's GET looks like
   assert.equal(mergeConfig(fromBoard(v12), cfg).ticker, "AVGO");
+});
+
+// ── Stock slots (spec stocks-and-coins §6.1, D15) ─────────
+
+test("stockSlots: five slots, slot 1 always on, empty slots off", () => {
+  const s = stockSlots([{ symbol: "MSFT", on: true }, { symbol: "AVGO", on: false }]);
+  assert.equal(s.length, STOCK_SLOTS);
+  assert.deepEqual(s[0], { symbol: "MSFT", on: true });
+  assert.deepEqual(s[1], { symbol: "AVGO", on: false });
+  assert.deepEqual(s[4], { symbol: "", on: false });
+  assert.equal(stockSlots([{ symbol: "X", on: false }])[0].on, true);
+});
+
+test("slotsToStocks keeps switched-off entries and drops empty slots", () => {
+  const slots = [{ symbol: "A", on: true }, { symbol: "", on: false }, { symbol: "C", on: false }, { symbol: "D", on: true }, { symbol: "", on: true }];
+  const { stocks, slotOf } = slotsToStocks(slots);
+  assert.deepEqual(stocks, [{ symbol: "A", on: true }, { symbol: "C", on: false }, { symbol: "D", on: true }]);
+  assert.deepEqual(slotOf, [0, 2, 3]);
+});
+
+test("moveSlot swaps and keeps slot 1 on", () => {
+  const slots = stockSlots([{ symbol: "A", on: true }, { symbol: "B", on: false }]);
+  const moved = moveSlot(slots, 1, -1);
+  assert.deepEqual(moved[0], { symbol: "B", on: true });
+  assert.deepEqual(moved[1], { symbol: "A", on: true });
+  assert.equal(moveSlot(slots, 0, -1), slots);   // out of range: unchanged
+});
+
+test("applySlots writes stocks and ticker", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  f.stockSlots = stockSlots([{ symbol: "NVDA", on: true }, { symbol: "IBM", on: false }]);
+  applySlots(f);
+  assert.equal(f.config.ticker, "NVDA");
+  assert.deepEqual(f.config.stocks, [{ symbol: "NVDA", on: true }, { symbol: "IBM", on: false }]);
+});
+
+test("fromBoard seeds stocks from a 1.2 board's ticker (K9)", () => {
+  assert.deepEqual(fromBoard({ ticker: "AVGO" }).stocks, [{ symbol: "AVGO", on: true }]);
+});
+
+test("the request's ticker is the first stock (K10)", () => {
+  const f = newFormState({ ...DEFAULTS, ticker: "OLD", stocks: [{ symbol: "NEW", on: true }] }, { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  assert.equal(formToRequest(f).config.ticker, "NEW");
+});
+
+test("a 1.2 board's request carries no stocks", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED });
+  assert.equal(Object.hasOwn(formToRequest(f).config, "stocks"), false);
+});
+
+test("fieldState: on, greyed when installable, else hidden", () => {
+  const base = { flow: "change", info: INFO_SAVED };
+  assert.equal(fieldState(newFormState(DEFAULTS, { ...base, supported: [...BASELINE_PATHS, "stocks"] }), "stocks"), "on");
+  assert.equal(fieldState(newFormState(DEFAULTS, { ...base, teaser: ["stocks"] }), "stocks"), "greyed");
+  assert.equal(fieldState(newFormState(DEFAULTS, base), "stocks"), "hidden");
+});
+
+test("formErrors: an empty slot that is on, and a bad ticker in slot 3", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"] });
+  f.stockSlots = [{ symbol: "AAPL", on: true }, { symbol: "", on: true }, { symbol: "bad!", on: false }, { symbol: "", on: false }, { symbol: "", on: false }];
+  applySlots(f);
+  const e = formErrors(f, zones);
+  assert.equal(e["stockslot.1"], S.errors.stockSlotEmpty);
+  assert.ok(e["stockslot.2"]);
 });
