@@ -21,8 +21,8 @@ uint8_t followerTextSize(const char *formatted) {
   return (formatted && strlen(formatted) == 5) ? 5 : 6;
 }
 
-void formatSubHint(char *out, size_t outLen, uint8_t index, uint8_t count) {
-  if (outLen == 0) return;
-  if (count < 2) { out[0] = '\0'; return; }
-  snprintf(out, outLen, "%u/%u", (unsigned)(index + 1), (unsigned)count);
+// The centre y of entry dot `index` in the right-edge column (stock and coin
+// pages): `count` dots 14 px apart, centred on the screen's middle.
+int subDotY(uint8_t index, uint8_t count, int screenH) {
+  return screenH / 2 - ((count - 1) * 14) / 2 + index * 14;
 }

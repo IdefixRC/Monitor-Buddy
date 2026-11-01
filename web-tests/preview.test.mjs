@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, formatSubHint } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY } from "../web/js/preview.js";
 import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
@@ -211,7 +211,8 @@ test("a 5-digit follower count fits the screen at its size", () => {
   assert.ok(150 + textWidth(f, followerTextSize(f)) <= 320);
 });
 
-test("formatSubHint mirrors the firmware", () => {
-  assert.equal(formatSubHint(1, 5), "2/5");
-  assert.equal(formatSubHint(0, 1), "");
+test("subDotY mirrors the firmware", () => {
+  assert.equal(subDotY(0, 2, 172), 79);
+  assert.equal(subDotY(1, 2, 172), 93);
+  assert.equal(subDotY(4, 5, 172), 114);
 });

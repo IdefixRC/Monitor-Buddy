@@ -253,9 +253,9 @@ function drawMoon(c, now) {
 const DASH = "—";
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 
-// formatSubHint in lib/display/display_fmt.cpp. KEEP IN SYNC.
-export function formatSubHint(index, count) {
-  return count < 2 ? "" : `${index + 1}/${count}`;
+// subDotY in lib/display/display_fmt.cpp. KEEP IN SYNC.
+export function subDotY(index, count, screenH) {
+  return Math.trunc(screenH / 2) - Math.trunc(((count - 1) * 14) / 2) + index * 14;
 }
 
 // The stocks that are on, in slot order, each with its slot (0-4).
@@ -525,7 +525,13 @@ export function createPreview(container) {
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
     if (key === "stock" && stocks.length >= 2) {
-      dotLayer.innerHTML += centred(formatSubHint(stockIdx % stocks.length, stocks.length), SCREEN_H - 8, 1, DOT_OFF);
+      const shown = stockIdx % stocks.length;
+      for (let i = 0; i < stocks.length; i++) {
+        const cy = subDotY(i, stocks.length, SCREEN_H);
+        dotLayer.innerHTML += i === shown
+          ? `<circle cx="${SCREEN_W - 8}" cy="${cy}" r="3" fill="${FG}"/>`
+          : `<circle cx="${SCREEN_W - 8}" cy="${cy}" r="2" fill="none" stroke="${DOT_OFF}" stroke-width="1.25"/>`;
+      }
     }
 
     let text = S.pageNames[key];

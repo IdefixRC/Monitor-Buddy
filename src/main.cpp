@@ -719,7 +719,7 @@ NetData           netView   = {};
 SemaphoreHandle_t netMutex  = nullptr;
 
 // The stock slots that are on, in slot order, built once in setup(): taps,
-// fetching, the "2/5" hint and drawing use only these.
+// fetching, the entry dots and drawing use only these.
 uint8_t          stockActive[SETTINGS_STOCK_MAX];
 uint8_t          stockActiveCount = 0;
 volatile uint8_t stockSub         = 0;   // position in stockActive; read by netTask
@@ -1001,14 +1001,14 @@ void drawPageDots() {
     else
       gfx->drawCircle(startX+i*16, SCREEN_H-12, 2, rgb(90,90,90));
   }
-  // "2/5" under the dots on a page with several entries.
+  // Entry dots on the right edge on a page with several entries (spec D9):
+  // filled = the stock shown, hollow = the others, like the page dots.
   if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
-    char hint[8];
-    formatSubHint(hint, sizeof hint, stockSub, stockActiveCount);
-    gfx->setTextSize(1);
-    gfx->setTextColor(rgb(90, 90, 90));
-    gfx->setCursor((SCREEN_W - (int)strlen(hint) * 6) / 2, SCREEN_H - 8);
-    gfx->print(hint);
+    for (uint8_t i = 0; i < stockActiveCount; i++) {
+      const int y = subDotY(i, stockActiveCount, SCREEN_H);
+      if (i == stockSub) gfx->fillCircle(SCREEN_W - 8, y, 3, FG);
+      else               gfx->drawCircle(SCREEN_W - 8, y, 2, rgb(90, 90, 90));
+    }
   }
 }
 
