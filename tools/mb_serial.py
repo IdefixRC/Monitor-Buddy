@@ -5,6 +5,7 @@
     python tools/mb_serial.py COM4 get
     python tools/mb_serial.py COM4 get --show-key   also prints stock_key
     python tools/mb_serial.py COM4 set ticker=AVGO theme=3 pages.stock=false
+    python tools/mb_serial.py COM4 set stocks=AAPL,MSFT       firmware 1.3 and newer
     python tools/mb_serial.py COM4 set '{"config":{"ticker":"AVGO"}}'
     python tools/mb_serial.py COM4 set @settings.json
     python tools/mb_serial.py COM4 wifi        asks for the SSID and password
@@ -304,6 +305,17 @@ def change(s, port, cmd, body=None, wait_restart=False):
 REDACTED = "<redacted>"
 CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
                "stock_key", "lat", "lon", "temp_unit", "wind_unit"]
+
+
+def expected_keys(version):
+    """The keys GET's config has for settings format `version` (1 = firmware 1.2)."""
+    keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+            "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
+    if version >= 2:
+        keys |= {"stocks"}
+    return keys
+
+
 PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"]
 
 
@@ -362,11 +374,14 @@ def parse_set_args(args):
                 config[key] = int(value)
             except ValueError:
                 raise ValueError("theme must be a whole number (0-4)") from None
+        elif key == "stocks":
+            symbols = [v.strip().upper() for v in value.split(",") if v.strip()]
+            config["stocks"] = [{"symbol": sym, "on": True} for sym in symbols]
         elif key in CONFIG_KEYS:
             config[key] = value
         else:
             raise ValueError(f"unknown setting '{key}' (use one of: "
-                             f"{', '.join(CONFIG_KEYS)}, pages.<name>)")
+                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>)")
     return {"config": config}
 
 
@@ -397,8 +412,7 @@ def selftest(port):
     rid = next_id()
     got = command(s, "GET", rid=rid)
     original = got.get("config", {})
-    keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-            "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
+    keys = expected_keys(got.get("v", 1))
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
     check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
     check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
@@ -513,6 +527,8 @@ def selftest(port):
         s = restart_and_reconnect(s, port)
         after = command(s, "GET")
         expected = dict(original, ticker=new_ticker)
+        if "stocks" in original:   # 1.3: ticker is the first stock
+            expected["stocks"] = [dict(original["stocks"][0], symbol=new_ticker)] + original["stocks"][1:]
         check("partial SET kept the other keys", after.get("config") == expected, after.get("config"))
         check("added empty after a save", after.get("added") == [], after.get("added"))
         check("stored after a save", after.get("stored") is True, after.get("stored"))

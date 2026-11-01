@@ -14,7 +14,7 @@
 //   lost=SET         the reply to SET is lost (change() then verifies)
 //   seterror=key     SET refuses with an error on that key
 //   nowifi           the board has no saved Wi-Fi
-//   keys=1.2.0       the board knows only 1.2.0's settings (GET reports only those, SET skips the rest)
+//   keys=1.2.0       the board knows only 1.2.0's settings (GET reports only those, SET skips the rest; cfg_v reports 1)
 //   missing=a,b      the board lacks these paths until it is flashed (then it knows everything)
 //   fw=1.1.9         the firmware version INFO reports (to see the update ribbon)
 // A Wi-Fi password of "wrongpass" never connects.
@@ -34,8 +34,8 @@ export function fakeDevice(params) {
   const board = {
     answers,
     fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
-    cfg_v: 1,
-    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755" }),
+    cfg_v: params.get("keys") === "1.2.0" ? 1 : 2,
+    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755", stocks: [{ symbol: "AAPL", on: true }, { symbol: "MSFT", on: false }] }),
     stored: true,
     added: [],
     wifi: params.has("nowifi") ? { saved: false, ssid: "", password: "" } : { saved: true, ssid: "HomeNet", password: "secret123" },
@@ -224,7 +224,7 @@ export function fakeDevice(params) {
     board.fw = params.get("newfw") || "1.2.0-rc1";
     knows = everything();
     board.added = (params.get("added") || "").split(",").filter(Boolean);
-    if (board.added.length) board.cfg_v = 2;
+    board.cfg_v = 2;
     await sleep(300);
   }
 
