@@ -32,6 +32,7 @@ export const S = {
     moon: "Moon",
     stock: "Stock",
     github: "GitHub",
+    coin: "Coin",
   },
   previewSample: "sample values",
 
@@ -292,6 +293,7 @@ export const S = {
     lon: "Your location in decimal degrees, for the weather. South and west are negative. Example: Munich is 48.1374 / 11.5755.",
     tz_name: "The time zone name, for example `Europe/Berlin`. I use it for the weather and pick the matching clock rule, including daylight saving.",
     tz_rule: "Advanced: the exact rule my clock uses, including daylight saving. It's filled in from the time zone; you only need to change it in rare cases.",
+    coins: "Up to five coins, each from Coinbase or Finnhub. A tap on the Buddy's coin page shows the next one; switched-off slots keep their coin.",
     stocks: "Up to five stocks. A tap on the Buddy's stock page shows the next one; switched-off slots keep their ticker.",
     temp_unit: "Celsius or Fahrenheit, for the weather page.",
     wind_unit: "km/h or mph, for the weather page.",

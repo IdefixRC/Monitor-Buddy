@@ -312,11 +312,11 @@ def expected_keys(version):
     keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     if version >= 2:
-        keys |= {"stocks"}
+        keys |= {"stocks", "coins"}
     return keys
 
 
-PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"]
+PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]
 
 
 def redact(obj):
@@ -417,7 +417,7 @@ def selftest(port):
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
     check("INFO cfg_v matches GET v", info.get("cfg_v") == got.get("v"), (info.get("cfg_v"), got.get("v")))
     check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
-    check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
+    check("GET pages", len(original.get("pages", {})) == (8 if original.get("v", 1) >= 2 else 7), original.get("pages"))
     check("GET has a stored flag", isinstance(got.get("stored"), bool), got.get("stored"))
     was_stored = got.get("stored") is True
     if not original:

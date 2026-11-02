@@ -67,6 +67,7 @@ export function pageList(config) {
   const pages = (config && config.pages) || {};
   const list = PAGE_KEYS.filter((key) => {
     if (!pages[key]) return false;
+    if (key === "coin") return false;   // until the coin page is drawn (Task 8)
     if (key === "github" && !config.github_user) return false;
     if (key === "stock" && !config.stock_key) return false;
     return true;

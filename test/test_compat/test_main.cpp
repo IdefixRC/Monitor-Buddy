@@ -44,10 +44,16 @@ static void test_k1_k2_a_1_2_0_file_loads_and_gains_stocks() {
   JsonDocument doc;
   TEST_ASSERT_FALSE(deserializeJson(doc, readFixture("config-1.2.0.json")));
   Settings defaults{}, out{};
+  strcpy(defaults.coins[0].pair, "BTC-USD");   // what the keys a 1.2 file lacks get
+  defaults.coins[0].on = true;
+  defaults.coinCount = 1;
+  defaults.pages[7] = true;
   AddedKeys added;
   JsonDocument inv;
   settingsLoad(defaults, doc.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
-  TEST_ASSERT_EQUAL(0, added.count);
+  TEST_ASSERT_EQUAL(2, added.count);
+  TEST_ASSERT_TRUE(added.has("coins"));
+  TEST_ASSERT_TRUE(added.has("pages.coin"));
   TEST_ASSERT_EQUAL(0, inv.size());
   TEST_ASSERT_EQUAL_STRING(readFixture("config-1.3-from-1.2.json").c_str(), dumpNew(out).c_str());
 }
@@ -91,6 +97,10 @@ static void test_current_code_loads_a_future_file() {
   TEST_ASSERT_EQUAL(3, out.stockCount);
   TEST_ASSERT_EQUAL_STRING("AVGO", out.ticker);
   TEST_ASSERT_FALSE(out.stocks[2].on);
+  TEST_ASSERT_EQUAL(2, out.coinCount);
+  TEST_ASSERT_EQUAL(COIN_FINNHUB, out.coins[1].source);
+  TEST_ASSERT_FALSE(out.coins[1].on);
+  TEST_ASSERT_TRUE(out.pages[7]);
 }
 
 int main() {

@@ -9,8 +9,8 @@
 #include "schema.h"
 
 static const int CONFIG_VERSION = 2;
-static const uint8_t SETTINGS_PAGE_COUNT = 7;
-// Index order matches the PAGE_* ids in main.cpp (face = 0 ... github = 6).
+static const uint8_t SETTINGS_PAGE_COUNT = 8;
+// Index order matches the PAGE_* ids in main.cpp (face = 0 ... github = 6, coin = 7).
 extern const char *const SETTINGS_PAGE_KEYS[SETTINGS_PAGE_COUNT];
 
 static const uint8_t SETTINGS_STOCK_MAX = 5;
@@ -18,6 +18,16 @@ static const uint8_t SETTINGS_STOCK_MAX = 5;
 struct Stock {
   char symbol[11];
   bool on;
+};
+
+static const uint8_t SETTINGS_COIN_MAX = 5;
+enum : uint8_t { COIN_COINBASE = 0, COIN_FINNHUB = 1 };
+// One coin slot: a Coinbase pair ("SOL-EUR") and where its price comes from.
+// A slot switched off keeps its pair; the device skips it.
+struct Coin {
+  char    pair[22];
+  uint8_t source;   // COIN_*
+  bool    on;
 };
 
 // Choice settings are stored as the index of their word.
@@ -35,6 +45,8 @@ struct Settings {
   Stock   stocks[SETTINGS_STOCK_MAX];   // slot order; stocks[0] is always on
   uint8_t stockCount;                   // 1-5
   char    stockKey[65];
+  Coin    coins[SETTINGS_COIN_MAX];
+  uint8_t coinCount;   // 1-5; coins[0] is always on
   char    lat[16];
   char    lon[16];
   uint8_t tempUnit;           // TEMP_*

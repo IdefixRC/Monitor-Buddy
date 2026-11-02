@@ -20,11 +20,12 @@ export const DEFAULTS = Object.freeze({
   ticker: "AAPL",
   stocks: Object.freeze([Object.freeze({ symbol: "AAPL", on: true })]),
   stock_key: "",
+  coins: Object.freeze([Object.freeze({ pair: "BTC-USD", source: "coinbase", on: true })]),
   lat: "1.3119",
   lon: "103.8149",
   temp_unit: "celsius",
   wind_unit: "kmh",
-  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true }),
+  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }),
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.

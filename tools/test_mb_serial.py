@@ -23,6 +23,11 @@ class ParseSetArgs(unittest.TestCase):
     def test_expected_keys_by_version(self):
         self.assertNotIn("stocks", mb_serial.expected_keys(1))
         self.assertIn("stocks", mb_serial.expected_keys(2))
+        self.assertNotIn("coins", mb_serial.expected_keys(1))
+        self.assertIn("coins", mb_serial.expected_keys(2))
+
+    def test_coin_page_switch(self):
+        self.assertEqual(mb_serial.parse_set_args(["pages.coin=false"]), {"config": {"pages": {"coin": False}}})
 
 
 if __name__ == "__main__":

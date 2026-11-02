@@ -17,6 +17,7 @@ static Settings makeDefaults() {
   strcpy(s.ticker, "AAPL");
   strcpy(s.stocks[0].symbol, "AAPL"); s.stocks[0].on = true; s.stockCount = 1;
   strcpy(s.stockKey, "");
+  strcpy(s.coins[0].pair, "BTC-USD"); s.coins[0].source = COIN_COINBASE; s.coins[0].on = true; s.coinCount = 1;
   strcpy(s.lat, "1.3119");
   strcpy(s.lon, "103.8149");
   s.tempUnit = TEMP_CELSIUS;
@@ -83,10 +84,10 @@ static void test_load_applies_every_key() {
   deserializeJson(file,
     "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"github_user\":\"octo-cat\","
     "\"tz_name\":\"Europe/Berlin\",\"tz_rule\":\"CET-1CEST,M3.5.0,M10.5.0/3\","
-    "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
+    "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"coins\":[{\"pair\":\"BTC-USD\",\"source\":\"coinbase\",\"on\":true}],\"lat\":\"48.1374\",\"lon\":\"11.5755\","
     "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
-    "\"moon\":false,\"stock\":true,\"github\":true}}");
+    "\"moon\":false,\"stock\":true,\"github\":true,\"coin\":true}}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL(MOUNT_RIGHT, out.mount);
@@ -353,9 +354,10 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
 
 // ── The @MB line budget (spec §4.6) ───────────────────────
 
-// The largest GET reply today, plus room for the keys spec §8 plans (about
-// 300 bytes of config at their largest, about 100 of added paths), must fit
-// the 2,048-byte reply buffer with a quarter to spare.
+// The largest GET reply today (all five stocks and coins), plus room for what
+// #24 still adds (clock_format and night, about 90 bytes, with some margin:
+// 150 of config and 60 of added paths), must fit the 2,048-byte reply buffer
+// with a quarter to spare. The SET line has the same reserve for config only.
 static void test_largest_get_reply_fits_with_room() {
   Settings s = makeDefaults();
   s.mount = MOUNT_RIGHT; s.theme = 4;
@@ -366,6 +368,11 @@ static void test_largest_get_reply_fits_with_room() {
   for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
   s.stockCount = SETTINGS_STOCK_MAX;
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
+    memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
+    s.coins[i].source = COIN_FINNHUB; s.coins[i].on = true;
+  }
+  s.coinCount = SETTINGS_COIN_MAX;
   strcpy(s.lat, "-12.34567890123");
   strcpy(s.lon, "-123.4567890123");
   s.tempUnit = TEMP_FAHRENHEIT;
@@ -376,10 +383,10 @@ static void test_largest_get_reply_fits_with_room() {
   JsonArray added = d["added"].to<JsonArray>();
   const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks", "stock_key",
                        "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
-                       "pages.weather", "pages.moon", "pages.stock", "pages.github"};
+                       "pages.weather", "pages.moon", "pages.stock", "pages.github", "coins", "pages.coin"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 300 + 100);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 150 + 60);
 }
 
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
@@ -391,13 +398,18 @@ static void test_largest_set_line_fits_with_room() {
   for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
   s.stockCount = SETTINGS_STOCK_MAX;
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
+    memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
+    s.coins[i].source = COIN_FINNHUB; s.coins[i].on = true;
+  }
+  s.coinCount = SETTINGS_COIN_MAX;
   JsonDocument d;
   d["id"] = 4294967295UL;
   settingsToJson(s, d["config"].to<JsonObject>());
   d["wifi"]["ssid"] = std::string(32, 's');
   d["wifi"]["password"] = std::string(63, 'p');
   size_t line = 8 + measureJson(d) + 1;   // "@MB SET " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 300);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 150);
 }
 
 int main(int, char **) {

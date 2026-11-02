@@ -55,7 +55,7 @@ test("the shared file has merge cases for both sections", () => {
 
 test("KEYS and PAGE_KEYS come from the schema, in 1.2.0's order", () => {
   assert.deepEqual(KEYS, SCHEMA.map((f) => f.name));
-  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github"]);
+  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]);
 });
 
 test("mergeWith keeps the schema's key order and fills record defaults", () => {

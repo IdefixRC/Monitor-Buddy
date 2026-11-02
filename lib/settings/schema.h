@@ -57,6 +57,7 @@ constexpr Field groupField(const char *name, uint16_t at, uint16_t size, const F
                            bool (*check)(const uint8_t *) = nullptr) {
   return Field{name, Kind::Group, at, 0, 0, 0, nullptr, nullptr, 0, error, check, children, count, size, 0, nullptr};
 }
+// A List check reads entry 0, so it needs lo >= 1.
 constexpr Field listField(const char *name, uint16_t at, uint16_t countAt, uint16_t stride,
                           int16_t lo, int16_t hi, const Field *children, uint8_t count,
                           const char *error, const void *entryDefault = nullptr,

@@ -589,7 +589,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 7;   // total number of pages defined
+static const uint8_t APP_COUNT    = 8;   // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -600,6 +600,7 @@ static constexpr uint8_t PAGE_WEATHER = 3;
 static constexpr uint8_t PAGE_MOON    = 4;
 static constexpr uint8_t PAGE_STOCK   = 5;
 static constexpr uint8_t PAGE_GITHUB  = 6;
+static constexpr uint8_t PAGE_COIN    = 7;
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -634,7 +635,7 @@ bool settingsStored = false;   // booted from a readable /config.json; GET "stor
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
-              PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
+              PAGE_GITHUB == 6 && PAGE_COIN == 7, "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
 
@@ -1042,7 +1043,7 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 // The order pages are shown in, separate from their storage index (the coin
 // page joins after the stock page in phase 2).
 static const uint8_t PAGE_SHOW_ORDER[] = {PAGE_FACE, PAGE_CLOCK, PAGE_DATE, PAGE_WEATHER,
-                                          PAGE_MOON, PAGE_STOCK, PAGE_GITHUB};
+                                          PAGE_MOON, PAGE_STOCK, PAGE_COIN, PAGE_GITHUB};
 static_assert(sizeof(PAGE_SHOW_ORDER) == SETTINGS_PAGE_COUNT, "every page has a place in the order");
 
 // Build the list of enabled pages (in fixed order) from settings.pages.
@@ -1053,6 +1054,7 @@ void buildPageList() {
   for (uint8_t n = 0; n < SETTINGS_PAGE_COUNT; n++) {
     const uint8_t i = PAGE_SHOW_ORDER[n];
     if (!settings.pages[i]) continue;
+    if (i == PAGE_COIN) continue;  // drawn from Task 3
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     pageOrder[pageCount++] = i;
@@ -2020,6 +2022,10 @@ Settings defaultsFromConfig() {
   strlcpy(d.stocks[0].symbol, TICKER, sizeof(d.stocks[0].symbol));   // config.h's ticker is the first stock
   d.stocks[0].on = true;
   d.stockCount   = 1;
+  strlcpy(d.coins[0].pair, "BTC-USD", sizeof(d.coins[0].pair));
+  d.coins[0].source = COIN_COINBASE;
+  d.coins[0].on     = true;
+  d.coinCount       = 1;
   // Before 1.2 the template's key was the placeholder "xxxxxxx": no key at all,
   // so it hides the stock page like "" does (the web flasher maps it the same).
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
@@ -2028,7 +2034,7 @@ Settings defaultsFromConfig() {
   d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
   d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
-      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB};
+      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, true};
   memcpy(d.pages, pages, sizeof(pages));
   return d;
 }

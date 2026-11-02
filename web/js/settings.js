@@ -12,7 +12,7 @@ const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const ALNUM = UPPER + "abcdefghijklmnopqrstuvwxyz" + DIGITS;
 export const MSG_OBJECT = "must be an object";
 const MSG_PAGE = "must be true or false";
-const MSG_STOCKS = "1-5 entries; the first is always on";
+const MSG_SLOTS = "1-5 entries; the first is always on";
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 // Rows: { name, kind, ...rules }. kind: "bool" | "int" (min, max) | "choice"
@@ -26,7 +26,7 @@ export const SCHEMA = Object.freeze([
   { name: "tz_name", kind: "text", min: 1, max: 64, chars: ALNUM + "/_+-", error: "1-64 characters: letters, digits and / _ + -" },
   { name: "tz_rule", kind: "text", min: 1, max: 64, chars: ALNUM + "<>+-:,./", error: "1-64 characters of a POSIX TZ rule" },
   { name: "ticker", kind: "text", min: 1, max: 10, chars: UPPER + DIGITS + ".-", error: "1-10 characters: A-Z, 0-9, . and -" },
-  { name: "stocks", kind: "list", min: 1, max: 5, error: MSG_STOCKS,
+  { name: "stocks", kind: "list", min: 1, max: 5, error: MSG_SLOTS,
     entryDefault: { symbol: "AAPL", on: true },
     check: (entries) => isPlainObject(entries[0]) && entries[0].on !== false,
     fields: [
@@ -34,11 +34,19 @@ export const SCHEMA = Object.freeze([
       { name: "on", kind: "bool", error: MSG_PAGE },
     ] },
   { name: "stock_key", kind: "text", min: 0, max: 64, chars: ALNUM + "_-", error: "0-64 characters: letters, digits, _ and -" },
+  { name: "coins", kind: "list", min: 1, max: 5, error: MSG_SLOTS,
+    entryDefault: { pair: "BTC-USD", source: "coinbase", on: true },
+    check: (entries) => isPlainObject(entries[0]) && entries[0].on !== false,
+    fields: [
+      { name: "pair", kind: "text", min: 3, max: 21, chars: UPPER + DIGITS + "-", check: (s) => /^[A-Z0-9]+-[A-Z0-9]+$/.test(s), error: "3-21 characters: A-Z, 0-9 and one -" },
+      { name: "source", kind: "choice", words: ["coinbase", "finnhub"], error: 'must be "coinbase" or "finnhub"' },
+      { name: "on", kind: "bool", error: MSG_PAGE },
+    ] },
   { name: "lat", kind: "coord", max: 90, error: "a number from -90 to 90" },
   { name: "lon", kind: "coord", max: 180, error: "a number from -180 to 180" },
   { name: "temp_unit", kind: "choice", words: ["celsius", "fahrenheit"], error: 'must be "celsius" or "fahrenheit"' },
   { name: "wind_unit", kind: "choice", words: ["kmh", "mph"], error: 'must be "kmh" or "mph"' },
-  { name: "pages", kind: "group", children: ["face", "clock", "date", "weather", "moon", "stock", "github"]
+  { name: "pages", kind: "group", children: ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]
     .map((name) => ({ name, kind: "bool", error: MSG_PAGE })) },
 ]);
 
@@ -269,7 +277,8 @@ export const BASELINE_PATHS = Object.freeze(["mount", "theme", "github_user", "t
 // is released, entry 2 may still grow (spec stocks-and-coins §9).
 export const PATHS_BY_CFG = Object.freeze({
   1: BASELINE_PATHS,
-  2: Object.freeze([...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"]),
+  2: Object.freeze([...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on",
+    "coins", "coins.pair", "coins.source", "coins.on", "pages.coin"]),
 });
 const KNOWN_CFG = Object.keys(PATHS_BY_CFG).map(Number).sort((a, b) => a - b);
 
