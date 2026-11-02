@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS } from "../web/js/preview.js";
 import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
@@ -303,8 +303,30 @@ test("drawCoin draws both styles, samples and live prices, and the two states", 
   assert.ok(drawCoin(c, cb, live).includes(textPath("$12345.67", 17, 22, 5)));
   // Finnhub with only a price: no reference, so dashes and the "up" colour.
   const fhLive = drawCoin(c, fh, { coinPrices: { "finnhub:SOL-EUR": 150.5 } });
-  assert.ok(fhLive.includes(textPath("OPEN  —", 150, 92, 2)));
+  // The device prints formatCoinPrice(0) = "0.00" for a value it does not have.
+  assert.ok(fhLive.includes(textPath("OPEN  0.00", 150, 92, 2)));
+  assert.ok(fhLive.includes(textPath("LOW   0.00", 150, 140, 2)));
+  assert.doesNotMatch(fhLive, /NaN/);
   assert.doesNotMatch(fhLive, new RegExp(c.priceDown));
   assert.ok(drawCoin(c, cb, { coinStates: { "coinbase:BTC-USD": "notfound" } }).includes(textPath("NOT FOUND", 79, 56, 3)));
   assert.ok(drawCoin(c, cb, { coinStates: { "coinbase:BTC-USD": "updating" } }).includes(textPath("UPDATING", 88, 74, 3)));
+});
+
+test("SHOWN_ORDER equals PAGE_SHOW_ORDER in src/main.cpp", () => {
+  const m = /PAGE_SHOW_ORDER\[\]\s*=\s*\{([^}]*)\}/.exec(main);
+  assert.ok(m, "PAGE_SHOW_ORDER found");
+  const fromCpp = m[1].split(",").map((s) => s.trim().replace(/^PAGE_/, "").toLowerCase()).filter(Boolean);
+  assert.deepEqual([...SHOWN_ORDER], fromCpp);
+});
+
+test("the preview's pound and euro glyphs equal the firmware's rows", () => {
+  const rows = (name) => {
+    const m = new RegExp(String.raw`${name}\[7\]\s*=\s*\{([^}]*)\}`).exec(main);
+    assert.ok(m, `${name} found`);
+    return m[1].split(",").map((s) => parseInt(s.trim(), 16));
+  };
+  // Bit 4 is the leftmost of the 5 columns.
+  const draw = (bytes) => bytes.map((b) => [4, 3, 2, 1, 0].map((bit) => ((b >> bit) & 1 ? "#" : ".")).join("")).join("|");
+  assert.equal(GLYPHS["£"], draw(rows("GLYPH_POUND")));
+  assert.equal(GLYPHS["€"], draw(rows("GLYPH_EURO")));
 });

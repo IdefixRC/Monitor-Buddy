@@ -724,5 +724,54 @@ test("checked coin prices are keyed by source and pair", async () => {
   const { coinPriceKey } = await import("../web/js/coins.js");
   assert.equal(coinPriceKey("coinbase", "BTC-USD"), "coinbase:BTC-USD");
   assert.notEqual(coinPriceKey("finnhub", "BTC-USD"), coinPriceKey("coinbase", "BTC-USD"));
-  assert.match(appSource, /\[coinPriceKey\(asked\[1\], asked\[0\]\)\]: res\.price/);
+  assert.match(appSource, /const askedKey = coinPriceKey\(asked\[1\], asked\[0\]\);/);
+  assert.match(appSource, /\[askedKey\]: res\.price/);
+});
+
+// ── Final fixes on the coin page (2026-11-02) ─────────────
+
+const GET_12 = JSON.parse(readFileSync(new URL("./fixtures/backup-1.2.0.json", import.meta.url), "utf8")).config;
+
+test("a 1.2 board's config gets the 1.3 coin defaults when it enters the form", () => {
+  assert.ok(!("coins" in GET_12) && !("coin" in GET_12.pages), "the fixture is a 1.2 config");
+  const board = fromBoard(GET_12);
+  assert.deepEqual(board.coins, [{ pair: "BTC-USD", source: "coinbase", on: true }]);
+  assert.equal(board.pages.coin, true);
+  board.coins[0].pair = "X";   // a copy, not the frozen DEFAULTS
+  assert.equal(DEFAULTS.coins[0].pair, "BTC-USD");
+  // A 1.3 board's own coins and page switch are kept.
+  const own = fromBoard({ ...GET_12, coins: [{ pair: "ETH-EUR", source: "finnhub", on: false }], pages: { ...GET_12.pages, coin: false } });
+  assert.deepEqual(own.coins, [{ pair: "ETH-EUR", source: "finnhub", on: false }]);
+  assert.equal(own.pages.coin, false);
+});
+
+test("with 1.3 picked, a 1.2 board's form shows slot 1 BTC-USD and the coin page on", () => {
+  const f = newFormState(fromBoard(GET_12), { flow: "change", info: INFO_SAVED, supported: PATHS_BY_CFG[2] });
+  assert.equal(f.coinSlots[0].pair, "BTC-USD");
+  assert.equal(f.coinSlots[0].source, "coinbase");
+  assert.equal(f.coinSlots[0].on, true);
+  assert.equal(f.config.pages.coin, true);
+  const req = formToRequest(f);
+  assert.deepEqual(req.config.coins, [{ pair: "BTC-USD", source: "coinbase", on: true }]);
+  assert.equal(req.config.pages.coin, true);
+});
+
+test("a 1.2 target still gets nothing coin-related", () => {
+  const f = newFormState(fromBoard(GET_12), { flow: "change", info: INFO_SAVED, supported: BASELINE_PATHS });
+  const req = formToRequest(f);
+  assert.ok(!("coins" in req.config));
+  assert.ok(!("coin" in req.config.pages));
+});
+
+test("the app builds the page switches in shown order and counts stock only with a key", () => {
+  assert.match(appSource, /SHOWN_ORDER\.map\(\(p\) => \{\s*const row = switchRow/);
+  assert.doesNotMatch(appSource, /PAGE_KEYS\.map\(\(p\) => \{\s*const row = switchRow/);
+  assert.match(appSource, /\(p !== "stock" \|\| !!f\.config\.stock_key\)/);
+});
+
+test("the Check line shows the device's price and a not-found result reaches the preview", () => {
+  assert.match(appSource, /const coinPrice = formatCoinPrice;/);
+  assert.doesNotMatch(appSource, /toLocaleString/);
+  assert.match(appSource, /states\[askedKey\] = "notfound"/);
+  assert.match(appSource, /coinStates: states/);
 });

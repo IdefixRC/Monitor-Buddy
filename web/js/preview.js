@@ -61,7 +61,7 @@ export function themeColors(n) {
 }
 
 // PAGE_SHOW_ORDER in src/main.cpp. KEEP IN SYNC.
-const SHOWN_ORDER = ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"];
+export const SHOWN_ORDER = ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"];
 
 // The coins that are on and usable, in slot order, each with its slot: Coinbase
 // needs nothing, Finnhub needs the stock key (buildCoinList / coinConfigured).
@@ -86,7 +86,7 @@ export function pageList(config) {
 
 // ── 5x7 pixel font ────────────────────────────────────────
 // Rows top to bottom, "#" lit. Only what the pages print: A-Z, 0-9 and $ £ € % . - : / +.
-const GLYPHS = {
+export const GLYPHS = {
   "0": ".###.|#...#|#..##|#.#.#|##..#|#...#|.###.", "1": "..#..|.##..|..#..|..#..|..#..|..#..|.###.",
   "2": ".###.|#...#|....#|...#.|..#..|.#...|#####", "3": "#####|...#.|..#..|...#.|....#|#...#|.###.",
   "4": "...#.|..##.|.#.#.|#..#.|#####|...#.|...#.", "5": "#####|#....|####.|....#|....#|#...#|.###.",
@@ -344,6 +344,7 @@ function coinData(entry, live) {
   const pair = String(entry.pair).toUpperCase();
   const base = pair.split("-")[0];
   const liveP = live.coinPrices ? live.coinPrices[coinPriceKey(entry.source, pair)] : undefined;
+  // Nothing writes live.coinCharts yet: the chart stays a sample curve.
   const liveChart = live.coinCharts ? live.coinCharts[pair] : undefined;
   const havePrice = isNum(liveP) && liveP > 0;
   const price = havePrice ? liveP : (SAMPLE_PRICES[base] ?? 12.3456);
@@ -416,7 +417,7 @@ export function drawCoin(c, entry, live) {
   while (tsize > 1 && base.length * 6 * tsize > 132) tsize--;
   s += txt(base, 14, (haveRef ? 112 : 124) - 4 * tsize, tsize, c.ticker);
   if (haveRef) s += txt(pct, 14, 132, 2, col);
-  const vals = [d.open, d.high, d.low].map((v) => (v > 0 ? formatCoinPrice(v) : DASH));
+  const vals = [d.open, d.high, d.low].map(formatCoinPrice);   // the device prints "0.00" for an unknown value
   const mx = Math.max(...vals.map((v) => v.length));
   const vsize = (6 + mx) * 12 <= 306 - 150 ? 2 : 1;   // the longest value must end before x 306
   return s + txt(`OPEN  ${vals[0]}`, 150, 92, vsize, c.value)

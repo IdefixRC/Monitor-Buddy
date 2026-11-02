@@ -64,6 +64,11 @@ export function setTicker(config, symbol) {
 export function fromBoard(config) {
   const out = withStocks(config || {});
   if (out.stock_key === PLACEHOLDER_KEY) out.stock_key = "";
+  // A 1.2 board has no coins and no coin page; 1.3 starts with BTC-USD and the
+  // page on (what the board itself does after the flash). filterSupported
+  // strips both again for a target without them.
+  if (!Object.hasOwn(out, "coins")) out.coins = structuredClone(DEFAULTS.coins);
+  if (!out.pages || !Object.hasOwn(out.pages, "coin")) out.pages = { ...out.pages, coin: DEFAULTS.pages.coin };
   return out;
 }
 

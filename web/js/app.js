@@ -13,7 +13,7 @@ import { searchCity } from "./geocode.js";
 import { checkStock, checkGithub, checkCoin } from "./checks.js";
 import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair, coinPriceKey } from "./coins.js";
 import { createFace } from "./face.js";
-import { createPreview, THEMES } from "./preview.js";
+import { createPreview, THEMES, SHOWN_ORDER, formatCoinPrice } from "./preview.js";
 import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
@@ -701,10 +701,9 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 
 // A coin price as the Buddy shows it: 2 decimals from 1.00 up, 4 significant
 // digits below (0.00001234).
-function coinPrice(n) {
-  if (n >= 1) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return n.toFixed(Math.min(20, 3 - Math.floor(Math.log10(n))));
-}
+// The number is the device's (formatCoinPrice); the message names the pair, so
+// the currency is already there.
+const coinPrice = formatCoinPrice;
 
 // checkCoin's result as a sentence.
 function coinMessage(res, pair) {
@@ -1013,7 +1012,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     // 4. Pages.
     // Every switch is built; the refresher hides or greys each one for the
     // firmware the form is for, so the version picker can bring one in.
-    const pageRows = PAGE_KEYS.map((p) => {
+    const pageRows = SHOWN_ORDER.map((p) => {
       const row = switchRow({
         label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
         set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
@@ -1045,9 +1044,11 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       }
       const pages = f.config.pages || {};
       // A page counts when it is on and the firmware has it; the coin page also
-      // needs a coin to show (the Buddy hides it otherwise and falls back to the face).
+      // needs a coin to show and the stock page a Finnhub key (the Buddy hides
+      // them otherwise and falls back to the face).
       const coinToShow = fieldState(f, "coins") === "on" && f.coinSlots.some((s, i) => (i === 0 || s.on) && s.pair);
-      const shows = (p) => pages[p] && fieldState(f, `pages.${p}`) === "on" && (p !== "coin" || coinToShow);
+      const shows = (p) => pages[p] && fieldState(f, `pages.${p}`) === "on"
+        && (p !== "coin" || coinToShow) && (p !== "stock" || !!f.config.stock_key);
       allOff.hidden = PAGE_KEYS.some(shows);
       stockHidden.hidden = !(pages.stock && !f.config.stock_key);
       githubHidden.hidden = !(pages.github && !f.config.github_user);
@@ -1078,7 +1079,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       });
       const prices = Object.fromEntries(Object.entries(app.live.coinPrices || {})
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
-      app.live = { ...app.live, coinPrices: prices };
+      const states = Object.fromEntries(Object.entries(app.live.coinStates || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      app.live = { ...app.live, coinPrices: prices, coinStates: states };
     };
     const stockKey = textField({
       key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
@@ -1369,7 +1372,11 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         check.disabled = false;
         result.textContent = coinMessage(res, asked[0]);
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
-        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [coinPriceKey(asked[1], asked[0])]: res.price } };
+        const askedKey = coinPriceKey(asked[1], asked[0]);
+        const states = { ...(app.live.coinStates || {}) };
+        if (res.status === "not_found") states[askedKey] = "notfound"; else delete states[askedKey];
+        app.live = { ...app.live, coinStates: states };
+        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price } };
         refresh();
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
       }, { "aria-label": `${S.form.check}, ${slotName}` });
