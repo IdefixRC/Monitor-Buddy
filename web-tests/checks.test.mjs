@@ -103,8 +103,15 @@ test("checkCoin: Finnhub quote via COINBASE:, zeros are not found", async () => 
 
 test("checkCoin: bad key and network", async () => {
   assert.equal((await checkCoin(async () => ({ ok: false, status: 401 }), "finnhub", "SOL-EUR", "k")).status, "bad_key");
-  assert.equal((await checkCoin(async () => ({ ok: false, status: 403 }), "finnhub", "SOL-EUR", "k")).status, "bad_key");
+  assert.equal((await checkCoin(async () => ({ ok: false, status: 403 }), "finnhub", "SOL-EUR", "k")).status, "not_found");
   assert.equal((await checkCoin(async () => { throw new Error("x"); }, "coinbase", "SOL-EUR", "")).status, "network");
   assert.equal((await checkCoin(async () => ({ ok: false, status: 500 }), "coinbase", "SOL-EUR", "")).status, "network");
   assert.deepEqual(await checkCoin(async () => ({ ok: true, status: 200, json: async () => ({ c: 9.5 }) }), "finnhub", "SOL-EUR", "k"), { status: "ok", price: 9.5 });
+});
+
+test("checkCoin: a pair with / or ? is encoded in the Coinbase URL", async () => {
+  const seen = [];
+  const f = async (url) => (seen.push(url), { ok: false, status: 404 });
+  await checkCoin(f, "coinbase", "A/B-C?D", "");
+  assert.match(seen[0], /products\/A%2FB-C%3FD\/stats$/);
 });

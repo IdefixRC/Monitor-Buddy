@@ -43,14 +43,19 @@ export function searchCoins(list, text) {
   return [...starts, ...contains].slice(0, 30);
 }
 
+// Caches the in-flight promise, so two pickers opening at once fetch once;
+// a failed load is dropped from the cache so it is retried.
 const cache = new Map();
-export async function loadCoinList(fetchFn, source, key) {
+export function loadCoinList(fetchFn, source, key) {
   const id = `${source}|${source === "finnhub" ? key : ""}`;
   if (cache.has(id)) return cache.get(id);
   const url = source === "finnhub" ? FINNHUB_SYMBOLS + encodeURIComponent(key) : COINBASE_PRODUCTS;
-  const res = await fetchFn(url);
-  if (!res || !res.ok) throw new Error(`coin list ${source}: ${res ? res.status : "no reply"}`);
-  const list = source === "finnhub" ? parseFinnhubSymbols(await res.json()) : parseCoinbaseProducts(await res.json());
-  cache.set(id, list);
-  return list;
+  const promise = (async () => {
+    const res = await fetchFn(url);
+    if (!res || !res.ok) throw new Error(`coin list ${source}: ${res ? res.status : "no reply"}`);
+    return source === "finnhub" ? parseFinnhubSymbols(await res.json()) : parseCoinbaseProducts(await res.json());
+  })();
+  cache.set(id, promise);
+  promise.catch(() => { if (cache.get(id) === promise) cache.delete(id); });
+  return promise;
 }

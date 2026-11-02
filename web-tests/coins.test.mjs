@@ -27,11 +27,26 @@ test("splitPair and searchCoins", () => {
   assert.deepEqual(searchCoins(list, "h"), ["ETH", "SHIB"]);
 });
 
-test("loadCoinList caches per source and key, and throws on a failed fetch", async () => {
+test("loadCoinList caches per source and key, shares in-flight loads, retries after a failure", async () => {
   let calls = 0;
   const ok = async () => { calls++; return { ok: true, json: async () => fx("coinbase-products.json") }; };
-  await loadCoinList(ok, "coinbase", "");
+  await Promise.all([loadCoinList(ok, "coinbase", ""), loadCoinList(ok, "coinbase", "")]);
   await loadCoinList(ok, "coinbase", "");
   assert.equal(calls, 1);
-  await assert.rejects(loadCoinList(async () => ({ ok: false, status: 500 }), "finnhub", "k1"));
+
+  const fin = async () => { calls++; return { ok: true, json: async () => fx("finnhub-coinbase-symbols.json") }; };
+  calls = 0;
+  await loadCoinList(fin, "finnhub", "k-a");
+  await loadCoinList(fin, "finnhub", "k-a");
+  assert.equal(calls, 1);
+  await loadCoinList(fin, "finnhub", "k-b");
+  assert.equal(calls, 2);
+
+  calls = 0;
+  const bad = async () => { calls++; return { ok: false, status: 500 }; };
+  await assert.rejects(loadCoinList(bad, "finnhub", "k-retry"));
+  assert.equal(calls, 1);
+  const list = await loadCoinList(fin, "finnhub", "k-retry");
+  assert.equal(calls, 2);
+  assert.ok(list.has("BTC"));
 });

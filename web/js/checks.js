@@ -64,7 +64,10 @@ export async function checkCoin(fetchFn, source, pair, key) {
     return { status: "network" };
   }
   if (res.status === 404) return { status: "not_found" };
-  if (res.status === 401 || res.status === 403) return finnhub ? { status: "bad_key" } : { status: "network" };
+  // Finnhub: 401 is a bad key; 403 means the free plan doesn't cover the symbol.
+  if (finnhub && res.status === 401) return { status: "bad_key" };
+  if (finnhub && res.status === 403) return { status: "not_found" };
+  if (res.status === 401 || res.status === 403) return { status: "network" };
   if (!res.ok) return { status: "network" };
   const body = await bodyOf(res);
   if (body === null) return { status: "network" };
