@@ -18,6 +18,10 @@ function build(pairs) {
 
 export const splitPair = (pair) => { const [base, quote] = String(pair).split("-"); return { base, quote }; };
 
+// The key of a checked coin price in app.live.coinPrices: the same pair can
+// cost a little differently on Coinbase and on Finnhub.
+export const coinPriceKey = (source, pair) => `${source}:${pair}`;
+
 export function parseCoinbaseProducts(json) {
   return build((Array.isArray(json) ? json : [])
     .filter((p) => p && p.status === "online" && p.base_currency && p.quote_currency)

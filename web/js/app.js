@@ -11,7 +11,7 @@ import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
 import { checkStock, checkGithub, checkCoin } from "./checks.js";
-import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair } from "./coins.js";
+import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair, coinPriceKey } from "./coins.js";
 import { createFace } from "./face.js";
 import { createPreview, THEMES } from "./preview.js";
 import {
@@ -712,6 +712,14 @@ function coinMessage(res, pair) {
   return S.check.coin[res.status] || S.check.coin.network;
 }
 
+// Coin slots waiting for their new source's list to check their pair (a source
+// change: slot.verify) keep waiting when the slots are re-derived from the
+// settings (an import, after a flash), matched by pair and source.
+const pendingChecks = (f) => new Set(f.coinSlots.filter((s) => s.verify).map((s) => `${s.source}|${s.pair}`));
+function keepPendingChecks(f, pending) {
+  f.coinSlots = f.coinSlots.map((s) => (pending.has(`${s.source}|${s.pair}`) ? { ...s, verify: true } : s));
+}
+
 // The first of `els` that can take focus: in the page, not disabled, not inside a hidden box.
 const focusable = (els) => els.find((el) => el && el.isConnected && !el.disabled && !el.closest("[hidden]")) || null;
 
@@ -737,6 +745,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   let preview;
   let bubble;
   const focusTargets = {}; // focus key -> () => the elements to try, in order
+  // The oldest installable release that has `path` (the greyed note names it).
+  const firstWith = (path) => app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes(path));
   // False once this drawing of the form is gone (redrawn or left), so a check
   // or an import that finishes late doesn't touch a destroyed preview.
   let alive = true;
@@ -1003,10 +1013,17 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     // 4. Pages.
     // Every switch is built; the refresher hides or greys each one for the
     // firmware the form is for, so the version picker can bring one in.
-    const pageRows = PAGE_KEYS.map((p) => ({ p, ...switchRow({
-      label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
-      set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
-    }) }));
+    const pageRows = PAGE_KEYS.map((p) => {
+      const row = switchRow({
+        label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
+        set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
+      });
+      // Greyed (only a newer release has the page): which release.
+      const newer = h("p", { class: "field__hint switch-row__note", id: uid("hint"), hidden: true });
+      row.input.setAttribute("aria-describedby", [row.input.getAttribute("aria-describedby"), newer.id].filter(Boolean).join(" "));
+      row.el.append(newer);
+      return { p, newer, ...row };
+    });
     const allOff = note(S.form.allOff, "note--info");
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
@@ -1018,10 +1035,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         errorSlot("pages", [])),
       allOff, stockHidden, githubHidden));
     refreshers.push(() => {
-      for (const { p, el, input } of pageRows) {
+      for (const { p, el, input, newer } of pageRows) {
         const st = fieldState(f, `pages.${p}`);
         el.hidden = st === "hidden";
         input.disabled = st === "greyed";
+        const release = st === "greyed" ? firstWith(`pages.${p}`) : null;
+        newer.hidden = !release;
+        newer.textContent = release ? S.form.needsNewer(release.version) : "";
       }
       const pages = f.config.pages || {};
       // A page counts when it is on and the firmware has it; the coin page also
@@ -1051,13 +1071,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const clearChecks = () => {
       for (const el of [tickerResult, ...slotResults]) { el.textContent = ""; el.dataset.state = ""; }
       // Finnhub coin checks used the old key too.
-      const prices = { ...(app.live.coinPrices || {}) };
       coinResults.forEach((el, k) => {
         if (f.coinSlots[k].source !== "finnhub") return;
         el.textContent = "";
         el.dataset.state = "";
-        delete prices[f.coinSlots[k].pair];
       });
+      const prices = Object.fromEntries(Object.entries(app.live.coinPrices || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
       app.live = { ...app.live, coinPrices: prices };
     };
     const stockKey = textField({
@@ -1139,7 +1159,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     form.append(section(S.form.sections.stock, tickerBlock, slotsBlock, slotsNote));
     refreshers.push(() => {
       const st = fieldState(f, "stocks");
-      const firstWith = app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes("stocks"));
+      const firstStocks = firstWith("stocks");
       // "on": the slots replace the single ticker field, and the key moves above them.
       if (st === "on" && stockKey.el.parentNode !== slotsBlock) slotsBlock.prepend(stockKey.el);
       if (st !== "on" && stockKey.el.parentNode !== tickerGrid) tickerGrid.append(stockKey.el);
@@ -1149,7 +1169,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       tickerOff.hidden = !tickerNone;
       slotsBlock.hidden = st === "hidden";
       slotsNote.hidden = st !== "greyed";
-      slotsNote.textContent = st === "greyed" && firstWith ? S.form.needsNewer(firstWith.version) : "";
+      slotsNote.textContent = st === "greyed" && firstStocks ? S.form.needsNewer(firstStocks.version) : "";
       for (const r of slotRows) {
         const greyed = st === "greyed";
         r.el.hidden = greyed && r.i === 0;   // slot 1 is the ticker field while greyed
@@ -1213,7 +1233,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const result = h("p", { class: "check__result", "aria-live": "polite" });
       coinResults[i] = result;
       const clearResult = () => { result.textContent = ""; result.dataset.state = ""; };
-      let verify = false; // after a source change: keep what the new list has, clear what it doesn't
+      // After a source change the slot waits (slot.verify, in the form state, so
+      // a Move or a redraw keeps it) for the new list: keep what it has, clear
+      // what it doesn't. It waits through "no key yet"; a failed list ends it.
+      const setVerify = (on) => { f.coinSlots[i] = { ...f.coinSlots[i], verify: on }; };
       let shown = "";     // the list id and state the picker was last drawn for
 
       // The source. A stored source this flasher doesn't know gets its own
@@ -1226,10 +1249,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       for (const input of srcInputs) {
         input.addEventListener("change", () => {
           if (!input.checked) return;
-          f.coinSlots[i] = { ...f.coinSlots[i], source: input.value };
+          f.coinSlots[i] = { ...f.coinSlots[i], source: input.value, verify: true };
           applyCoinSlots(f);
           clearResult();
-          verify = true;
           changed(key);
           // Finnhub needs the key: take the user there (the slot's error says so too).
           if (input.value === "finnhub" && !f.config.stock_key) stockKey.input.focus();
@@ -1242,20 +1264,21 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       // The picker: a code search and the currencies that coin has on this source.
       const coinId = uid("coin");
       const datalist = h("datalist", { id: uid("coins") });
+      const loadingHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListLoading);
       const coinInput = h("input", {
         id: coinId, type: "search", class: "input input--upper", list: datalist.id, placeholder: S.form.coinSearch,
-        autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-describedby": loadingHint.id,
       });
-      const loadingHint = h("p", { class: "field__hint" }, S.form.coinListLoading);
       const curId = uid("cur");
       const curNote = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinCurrencyNote);
       const currency = h("select", { id: curId, class: "input", "aria-describedby": curNote.id });
       // Without the list: the pair as text.
       const manualId = uid("pair");
+      const failedHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListFailed);
       const manual = h("input", {
         id: manualId, type: "text", class: "input input--upper", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+        "aria-describedby": failedHint.id,
       });
-      const failedHint = h("p", { class: "field__hint" }, S.form.coinListFailed);
       const error = errorSlot(key, [coinInput, manual]);
 
       const listNow = () => { const id = wantedList(i); return id ? app.coinLists.get(id) || null : null; };
@@ -1300,14 +1323,14 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       function draw(state, list) {
         let { base = "", quote = "" } = f.coinSlots[i].pair ? splitPair(f.coinSlots[i].pair) : {};
         let ask = false;
-        if (state === "ok" && verify && f.coinSlots[i].pair) {
+        if (state === "ok" && f.coinSlots[i].verify && f.coinSlots[i].pair) {
           if (!list.has(base)) { setPair(""); base = ""; quote = ""; }
           else if (!quotesFor(list, base).includes(quote)) { setPair(""); quote = ""; ask = true; }
           // This runs inside refresh(), after the errors were worked out from the
           // old pair: refresh again so the slot's error and the notes follow.
           if (!f.coinSlots[i].pair) queueMicrotask(refresh);
         }
-        if (state !== "loading" && state !== "idle") verify = false;
+        if ((state === "ok" || state === "failed") && f.coinSlots[i].verify) setVerify(false);
         const text = state === "failed" || state === "none";
         pickBox.hidden = text;
         manualBox.hidden = !text;
@@ -1346,7 +1369,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         check.disabled = false;
         result.textContent = coinMessage(res, asked[0]);
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
-        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [asked[0]]: res.price } };
+        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [coinPriceKey(asked[1], asked[0])]: res.price } };
         refresh();
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
       }, { "aria-label": `${S.form.check}, ${slotName}` });
@@ -1395,10 +1418,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     form.append(coinSection);
     refreshers.push(() => {
       const st = fieldState(f, "coins");
-      const firstWith = app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes("coins"));
+      const firstCoins = firstWith("coins");
       coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
       coinsNote.hidden = st !== "greyed";
-      coinsNote.textContent = st === "greyed" && firstWith ? S.form.needsNewer(firstWith.version) : "";
+      coinsNote.textContent = st === "greyed" && firstCoins ? S.form.needsNewer(firstCoins.version) : "";
       for (const input of defInputs) input.disabled = st !== "on";
       for (const r of coinRows) r.sync(st);
     });
@@ -1560,8 +1583,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       return showForm({ say: S.form.badFile, tone: "error" });
     }
     f.config = mergeConfig(f.config, res.config);
+    const pending = pendingChecks(f);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
     f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+    keepPendingChecks(f, pending);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
@@ -1585,8 +1610,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const left = unsupportedKeys(cfg, f.supported);
     cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
+    const pending = pendingChecks(f);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
     f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+    keepPendingChecks(f, pending);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
       ? S.form.backupPartly(Object.keys(cfg).length, left)
@@ -1845,8 +1872,10 @@ async function afterFlash(entry, ui) {
   const now = supportedPaths(got.config);
   const fresh = newlyOffered(f.supported, now);
   f.supported = now;
+  const pending = pendingChecks(f);
   f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
   f.stockSlots = stockSlots(f.config.stocks); applySlots(f); f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+  keepPendingChecks(f, pending);
   f.installed = info.fw;
   app.expectDrop = false;
   const added = [...new Set([...(got.added || []), ...fresh])];

@@ -1348,6 +1348,12 @@ select.input {
   font-weight: 500;
 }
 
+/* A greyed page switch: the release that has the page, under the row. */
+.switch-row__note {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 @media (max-width: 520px) {
   .pages__grid {
     grid-template-columns: minmax(0, 1fr);

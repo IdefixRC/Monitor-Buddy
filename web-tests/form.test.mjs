@@ -457,6 +457,10 @@ test("afterFlash sends what the flash added to the review form", () => {
 // greys each one for the picked firmware (the pin below).
 test("the page switches follow the picked firmware", () => {
   assert.match(appSource, /fieldState\(f, `pages\.\$\{p\}`\)/);
+  // What phase 1 pinned: a page the firmware doesn't have isn't shown (hidden), and
+  // one only a newer release has is greyed with that release named.
+  assert.match(appSource, /const st = fieldState\(f, `pages\.\$\{p\}`\);\s*el\.hidden = st === "hidden";\s*input\.disabled = st === "greyed";/);
+  assert.match(appSource, /firstWith\(`pages\.\$\{p\}`\)[\s\S]{0,120}S\.form\.needsNewer\(release\.version\)/);
 });
 
 test("the backup import leaves out what the board doesn't support", () => {
@@ -701,4 +705,24 @@ test("a requested focus is applied after screen() focuses its heading", () => {
   // screen() focuses the heading after build(); the form's requested focus must come later.
   assert.doesNotMatch(appSource, /slotInputs\[Number\(slotAt\[1\]\)\]\.focus\(\);\s*\}\);/);
   assert.match(appSource, /const heading = h\("h1"[\s\S]*?const wanted = build\(main\);[\s\S]*?wanted\.focus\(\);[\s\S]*?document\.activeElement !== wanted\) heading\.focus/);
+});
+
+test("a source change's pending pair check lives in the form state", () => {
+  // Kept on the slot (moves with it on a Move), ended only by a loaded or failed list.
+  assert.match(appSource, /source: input\.value, verify: true/);
+  assert.match(appSource, /\(state === "ok" \|\| state === "failed"\) && f\.coinSlots\[i\]\.verify\) setVerify\(false\)/);
+  assert.doesNotMatch(appSource, /let verify = false/);
+  const f = newFormState(DEFAULTS, { flow: "change" });
+  f.coinSlots[0] = { ...f.coinSlots[0], verify: true };
+  const moved = moveSlot(f.coinSlots, 0, 1);
+  assert.equal(moved[1].verify, true);
+  f.coinSlots = moved;
+  applyCoinSlots(f);
+  assert.equal(Object.hasOwn(f.config.coins[0], "verify"), false, "never stored");
+});
+test("checked coin prices are keyed by source and pair", async () => {
+  const { coinPriceKey } = await import("../web/js/coins.js");
+  assert.equal(coinPriceKey("coinbase", "BTC-USD"), "coinbase:BTC-USD");
+  assert.notEqual(coinPriceKey("finnhub", "BTC-USD"), coinPriceKey("coinbase", "BTC-USD"));
+  assert.match(appSource, /\[coinPriceKey\(asked\[1\], asked\[0\]\)\]: res\.price/);
 });
