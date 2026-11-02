@@ -46,3 +46,29 @@ export async function checkGithub(fetchFn, user) {
   if (body === null) return { status: "network" };
   return { status: "ok", followers: body.followers, repos: body.public_repos };
 }
+
+const COINBASE_PRODUCTS = "https://api.exchange.coinbase.com/products/";
+
+// A coin pair such as "SOL-EUR" on one source ("coinbase" needs no key,
+// "finnhub" uses the stock key).
+// -> { status: "ok", price } | { status: "not_found" | "bad_key" | "network" }
+export async function checkCoin(fetchFn, source, pair, key) {
+  const finnhub = source === "finnhub";
+  const url = finnhub
+    ? `${FINNHUB}?symbol=${encodeURIComponent("COINBASE:" + pair)}&token=${encodeURIComponent(key)}`
+    : `${COINBASE_PRODUCTS}${encodeURIComponent(pair)}/stats`;
+  let res;
+  try {
+    res = await fetchFn(url);
+  } catch {
+    return { status: "network" };
+  }
+  if (res.status === 404) return { status: "not_found" };
+  if (res.status === 401 || res.status === 403) return finnhub ? { status: "bad_key" } : { status: "network" };
+  if (!res.ok) return { status: "network" };
+  const body = await bodyOf(res);
+  if (body === null) return { status: "network" };
+  const price = finnhub ? body.c : Number(body.last);
+  if (typeof price !== "number" || !(price > 0)) return { status: "not_found" };
+  return { status: "ok", price };
+}

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkStock, checkGithub } from "../web/js/checks.js";
+import { checkStock, checkGithub, checkCoin } from "../web/js/checks.js";
 
 // A fake fetch that records the URLs it was given and answers with one reply,
 // or throws for a network error.
@@ -88,4 +88,23 @@ test("github: the URL is exact and encoded", async () => {
   const f = fake({ status: 200, body: { followers: 0, public_repos: 0 } });
   await checkGithub(f, "octo cat/x");
   assert.deepEqual(f.urls, ["https://api.github.com/users/octo%20cat%2Fx"]);
+});
+
+test("checkCoin: Coinbase stats, 404 is not found", async () => {
+  const ok = async (url) => (assert.match(url, /exchange\.coinbase\.com\/products\/SOL-EUR\/stats$/), { ok: true, status: 200, json: async () => ({ last: "123.45" }) });
+  assert.deepEqual(await checkCoin(ok, "coinbase", "SOL-EUR", ""), { status: "ok", price: 123.45 });
+  assert.equal((await checkCoin(async () => ({ ok: false, status: 404 }), "coinbase", "X-Y", "")).status, "not_found");
+});
+
+test("checkCoin: Finnhub quote via COINBASE:, zeros are not found", async () => {
+  const z = async (url) => (assert.match(url, /symbol=COINBASE%3ASOL-EUR/), { ok: true, status: 200, json: async () => ({ c: 0 }) });
+  assert.equal((await checkCoin(z, "finnhub", "SOL-EUR", "k")).status, "not_found");
+});
+
+test("checkCoin: bad key and network", async () => {
+  assert.equal((await checkCoin(async () => ({ ok: false, status: 401 }), "finnhub", "SOL-EUR", "k")).status, "bad_key");
+  assert.equal((await checkCoin(async () => ({ ok: false, status: 403 }), "finnhub", "SOL-EUR", "k")).status, "bad_key");
+  assert.equal((await checkCoin(async () => { throw new Error("x"); }, "coinbase", "SOL-EUR", "")).status, "network");
+  assert.equal((await checkCoin(async () => ({ ok: false, status: 500 }), "coinbase", "SOL-EUR", "")).status, "network");
+  assert.deepEqual(await checkCoin(async () => ({ ok: true, status: 200, json: async () => ({ c: 9.5 }) }), "finnhub", "SOL-EUR", "k"), { status: "ok", price: 9.5 });
 });
