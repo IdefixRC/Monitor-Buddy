@@ -675,3 +675,12 @@ test("dropSlotErrors handles coins", () => {
   dropSlotErrors(f, errs, 0, "coin");
   assert.deepEqual(errs, { "stocks[0].symbol": "s" });
 });
+test("a stored coin with an unknown source keeps it and is flagged on its slot", () => {
+  const all = [...PATHS_BY_CFG[2]];
+  const cfg = { ...DEFAULTS, coins: [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "BTC-USD", source: "kraken", on: true }] };
+  const f = newFormState(cfg, { flow: "change", supported: all });
+  assert.equal(f.coinSlots[1].source, "kraken");
+  applyCoinSlots(f);
+  assert.equal(f.config.coins[1].source, "kraken");
+  assert.ok(formErrors(f, zones)["coinslot.1"]);
+});

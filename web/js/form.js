@@ -194,14 +194,12 @@ export function slotsToStocks(slots) {
   return { stocks: list, slotOf };
 }
 
-const COIN_SOURCES = ["coinbase", "finnhub"];
-
 export function coinSlots(coins, defaultSource = "coinbase") {
   return slotsFrom(coins, (i) => ({ pair: "", source: defaultSource, on: i === 0 }),
     (e) => typeof e.pair === "string",
     (e, i) => ({
       pair: e.pair,
-      source: COIN_SOURCES.includes(e.source) ? e.source : defaultSource,
+      source: typeof e.source === "string" ? e.source : defaultSource, // keep one we don't know; validation flags it
       on: i === 0 ? true : e.on !== false,
     }), COIN_SLOTS);
 }
@@ -312,6 +310,7 @@ function remapListErrors(state, out, { list, slotKey, slotOf, extra }) {
   }
 }
 
+// (Name kept from phase 1: it remaps coin errors to coin slots too.)
 export function remapStockErrors(state, errors) {
   const out = { ...errors };
   remapListErrors(state, out, { list: "stocks", slotKey: "stockslot", slotOf: state.stockSlotOf, extra: ["ticker"] });
@@ -415,10 +414,10 @@ export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
 // page without jumping), or null (no jump and no hold: Wi-Fi, or a page
-// switched off). "check.stock" and "check.github" are the Check buttons: on
+// switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
 // the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
 // shown (an empty key or user hides stock and GitHub), or stays when there is
-// none. For the other keys, whether the page is shown is the preview's call.
+// none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
