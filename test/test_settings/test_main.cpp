@@ -354,10 +354,13 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
 
 // ── The @MB line budget (spec §4.6) ───────────────────────
 
-// The largest GET reply today (all five stocks and coins), plus room for what
-// #24 still adds (clock_format and night, about 90 bytes, with some margin:
-// 150 of config and 60 of added paths), must fit the 2,048-byte reply buffer
-// with a quarter to spare. The SET line has the same reserve for config only.
+// The largest GET reply a board can really send: every text field at its
+// maximum, five stocks and five coins. A key missing from a file holds its
+// short default, so "every field at max" and "every path added" cannot happen
+// together; after a 1.2 -> 1.3 update only the new keys are reported, which
+// are "coins" and "pages.coin". The reserve covers #24's keys: about 90 bytes
+// of config (clock_format, night with four fields) and about 50 bytes of added
+// paths. The line must fit the 2,048-byte reply buffer with a quarter to spare.
 static void test_largest_get_reply_fits_with_room() {
   Settings s = makeDefaults();
   s.mount = MOUNT_RIGHT; s.theme = 4;
@@ -381,12 +384,10 @@ static void test_largest_get_reply_fits_with_room() {
   d["v"] = CONFIG_VERSION; d["stored"] = true;
   settingsToJson(s, d["config"].to<JsonObject>());
   JsonArray added = d["added"].to<JsonArray>();
-  const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks", "stock_key",
-                       "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
-                       "pages.weather", "pages.moon", "pages.stock", "pages.github", "coins", "pages.coin"};
+  const char *all[] = {"coins", "pages.coin"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 150 + 60);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 90 + 50);
 }
 
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
