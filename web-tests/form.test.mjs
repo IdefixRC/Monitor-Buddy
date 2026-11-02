@@ -453,8 +453,10 @@ test("afterFlash sends what the flash added to the review form", () => {
   assert.match(appSource, /f\.supported = now/);
 });
 
-test("the page switches are drawn only for supported pages", () => {
-  assert.match(appSource, /PAGE_KEYS\.filter\(\(p\) => offered\(f, `pages\.\$\{p\}`\)\)/);
+// Replaced in coin-page Task 7: every switch is built, and fieldState hides or
+// greys each one for the picked firmware (the pin below).
+test("the page switches follow the picked firmware", () => {
+  assert.match(appSource, /fieldState\(f, `pages\.\$\{p\}`\)/);
 });
 
 test("the backup import leaves out what the board doesn't support", () => {
@@ -683,4 +685,20 @@ test("a stored coin with an unknown source keeps it and is flagged on its slot",
   applyCoinSlots(f);
   assert.equal(f.config.coins[1].source, "kraken");
   assert.ok(formErrors(f, zones)["coinslot.1"]);
+});
+
+// ── The coin section (coin-page Task 7) ───────────────────
+test("the coin section loads each source's own list", () => {
+  assert.match(appSource, /loadCoinList\(/);
+  assert.match(appSource, /fieldState\(f, "coins"\)/);
+});
+test("a flash re-derives the slots from the new settings", () => {
+  assert.match(appSource, /f\.stockSlots = stockSlots\(f\.config\.stocks\)[\s\S]*?f\.coinSlots = coinSlots\(f\.config\.coins/);
+  // The afterFlash site itself, not only the imports.
+  assert.match(appSource, /f\.config = filterSupported\(mergeConfig\(fromBoard\(got\.config\), f\.config\), now\);\s*f\.stockSlots = stockSlots\(f\.config\.stocks\); applySlots\(f\); f\.coinSlots = coinSlots\(f\.config\.coins, f\.coinSource\); applyCoinSlots\(f\);/);
+});
+test("a requested focus is applied after screen() focuses its heading", () => {
+  // screen() focuses the heading after build(); the form's requested focus must come later.
+  assert.doesNotMatch(appSource, /slotInputs\[Number\(slotAt\[1\]\)\]\.focus\(\);\s*\}\);/);
+  assert.match(appSource, /const heading = h\("h1"[\s\S]*?const wanted = build\(main\);[\s\S]*?wanted\.focus\(\);[\s\S]*?document\.activeElement !== wanted\) heading\.focus/);
 });

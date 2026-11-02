@@ -10,22 +10,29 @@ import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBack
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
-import { checkStock, checkGithub } from "./checks.js";
+import { checkStock, checkGithub, checkCoin } from "./checks.js";
+import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair } from "./coins.js";
 import { createFace } from "./face.js";
 import { createPreview, THEMES } from "./preview.js";
 import {
-  DEFAULTS, FLOWS, newFormState, offered, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
+  DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
   stockSlots, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
+  coinSlots, applyCoinSlots, coinIndexOfSlot, COIN_SLOTS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
 const BETA = params.has("beta");
 const SITE_ROOT = new URL("./", location.href);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// The coin lists' fetch. ?coinlist=fail makes it reject, to see the fallback
+// (a plain pair field) in the browser (Clarification 3). Checks use window.fetch.
+const fetchForCoins = params.has("coinlist") && params.get("coinlist") === "fail"
+  ? () => Promise.reject(new TypeError("coin list off (?coinlist=fail)"))
+  : window.fetch.bind(window);
 
 // The hardware, or the pretend Buddy for checking the screens (?fake=a|b|c|d).
 let dev = { BuddyPort, flashImage, checkBuddy };
@@ -42,6 +49,7 @@ const app = {
   info: null,        // the last INFO reply; null on path B
   form: null,        // the form, kept across screens so a retry finds it intact
   live: {},          // results of successful checks, for the preview
+  coinLists: new Map(), // coin lists that loaded, by loadCoinList's cache id (source|key)
   expectDrop: false, // a flash or restart is under way: the port going away is expected
   rx: { last: 0, status: false, recent: [] }, // recent: the latest lines, for romTrouble
   trouble: null,     // romTrouble() at connect: the firmware isn't running (path B, recovery)
@@ -129,6 +137,8 @@ let cleanups = [];
 let firstScreen = true;
 let G = null; // the current screen's guide (face and bubble)
 
+// build() may return an element to focus instead of the heading (the form
+// after a Move, say). It must come after the heading's focus, or it is lost.
 function screen(title, build) {
   closeTip();
   while (cleanups.length) {
@@ -139,10 +149,12 @@ function screen(title, build) {
   app.screen = title;
   const heading = h("h1", { class: "sr-only", tabindex: "-1" }, title);
   main.replaceChildren(heading);
-  build(main);
+  const wanted = build(main);
   if (firstScreen) { firstScreen = false; return; }
   window.scrollTo(0, 0);
-  heading.focus({ preventScroll: true });
+  const can = wanted && typeof wanted.focus === "function";
+  if (can) wanted.focus();
+  if (!can || document.activeElement !== wanted) heading.focus({ preventScroll: true });
 }
 
 // The Buddy's face with a speech bubble. g.say() replaces what it says,
@@ -687,11 +699,28 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 
 // ── The settings form ─────────────────────────────────────
 
+// A coin price as the Buddy shows it: 2 decimals from 1.00 up, 4 significant
+// digits below (0.00001234).
+function coinPrice(n) {
+  if (n >= 1) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toFixed(Math.min(20, 3 - Math.floor(Math.log10(n))));
+}
+
+// checkCoin's result as a sentence.
+function coinMessage(res, pair) {
+  if (res.status === "ok") return S.check.coin.ok(pair, coinPrice(res.price));
+  return S.check.coin[res.status] || S.check.coin.network;
+}
+
+// The first of `els` that can take focus: in the page, not disabled, not inside a hidden box.
+const focusable = (els) => els.find((el) => el && el.isConnected && !el.disabled && !el.closest("[hidden]")) || null;
+
 // The single-column layout, where the preview becomes a compact strip. KEEP
 // IN SYNC with the max-width of the form-layout media query in app.css.
 const NARROW = "(max-width: 900px)";
 
-function showForm({ say: message = "", tone = "", focus } = {}) {
+// focus: "wifi", "stockslot.N" or "coinslot.N" (after a Move; moved is its direction).
+function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   const f = app.form;
   f.teaser = installablePaths(app.releases);
   const flow = FLOWS[f.flow];
@@ -707,7 +736,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   let currentErrors = {};
   let preview;
   let bubble;
-  let slotInputs = [];   // the stock slot inputs, for focus after a move
+  const focusTargets = {}; // focus key -> () => the elements to try, in order
   // False once this drawing of the form is gone (redrawn or left), so a check
   // or an import that finishes late doesn't touch a destroyed preview.
   let alive = true;
@@ -716,8 +745,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
   const touch = (key) => {
     f.touched.add(key);
     delete f.serverErrors[key];
-    const at = /^stockslot\.(\d+)$/.exec(key);
-    if (at) dropSlotErrors(f, f.serverErrors, Number(at[1]));
+    const at = /^(stock|coin)slot\.(\d+)$/.exec(key);
+    if (at) dropSlotErrors(f, f.serverErrors, Number(at[2]), at[1]);
   };
   const gave = (...keys) => { f.location = [...new Set([...f.location, ...keys])]; touch("location"); };
   // The preview jumps to the page a changed setting affects and holds it there
@@ -972,10 +1001,12 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } }))));
 
     // 4. Pages.
-    const pageRows = PAGE_KEYS.filter((p) => offered(f, `pages.${p}`)).map((p) => switchRow({
+    // Every switch is built; the refresher hides or greys each one for the
+    // firmware the form is for, so the version picker can bring one in.
+    const pageRows = PAGE_KEYS.map((p) => ({ p, ...switchRow({
       label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
       set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
-    }));
+    }) }));
     const allOff = note(S.form.allOff, "note--info");
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
@@ -987,8 +1018,17 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         errorSlot("pages", [])),
       allOff, stockHidden, githubHidden));
     refreshers.push(() => {
+      for (const { p, el, input } of pageRows) {
+        const st = fieldState(f, `pages.${p}`);
+        el.hidden = st === "hidden";
+        input.disabled = st === "greyed";
+      }
       const pages = f.config.pages || {};
-      allOff.hidden = PAGE_KEYS.some((p) => pages[p]);
+      // A page counts when it is on and the firmware has it; the coin page also
+      // needs a coin to show (the Buddy hides it otherwise and falls back to the face).
+      const coinToShow = fieldState(f, "coins") === "on" && f.coinSlots.some((s, i) => (i === 0 || s.on) && s.pair);
+      const shows = (p) => pages[p] && fieldState(f, `pages.${p}`) === "on" && (p !== "coin" || coinToShow);
+      allOff.hidden = PAGE_KEYS.some(shows);
       stockHidden.hidden = !(pages.stock && !f.config.stock_key);
       githubHidden.hidden = !(pages.github && !f.config.github_user);
     });
@@ -1007,13 +1047,26 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     // The Check results, made before the key's setter so a key change can clear them all.
     const tickerResult = h("p", { class: "check__result", "aria-live": "polite" });
     const slotResults = f.stockSlots.map(() => h("p", { class: "check__result", "aria-live": "polite" }));
+    const coinResults = []; // the coin slots' Check results (filled by the coin section)
     const clearChecks = () => {
       for (const el of [tickerResult, ...slotResults]) { el.textContent = ""; el.dataset.state = ""; }
+      // Finnhub coin checks used the old key too.
+      const prices = { ...(app.live.coinPrices || {}) };
+      coinResults.forEach((el, k) => {
+        if (f.coinSlots[k].source !== "finnhub") return;
+        el.textContent = "";
+        el.dataset.state = "";
+        delete prices[f.coinSlots[k].pair];
+      });
+      app.live = { ...app.live, coinPrices: prices };
     };
     const stockKey = textField({
       key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
       set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; clearChecks(); },
     });
+    // The Finnhub coin lists use the key once it is left ("change"), not on
+    // every keystroke: each partial key would be a refused request.
+    stockKey.input.addEventListener("change", () => { coinKey = f.config.stock_key; refresh(); });
     const tickerCheck = btn(S.form.check, async () => {
       tickerResult.textContent = S.check.checking;
       tickerResult.dataset.state = "";
@@ -1052,7 +1105,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         label: S.form.slotOn, checked: f.stockSlots[i].on, badgeKey: "stocks",
         set: (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); },
       });
-      const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}` }); };
+      const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}`, moved: dir }); };
       const label = (t) => `${t}, ${S.form.stockSlot(i + 1)}`;
       const up = btn(S.form.moveUp, () => move(-1), { kind: "link", "aria-label": label(S.form.moveUp) });
       const down = btn(S.form.moveDown, () => move(1), { kind: "link", "aria-label": label(S.form.moveDown) });
@@ -1075,7 +1128,8 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),
         h("div", { class: "slot__tools" }, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null, check),
         result);
-      slotInputs[i] = input.input;
+      // After a Move: the ticker, or (an off slot's is disabled) Move again, then the other way.
+      focusTargets[`stockslot.${i}`] = () => [input.input, ...(moved > 0 ? [down, up] : [up, down]), check];
       return { el, input, onSwitch, up, down, check, i };
     });
     const slotsNote = note("", "note--info");
@@ -1107,7 +1161,246 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       }
     });
 
-    // 6. GitHub.
+    // 6. Coins: five slots like the stock ones, each with its own source. The
+    // picker offers only the pairs that source has: its coin list, loaded once
+    // per source and key (loadCoinList) and kept in app.coinLists across
+    // redraws. A list that failed is asked for again on the next drawing.
+    const SOURCES = [["coinbase", S.form.sourceCoinbase], ["finnhub", S.form.sourceFinnhub]];
+    const knownSource = (src) => SOURCES.some(([v]) => v === src);
+    let coinKey = f.config.stock_key; // the key the Finnhub lists use (follows the key field when it is left)
+    const failedLists = new Set();
+    const loadingLists = new Set();
+    const listId = (source) => `${source}|${source === "finnhub" ? coinKey : ""}`;
+    // The list slot i needs, or null: no list for a source this flasher doesn't
+    // know (the slot shows its pair as text and the error says why), and none
+    // for Finnhub without a key.
+    const wantedList = (i) => {
+      const src = f.coinSlots[i].source;
+      if (!knownSource(src) || (src === "finnhub" && !coinKey)) return null;
+      return listId(src);
+    };
+    function requestList(id, source) {
+      if (app.coinLists.has(id) || failedLists.has(id) || loadingLists.has(id)) return;
+      loadingLists.add(id);
+      loadCoinList(fetchForCoins, source, coinKey)
+        .then((list) => { app.coinLists.set(id, list); }, (e) => { report(e); failedLists.add(id); })
+        .finally(() => { loadingLists.delete(id); refresh(); }); // refresh() does nothing once the form is gone
+    }
+
+    const defName = uid("coindef");
+    const defHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinDefaultHint);
+    const defInputs = SOURCES.map(([v]) => h("input", { type: "radio", name: defName, value: v, checked: f.coinSource === v }));
+    for (const input of defInputs) {
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        f.coinSource = input.value;
+        // The empty slots are the new coins: they follow it.
+        f.coinSlots = f.coinSlots.map((s) => (s.pair ? s : { ...s, source: f.coinSource }));
+        applyCoinSlots(f);
+        changed();
+      });
+    }
+    const defGroup = h("fieldset", { class: "field radios coin-default", "aria-describedby": defHint.id },
+      h("legend", {}, head(h("span", {}, S.form.coinDefaultSource), S.form.coinDefaultSource, null, null)),
+      h("div", { class: "radios__items" }, defInputs.map((input, k) =>
+        h("label", { class: "choice" }, input, h("span", { class: "choice__text" }, SOURCES[k][1])))),
+      defHint);
+
+    const coinRows = f.coinSlots.map((_, i) => {
+      const key = `coinslot.${i}`;
+      const slotName = S.form.coinSlot(i + 1);
+      const forSlot = h("span", { class: "sr-only" }, `, ${slotName}`);
+      const result = h("p", { class: "check__result", "aria-live": "polite" });
+      coinResults[i] = result;
+      const clearResult = () => { result.textContent = ""; result.dataset.state = ""; };
+      let verify = false; // after a source change: keep what the new list has, clear what it doesn't
+      let shown = "";     // the list id and state the picker was last drawn for
+
+      // The source. A stored source this flasher doesn't know gets its own
+      // radio, so the slot's error makes sense; it goes once another is picked.
+      const stored = f.coinSlots[i].source;
+      const options = knownSource(stored) ? SOURCES : [...SOURCES, [stored, stored]];
+      const srcName = uid("src");
+      const srcInputs = options.map(([v]) => h("input", { type: "radio", name: srcName, value: v, checked: v === stored }));
+      const srcLabels = srcInputs.map((input, k) => h("label", { class: "choice" }, input, h("span", { class: "choice__text" }, options[k][1])));
+      for (const input of srcInputs) {
+        input.addEventListener("change", () => {
+          if (!input.checked) return;
+          f.coinSlots[i] = { ...f.coinSlots[i], source: input.value };
+          applyCoinSlots(f);
+          clearResult();
+          verify = true;
+          changed(key);
+          // Finnhub needs the key: take the user there (the slot's error says so too).
+          if (input.value === "finnhub" && !f.config.stock_key) stockKey.input.focus();
+        });
+      }
+      const srcGroup = h("fieldset", { class: "radios coin-source" },
+        h("legend", { class: "coin-source__legend" }, S.form.coinSource, forSlot.cloneNode(true)),
+        h("div", { class: "radios__items" }, srcLabels));
+
+      // The picker: a code search and the currencies that coin has on this source.
+      const coinId = uid("coin");
+      const datalist = h("datalist", { id: uid("coins") });
+      const coinInput = h("input", {
+        id: coinId, type: "search", class: "input input--upper", list: datalist.id, placeholder: S.form.coinSearch,
+        autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+      });
+      const loadingHint = h("p", { class: "field__hint" }, S.form.coinListLoading);
+      const curId = uid("cur");
+      const curNote = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinCurrencyNote);
+      const currency = h("select", { id: curId, class: "input", "aria-describedby": curNote.id });
+      // Without the list: the pair as text.
+      const manualId = uid("pair");
+      const manual = h("input", {
+        id: manualId, type: "text", class: "input input--upper", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+      });
+      const failedHint = h("p", { class: "field__hint" }, S.form.coinListFailed);
+      const error = errorSlot(key, [coinInput, manual]);
+
+      const listNow = () => { const id = wantedList(i); return id ? app.coinLists.get(id) || null : null; };
+      const setPair = (pair) => {
+        if (pair === f.coinSlots[i].pair) return;
+        f.coinSlots[i] = { ...f.coinSlots[i], pair };
+        applyCoinSlots(f);
+        clearResult();
+      };
+      // ask: no currency chosen yet (a placeholder first, selected).
+      const fillCurrency = (list, base, quote, ask = false) => {
+        const quotes = [...quotesFor(list, base)];
+        if (quote && !quotes.includes(quote) && !ask) quotes.unshift(quote); // a stored pair the list lacks stays visible
+        currency.replaceChildren(
+          ...(ask ? [h("option", { value: "", disabled: true }, S.form.coinCurrency)] : []),
+          ...quotes.map((q) => h("option", { value: q }, q)));
+        currency.value = ask ? "" : quote || defaultQuote(quotes);
+      };
+      coinInput.addEventListener("input", () => {
+        const base = upper(coinInput.value, coinInput);
+        const list = listNow();
+        if (!list) return;
+        datalist.replaceChildren(...searchCoins(list, base).map((b) => h("option", { value: b })));
+        if (list.has(base)) {
+          fillCurrency(list, base, defaultQuote(quotesFor(list, base)));
+          setPair(`${base}-${currency.value}`);
+        } else {
+          currency.replaceChildren();
+          setPair("");
+        }
+        changed(key);
+      });
+      currency.addEventListener("change", () => {
+        const base = upper(coinInput.value, coinInput);
+        setPair(base && currency.value ? `${base}-${currency.value}` : "");
+        changed(key);
+      });
+      manual.addEventListener("input", () => { setPair(upper(manual.value, manual)); changed(key); });
+
+      // state: "ok" (list here), "loading", "failed", "none" (no list: no key,
+      // or a source we don't know) or "idle" (greyed: nothing is loaded).
+      function draw(state, list) {
+        let { base = "", quote = "" } = f.coinSlots[i].pair ? splitPair(f.coinSlots[i].pair) : {};
+        let ask = false;
+        if (state === "ok" && verify && f.coinSlots[i].pair) {
+          if (!list.has(base)) { setPair(""); base = ""; quote = ""; }
+          else if (!quotesFor(list, base).includes(quote)) { setPair(""); quote = ""; ask = true; }
+        }
+        if (state !== "loading" && state !== "idle") verify = false;
+        const text = state === "failed" || state === "none";
+        pickBox.hidden = text;
+        manualBox.hidden = !text;
+        failedHint.hidden = state !== "failed";
+        loadingHint.hidden = state !== "loading";
+        manual.value = f.coinSlots[i].pair;
+        coinInput.value = base;
+        if (state === "ok") {
+          datalist.replaceChildren(...searchCoins(list, base).map((b) => h("option", { value: b })));
+          if (base) fillCurrency(list, base, quote, ask);
+          else currency.replaceChildren();
+        } else {
+          currency.replaceChildren(...(quote ? [h("option", { value: quote }, quote)] : []));
+        }
+      }
+
+      const onSwitch = i === 0 ? null : switchRow({
+        label: S.form.slotOn, checked: f.coinSlots[i].on, badgeKey: "coins",
+        set: (v) => { f.coinSlots[i] = { ...f.coinSlots[i], on: v }; applyCoinSlots(f); },
+      });
+      const move = (dir) => { f.coinSlots = moveSlot(f.coinSlots, i, dir); applyCoinSlots(f); showForm({ focus: `coinslot.${i + dir}`, moved: dir }); };
+      const label = (t) => `${t}, ${slotName}`;
+      const up = btn(S.form.moveUp, () => move(-1), { kind: "link", "aria-label": label(S.form.moveUp) });
+      const down = btn(S.form.moveDown, () => move(1), { kind: "link", "aria-label": label(S.form.moveDown) });
+      const check = btn(S.form.check, async () => {
+        const s = f.coinSlots[i];
+        const asked = [s.pair, s.source, f.config.stock_key];
+        result.textContent = S.check.checking;
+        result.dataset.state = "";
+        check.disabled = true;
+        { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
+        const res = await checkCoin(window.fetch.bind(window), s.source, s.pair, f.config.stock_key);
+        // Gone, or the pair, source or key changed while it ran: the answer is stale.
+        const now = f.coinSlots[i];
+        if (!alive || asked[0] !== now.pair || asked[1] !== now.source || asked[2] !== f.config.stock_key) return;
+        check.disabled = false;
+        result.textContent = coinMessage(res, asked[0]);
+        result.dataset.state = res.status === "ok" ? "ok" : "bad";
+        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [asked[0]]: res.price } };
+        refresh();
+        { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
+      }, { "aria-label": `${S.form.check}, ${slotName}` });
+
+      const pickBox = h("div", { class: "coin-pick" },
+        h("div", { class: "field" }, head(h("label", { for: coinId }, slotName), slotName, "coins", "coins"), coinInput, datalist, loadingHint),
+        h("div", { class: "field" }, h("div", { class: "field__head" }, h("label", { for: curId }, S.form.coinCurrency, forSlot.cloneNode(true))), currency, curNote));
+      const manualBox = h("div", { class: "field" },
+        head(h("label", { for: manualId }, S.form.coinPairManual, forSlot.cloneNode(true)), S.form.coinPairManual, "coins", null), manual, failedHint);
+      const el = h("div", { class: "slot slot--coin" },
+        srcGroup,
+        h("div", { class: "slot__main" }, h("div", { class: "coin-picker" }, pickBox, manualBox, error), onSwitch ? onSwitch.el : null),
+        h("div", { class: "slot__tools" }, i > 0 ? up : null, i < COIN_SLOTS - 1 ? down : null, check),
+        result);
+
+      function sync(st) {
+        const s = f.coinSlots[i];
+        const greyed = st !== "on";
+        let id = null;
+        let list = null;
+        let state = "idle";
+        if (!greyed) {
+          id = wantedList(i);
+          if (id) requestList(id, s.source);
+          list = id ? app.coinLists.get(id) || null : null;
+          state = !id ? "none" : list ? "ok" : failedLists.has(id) ? "failed" : "loading";
+        }
+        const sig = `${id}|${state}`;
+        if (sig !== shown) { shown = sig; draw(state, list); }
+        for (const input of srcInputs) { input.checked = input.value === s.source; input.disabled = greyed; }
+        if (srcLabels[2]) srcLabels[2].hidden = s.source !== stored;
+        const off = i > 0 && !s.on;
+        coinInput.disabled = greyed || off || state !== "ok";
+        currency.disabled = greyed || off || state !== "ok" || !currency.options.length;
+        manual.disabled = greyed || off;
+        if (onSwitch) onSwitch.input.disabled = greyed;
+        up.disabled = down.disabled = greyed;
+        check.disabled = greyed || off || !s.pair || !knownSource(s.source) || (s.source === "finnhub" && !f.config.stock_key);
+      }
+      // After a Move: the coin (or the pair), else the source, then Move again.
+      focusTargets[key] = () => [coinInput, manual, srcInputs.find((r) => r.checked), ...(moved > 0 ? [down, up] : [up, down]), check];
+      return { el, sync };
+    });
+    const coinsNote = note("", "note--info");
+    const coinSection = section(S.form.sections.coin, h("div", { class: "slots" }, defGroup, coinRows.map((r) => r.el)), coinsNote);
+    form.append(coinSection);
+    refreshers.push(() => {
+      const st = fieldState(f, "coins");
+      const firstWith = app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes("coins"));
+      coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
+      coinsNote.hidden = st !== "greyed";
+      coinsNote.textContent = st === "greyed" && firstWith ? S.form.needsNewer(firstWith.version) : "";
+      for (const input of defInputs) input.disabled = st !== "on";
+      for (const r of coinRows) r.sync(st);
+    });
+
+    // 7. GitHub.
     const ghResult = h("p", { class: "check__result", "aria-live": "polite" });
     const ghCheck = btn(S.form.check, async () => {
       ghResult.textContent = S.check.checking;
@@ -1140,7 +1433,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       ghOff.hidden = !!f.config.github_user;
     });
 
-    // 7. Look.
+    // 8. Look.
     const swatch = (i) => {
       const t = THEMES[i];
       const dots = [...new Set([t.sec, t.temp, t.priceUp, t.priceDown, t.ghNum])].slice(0, 4);
@@ -1224,9 +1517,10 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
 
     refresh();
-    if (focus === "wifi") (f.wifi.choice === "new" ? ssid.input : configure.input).focus();
-    const slotAt = /^stockslot\.(\d+)$/.exec(focus || "");
-    if (slotAt && slotInputs[Number(slotAt[1])]) slotInputs[Number(slotAt[1])].focus();
+    // Returned to screen(), which focuses it after its heading (and keeps the
+    // heading when nothing here can take focus).
+    focusTargets.wifi = () => [f.wifi.choice === "new" ? ssid.input : configure.input];
+    return focus && focusTargets[focus] ? focusable(focusTargets[focus]()) : null;
   });
 
   function refresh() {
@@ -1264,6 +1558,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
     f.config = mergeConfig(f.config, res.config);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
+    f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
@@ -1288,6 +1583,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
+    f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
       ? S.form.backupPartly(Object.keys(cfg).length, left)
@@ -1547,6 +1843,7 @@ async function afterFlash(entry, ui) {
   const fresh = newlyOffered(f.supported, now);
   f.supported = now;
   f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
+  f.stockSlots = stockSlots(f.config.stocks); applySlots(f); f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
   f.installed = info.fw;
   app.expectDrop = false;
   const added = [...new Set([...(got.added || []), ...fresh])];
