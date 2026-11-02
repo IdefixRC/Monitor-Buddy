@@ -2010,11 +2010,149 @@ void drawStock() {
 
 // ── GitHub page ───────────────────────────────────────────
 
-void drawCoin() {   // replaced in Task 4
+// 5x7 glyphs the display font lacks, drawn at the font's scale (bit 4 = left).
+static const uint8_t GLYPH_EURO[7]  = {0x07, 0x08, 0x1E, 0x08, 0x1E, 0x08, 0x07};
+static const uint8_t GLYPH_POUND[7] = {0x06, 0x09, 0x08, 0x1C, 0x08, 0x08, 0x1F};
+static void drawGlyph5x7(const uint8_t *rows, int x, int y, uint8_t size, uint16_t color) {
+  for (uint8_t r = 0; r < 7; r++)
+    for (uint8_t c = 0; c < 5; c++)
+      if (rows[r] & (0x10 >> c)) gfx->fillRect(x + c * size, y + r * size, size, size, color);
+}
+// The currency before a price: "$", a drawn £ or €, or "SGD ". Returns its width.
+static int drawCurrencyMark(CurrencyMark m, const char *code, int x, int y, uint8_t size, uint16_t color) {
+  if (m == CUR_EURO)  { drawGlyph5x7(GLYPH_EURO, x, y, size, color);  return 6 * size; }
+  if (m == CUR_POUND) { drawGlyph5x7(GLYPH_POUND, x, y, size, color); return 6 * size; }
+  gfx->setTextSize(size); gfx->setTextColor(color); gfx->setCursor(x, y);
+  if (m == CUR_DOLLAR) { gfx->print('$'); return 6 * size; }
+  gfx->print(code); gfx->print(' ');
+  return (int)(strlen(code) + 1) * 6 * size;
+}
+
+// 24 h line of hourly closes plus the live price, scaled into the box, with a
+// dim line at the reference (24 h open) when it falls inside the range.
+static void drawCoinChart(const CoinData &d, bool haveRef, uint16_t col, int sx, int sy, int sw, int sh) {
+  if (d.chartCount < 2) {
+    gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+    gfx->setCursor(sx + 30, sy + sh / 2 - 4);
+    gfx->print("CHART LOADING");
+    return;
+  }
+  float pts[25];
+  uint8_t n = d.chartCount > 24 ? 24 : d.chartCount;
+  memcpy(pts, d.chart, n * sizeof(float));
+  pts[n++] = (float)d.price;                  // end the line at the live price
+  float lo = pts[0], hi = pts[0];
+  for (uint8_t i = 1; i < n; i++) { lo = fminf(lo, pts[i]); hi = fmaxf(hi, pts[i]); }
+  // Flat market: keep it on screen, padded in proportion to the price.
+  if (hi - lo <= hi * 1e-6f) { const float pad = hi * 5e-4f + 1e-9f; hi += pad; lo -= pad; }
+  if (haveRef && d.ref >= lo && d.ref <= hi) {
+    const int ry = sy + sh - 1 - (int)lroundf((d.ref - lo) / (hi - lo) * (sh - 1));
+    for (int x = sx; x < sx + sw; x += 4) gfx->drawPixel(x, ry, rgb(80, 80, 80));
+  }
+  int px = 0, py = 0;
+  for (uint8_t i = 0; i < n; i++) {
+    const int x = sx + (int)lroundf((float)i * (sw - 1) / (n - 1));
+    const int y = sy + sh - 1 - (int)lroundf((pts[i] - lo) / (hi - lo) * (sh - 1));
+    if (i > 0) {
+      gfx->drawLine(px, py, x, y, col);
+      gfx->drawLine(px, py + 1, x, y + 1, col);   // 2 px thick
+    }
+    px = x; py = y;
+  }
+  gfx->fillCircle(px, py, 3, col);                // the live price
+}
+
+void drawCoin() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  const CoinData &d = netView.coins[shownCoin()];
-  centeredText(d.notFound ? "NOT FOUND" : d.valid ? settings.coins[shownCoin()].pair : "UPDATING", 74, 3);
+  const uint8_t slot = shownCoin();
+  const Coin &c = settings.coins[slot];
+  const CoinData &d = netView.coins[slot];
+  if (d.notFound) {
+    centeredText("NOT FOUND", 56, 3);
+    centeredText(c.pair, 100, 2);
+    drawPageDots(); return;
+  }
+  if (!d.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+
+  const float ref = d.ref;
+  const bool  haveRef = ref > 0.0f;
+  const bool  up = !haveRef || d.price >= ref;
+  const uint16_t col = up ? COL_PRICE_UP : COL_PRICE_DOWN;
+
+  // Price line: currency mark + number, the largest size that fits [0, 304).
+  char num[24]; formatCoinPrice(d.price, num, sizeof num);
+  char code[8]; const CurrencyMark m = currencyOf(c.pair, code, sizeof code);
+  const int markUnits = (m == CUR_CODE) ? (int)strlen(code) + 1 : 1;
+  const int numLen = (int)strlen(num);
+  uint8_t psize = 6;
+  while (psize > 3 && (markUnits + numLen) * 6 * psize > 304 - 16) psize--;
+  const int lineW = (markUnits + numLen) * 6 * psize;
+  const int py = 18 + (6 - psize) * 4;
+  int x0 = (304 - lineW) / 2; if (x0 < 0) x0 = 0;
+  const int mw = drawCurrencyMark(m, code, x0, py, psize, col);
+  gfx->setTextSize(psize); gfx->setTextColor(col);
+  gfx->setCursor(x0 + mw, py);
+  gfx->print(num);
+
+  // Base code: the part of the pair before '-'.
+  char base[12];
+  { size_t i = 0; while (c.pair[i] && c.pair[i] != '-' && i < sizeof(base) - 1) { base[i] = c.pair[i]; i++; } base[i] = '\0'; }
+
+  char cbuf[12];
+  snprintf(cbuf, sizeof(cbuf), "%+.2f%%", haveRef ? (d.price - ref) / ref * 100.0 : 0.0);
+
+  if (c.source == COIN_COINBASE) {
+    int bsize = 4;
+    while (bsize > 1 && (int)strlen(base) * 6 * bsize > 112) bsize--;   // chart starts at x 132
+    gfx->setTextSize(bsize); gfx->setTextColor(COL_TICKER);
+    gfx->setCursor(14, 82 + (4 - bsize) * 4);
+    gfx->print(base);
+    if (haveRef) {
+      gfx->setTextSize(2); gfx->setTextColor(col);
+      gfx->setCursor(14, 120);
+      gfx->print(cbuf);
+    }
+    if (d.high > 0.0f && d.low > 0.0f) {
+      char hi[16], lo[16], line[40];
+      formatCoinPrice(d.high, hi, sizeof hi);
+      formatCoinPrice(d.low, lo, sizeof lo);
+      snprintf(line, sizeof line, "H %s  L %s", hi, lo);
+      gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+      gfx->setCursor(14, 144);
+      gfx->print(line);
+    }
+    const int sx = 132, sy = 82, sw = SCREEN_W - 14 - sx, sh = 58;
+    drawCoinChart(d, haveRef, col, sx, sy, sw, sh);
+  } else {
+    // Finnhub: the stock page's layout. Ref is the previous close, else the open.
+    const float fref = d.ref > 0.0f ? d.ref : d.open;
+    const bool fup = d.price >= fref;
+    const uint16_t fcol = fup ? COL_PRICE_UP : COL_PRICE_DOWN;
+    int tsize = 4;
+    while (tsize > 1 && (int)strlen(base) * 6 * tsize > 132) tsize--;
+    gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
+    gfx->setCursor(14, (fref > 0.0f ? 112 : 124) - 4 * tsize);
+    gfx->print(base);
+    if (fref > 0.0f) {
+      snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (d.price - fref) / fref * 100.0);
+      gfx->setTextSize(2); gfx->setTextColor(fcol);
+      gfx->setCursor(14, 132);
+      gfx->print(cbuf);
+    }
+    char vo[16], vh[16], vl[16];
+    formatCoinPrice(d.open, vo, sizeof vo);
+    formatCoinPrice(d.high, vh, sizeof vh);
+    formatCoinPrice(d.low, vl, sizeof vl);
+    size_t mx = strlen(vo); if (strlen(vh) > mx) mx = strlen(vh); if (strlen(vl) > mx) mx = strlen(vl);
+    // Labels of 6 chars ("OPEN  ") plus the value must end before x 306.
+    const uint8_t vsize = ((6 + (int)mx) * 12 <= 306 - 150) ? 2 : 1;
+    gfx->setTextSize(vsize); gfx->setTextColor(COL_VALUE);
+    const int ys[3] = {92, 116, 140};
+    gfx->setCursor(150, ys[0]); gfx->print("OPEN  "); gfx->print(vo);
+    gfx->setCursor(150, ys[1]); gfx->print("HIGH  "); gfx->print(vh);
+    gfx->setCursor(150, ys[2]); gfx->print("LOW   "); gfx->print(vl);
+  }
   drawPageDots();
 }
 
