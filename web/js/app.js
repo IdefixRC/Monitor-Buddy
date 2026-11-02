@@ -1303,6 +1303,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         if (state === "ok" && verify && f.coinSlots[i].pair) {
           if (!list.has(base)) { setPair(""); base = ""; quote = ""; }
           else if (!quotesFor(list, base).includes(quote)) { setPair(""); quote = ""; ask = true; }
+          // This runs inside refresh(), after the errors were worked out from the
+          // old pair: refresh again so the slot's error and the notes follow.
+          if (!f.coinSlots[i].pair) queueMicrotask(refresh);
         }
         if (state !== "loading" && state !== "idle") verify = false;
         const text = state === "failed" || state === "none";
