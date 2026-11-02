@@ -2075,7 +2075,8 @@ void drawCoin() {
   }
   if (!d.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
 
-  const float ref = d.ref;
+  // Finnhub measures against the previous close, falling back to the open.
+  const float ref = (c.source == COIN_FINNHUB && d.ref <= 0.0f) ? d.open : d.ref;
   const bool  haveRef = ref > 0.0f;
   const bool  up = !haveRef || d.price >= ref;
   const uint16_t col = up ? COL_PRICE_UP : COL_PRICE_DOWN;
@@ -2122,13 +2123,12 @@ void drawCoin() {
       gfx->setCursor(14, 144);
       gfx->print(line);
     }
-    const int sx = 132, sy = 82, sw = SCREEN_W - 14 - sx, sh = 58;
+    const int sx = 132, sy = 82, sw = SCREEN_W - 17 - sx, sh = 58;
     drawCoinChart(d, haveRef, col, sx, sy, sw, sh);
   } else {
     // Finnhub: the stock page's layout. Ref is the previous close, else the open.
-    const float fref = d.ref > 0.0f ? d.ref : d.open;
-    const bool fup = d.price >= fref;
-    const uint16_t fcol = fup ? COL_PRICE_UP : COL_PRICE_DOWN;
+    const float fref = ref;
+    const uint16_t fcol = col;
     int tsize = 4;
     while (tsize > 1 && (int)strlen(base) * 6 * tsize > 132) tsize--;
     gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
