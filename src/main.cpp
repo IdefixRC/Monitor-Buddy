@@ -104,6 +104,7 @@
 #include "settings.h"
 #include "protocol.h"
 #include "display_fmt.h"
+#include "coin.h"
 
 // Set from the release tag by the release workflow (-DFW_VERSION=\"1.2.0\").
 #ifndef FW_VERSION
@@ -202,6 +203,9 @@ static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-
 // One call per minute is well within that, so this configuration will not hit
 // the rate limit. Fetches only happen while the stock page is actually shown.
 #define STOCK_REFRESH_MS  60000UL   // minimum ms between stock API calls (60 s)
+// The coin on screen: its price every minute, its hourly chart every 15 minutes.
+static constexpr uint32_t COIN_REFRESH_MS       = 60000UL;
+static constexpr uint32_t COIN_CHART_REFRESH_MS = 15UL * 60UL * 1000UL;
 
 static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
@@ -302,6 +306,10 @@ void drawHeader(const char *title);
 void switchApp(int8_t delta);
 void buildPageList();
 void buildStockList();
+void buildCoinList();
+bool coinConfigured();
+bool fetchCoin();
+void drawCoin();
 bool wifiConfigured();
 bool githubConfigured();
 bool stockConfigured();
@@ -712,9 +720,17 @@ float pressPulse   = 0.0f;
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
 struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
+struct CoinData {
+  bool     valid, notFound;
+  double   price;                 // a float keeps ~7 digits; BTC's cents need more
+  float    open, high, low, ref;  // ref: Coinbase 24 h open, Finnhub previous close
+  uint8_t  chartCount;            // Coinbase only; 0 = no chart yet
+  float    chart[24];             // hourly closes, oldest first
+  uint32_t updatedAt, chartAt;
+};
 // One quote per stock slot (indexed like settings.stocks), so tapping back to
 // a stock shows its last value at once.
-struct NetData     { WeatherData weather; StockData stocks[SETTINGS_STOCK_MAX]; GithubData github; };
+struct NetData     { WeatherData weather; StockData stocks[SETTINGS_STOCK_MAX]; GithubData github; CoinData coins[SETTINGS_COIN_MAX]; };
 
 NetData           netShared = {};
 NetData           netView   = {};
@@ -736,6 +752,23 @@ void buildStockList() {
 
 // The slot of the stock on screen.
 static uint8_t shownStock() { return stockActive[stockActiveCount ? stockSub % stockActiveCount : 0]; }
+
+// The coin slots that can be shown: on, and Coinbase or (Finnhub with a key).
+uint8_t          coinActive[SETTINGS_COIN_MAX];
+uint8_t          coinActiveCount = 0;
+volatile uint8_t coinSub         = 0;   // position in coinActive; read by netTask
+uint8_t          coinFetchIdx    = 0;   // the slot fetchCoin() asks for (netTask only)
+
+void buildCoinList() {
+  coinActiveCount = 0;
+  for (uint8_t i = 0; i < settings.coinCount && i < SETTINGS_COIN_MAX; i++) {
+    const Coin &c = settings.coins[i];
+    if (c.on && (c.source == COIN_COINBASE || settings.stockKey[0] != ' ')) coinActive[coinActiveCount++] = i;
+  }
+  if (coinSub >= coinActiveCount) coinSub = 0;
+}
+static uint8_t shownCoin() { return coinActive[coinActiveCount ? coinSub % coinActiveCount : 0]; }
+bool coinConfigured() { return coinActiveCount > 0; }
 
 // Store one fetch result for the UI. The lock covers only this copy.
 template <typename T>
@@ -1005,11 +1038,13 @@ void drawPageDots() {
   }
   // Entry dots on the right edge on a page with several entries (spec D9):
   // filled = the stock shown, hollow = the others, like the page dots.
-  if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
-    for (uint8_t i = 0; i < stockActiveCount; i++) {
-      const int y = subDotY(i, stockActiveCount, SCREEN_H);
-      if (i == stockSub) gfx->fillCircle(SCREEN_W - 8, y, 3, FG);
-      else               gfx->drawCircle(SCREEN_W - 8, y, 2, rgb(90, 90, 90));
+  const uint8_t entries = currentApp == PAGE_STOCK ? stockActiveCount : currentApp == PAGE_COIN ? coinActiveCount : 0;
+  const uint8_t shown   = currentApp == PAGE_STOCK ? stockSub : coinSub;
+  if (entries >= 2) {
+    for (uint8_t i = 0; i < entries; i++) {
+      const int y = subDotY(i, entries, SCREEN_H);
+      if (i == shown % entries) gfx->fillCircle(SCREEN_W - 8, y, 3, FG);
+      else                      gfx->drawCircle(SCREEN_W - 8, y, 2, rgb(90, 90, 90));
     }
   }
 }
@@ -1054,7 +1089,7 @@ void buildPageList() {
   for (uint8_t n = 0; n < SETTINGS_PAGE_COUNT; n++) {
     const uint8_t i = PAGE_SHOW_ORDER[n];
     if (!settings.pages[i]) continue;
-    if (i == PAGE_COIN) continue;  // drawn from Task 3
+    if (i == PAGE_COIN && !coinConfigured()) continue;      // nothing to show hides the page
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     pageOrder[pageCount++] = i;
@@ -1287,6 +1322,92 @@ bool fetchStock() {
   s.updatedAt = millis();
   s.valid     = true;
   publishNetData(netShared.stocks[slot], s);
+  return true;
+}
+
+// ── Coin fetch ────────────────────────────────────────────
+// Coinbase Exchange (no key): /products/<pair>/stats for the price, and
+// /candles?granularity=3600 for the 24 h chart, scanned in place by
+// parseCandleCloses (a response is about 21 KB). Finnhub (key) gives the same
+// quote shape as a stock, for COINBASE:<pair>, but no chart.
+
+// One HTTPS GET into `body`. False on any failure; *status gets the HTTP code
+// (0 if no response), so a 404 can be told apart.
+static bool coinbaseGet(const char *url, String &body, int *status) {
+  *status = 0;
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setUserAgent("Monitor-Buddy/" FW_VERSION);   // Coinbase rejects requests without one
+  if (!http.begin(client, url)) return false;
+  *status = http.GET();
+  if (*status != HTTP_CODE_OK) { http.end(); return false; }
+  body = http.getString();
+  http.end();
+  return body.length() > 0;
+}
+
+// The coin on screen (coinFetchIdx), from its source. Unknown pair -> notFound.
+// NOTE: settings.stockKey holds the Finnhub API token. Never log it.
+bool fetchCoin() {
+  if (!ensureWifi()) return false;
+  const uint8_t slot = coinFetchIdx;
+  const Coin &c = settings.coins[slot];
+  CoinData d = netShared.coins[slot];   // netTask is the only writer
+  if (c.source == COIN_FINNHUB) {
+    // Same reply as a stock quote; all zeros for a pair Finnhub doesn't know.
+    WiFiClientSecure client; client.useBuiltinCACertBundle(); client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+    HTTPClient http; http.setTimeout(HTTP_TIMEOUT_MS); http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+    String url = String("https://finnhub.io/api/v1/quote?symbol=COINBASE:") + c.pair + "&token=" + settings.stockKey;
+    if (!http.begin(client, url)) return false;
+    if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+    JsonDocument doc;
+    const DeserializationError err = deserializeJson(doc, http.getString());
+    http.end();
+    if (err) return false;
+    const double last = doc["c"] | 0.0;
+    if (last <= 0.0) { d.notFound = true; publishNetData(netShared.coins[slot], d); return true; }
+    d.price = last; d.open = doc["o"] | 0.0f; d.high = doc["h"] | 0.0f; d.low = doc["l"] | 0.0f;
+    d.ref = doc["pc"] | 0.0f;
+  } else {
+    char url[96];
+    snprintf(url, sizeof url, "https://api.exchange.coinbase.com/products/%s/stats", c.pair);
+    String body; int status = 0;
+    if (!coinbaseGet(url, body, &status)) {
+      if (status == 404) { d.notFound = true; publishNetData(netShared.coins[slot], d); return true; }
+      return false;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) return false;
+    const double last = strtod(doc["last"] | "0", nullptr);
+    if (last <= 0.0) return false;
+    d.price = last;
+    d.open = d.ref = strtof(doc["open"] | "0", nullptr);
+    d.high = strtof(doc["high"] | "0", nullptr);
+    d.low  = strtof(doc["low"]  | "0", nullptr);
+    // The chart changes hourly; it needs the clock for its time range.
+    if (clockTrusted && (d.chartCount == 0 || millis() - d.chartAt >= COIN_CHART_REFRESH_MS)) {
+      char from[24], to[24];
+      const long long now = (long long)time(nullptr);
+      if (formatIsoUtc(now - 24LL * 3600, from, sizeof from) && formatIsoUtc(now, to, sizeof to)) {
+        char curl[192];
+        snprintf(curl, sizeof curl, "https://api.exchange.coinbase.com/products/%s/candles?granularity=3600&start=%s&end=%s", c.pair, from, to);
+        String candles; int cs = 0;
+        if (coinbaseGet(curl, candles, &cs)) {
+          float pts[24];
+          const uint8_t n = parseCandleCloses(candles.c_str(), pts, 24);
+          if (n >= 2) { memcpy(d.chart, pts, n * sizeof(float)); d.chartCount = n; d.chartAt = millis(); }
+          else Serial.println("[net] coin: candles response not understood");
+        }
+      }
+    }
+  }
+  d.updatedAt = millis();
+  d.valid = true;
+  publishNetData(netShared.coins[slot], d);
   return true;
 }
 
@@ -1889,6 +2010,14 @@ void drawStock() {
 
 // ── GitHub page ───────────────────────────────────────────
 
+void drawCoin() {   // replaced in Task 4
+  gfx->fillScreen(BG);
+  if (drawWifiGate()) return;
+  const CoinData &d = netView.coins[shownCoin()];
+  centeredText(d.notFound ? "NOT FOUND" : d.valid ? settings.coins[shownCoin()].pair : "UPDATING", 74, 3);
+  drawPageDots();
+}
+
 void drawGithub() {
   gfx->fillScreen(BG);
   if (!githubConfigured()) {
@@ -2359,6 +2488,9 @@ void triggerFaceTap() {
   } else if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
     stockSub = (stockSub + 1) % stockActiveCount;
     pressPulse = 1.0f;
+  } else if (currentApp == PAGE_COIN && coinActiveCount >= 2) {
+    coinSub = (coinSub + 1) % coinActiveCount;
+    pressPulse = 1.0f;
   } else {
     switchApp(1);
   }
@@ -2523,7 +2655,7 @@ static void logNetHealth() {
 }
 
 void netTask(void *) {
-  FetchPacer weatherPacer, stockPacer, githubPacer;
+  FetchPacer weatherPacer, stockPacer, githubPacer, finnhubCoinPacer, coinbasePacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2539,7 +2671,17 @@ void netTask(void *) {
     const StockData &shownQuote = netShared.stocks[slot];
     const bool stockDue = settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK
         && (!shownQuote.valid || now - shownQuote.updatedAt >= STOCK_REFRESH_MS) && stockPacer.ready(now);
-    if (stockDue) {
+    const uint8_t cslot = shownCoin();
+    const CoinData &cq = netShared.coins[cslot];
+    const bool coinFinnhub = settings.coins[cslot].source == COIN_FINNHUB;
+    FetchPacer &coinPacer = coinFinnhub ? finnhubCoinPacer : coinbasePacer;
+    const bool coinDue = settings.pages[PAGE_COIN] && coinConfigured() && currentApp == PAGE_COIN
+        && !cq.notFound && (!cq.valid || now - cq.updatedAt >= COIN_REFRESH_MS) && coinPacer.ready(now);
+    if (coinDue) {
+      coinFetchIdx = cslot;
+      runFetch("coin", fetchCoin, coinPacer, now, 0, FETCH_RETRY_MS);
+      ran = usedTls = true;
+    } else if (stockDue) {
       stockFetchIdx = slot;
       runFetch("stock", fetchStock, stockPacer, now, 0, FETCH_RETRY_MS);
       ran = usedTls = true;
@@ -2641,6 +2783,7 @@ void setup() {
 
   // Build the enabled-page list from settings.pages.
   buildStockList();
+  buildCoinList();
   buildPageList();
   // Seed the clock from the compile time as a safe fallback. syncNTP()
   // replaces it with the real time once Wi-Fi is up.
@@ -2783,7 +2926,9 @@ void loop() {
     case 3: drawWeather();    break;
     case 4: drawMoon();       break;
     case 5: drawStock();      break;
-    default: drawGithub();    break;
+    case 6: drawGithub();     break;  // PAGE_GITHUB
+    case 7: drawCoin();       break;  // PAGE_COIN
+    default: drawFace(tx, ty); break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   // A deadline is cleared once it passes, so it never goes stale long enough
