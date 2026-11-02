@@ -763,7 +763,7 @@ void buildCoinList() {
   coinActiveCount = 0;
   for (uint8_t i = 0; i < settings.coinCount && i < SETTINGS_COIN_MAX; i++) {
     const Coin &c = settings.coins[i];
-    if (c.on && (c.source == COIN_COINBASE || settings.stockKey[0] != ' ')) coinActive[coinActiveCount++] = i;
+    if (c.on && (c.source == COIN_COINBASE || settings.stockKey[0] != '\0')) coinActive[coinActiveCount++] = i;
   }
   if (coinSub >= coinActiveCount) coinSub = 0;
 }
