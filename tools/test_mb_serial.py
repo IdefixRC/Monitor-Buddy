@@ -26,6 +26,15 @@ class ParseSetArgs(unittest.TestCase):
         self.assertNotIn("coins", mb_serial.expected_keys(1))
         self.assertIn("coins", mb_serial.expected_keys(2))
 
+    def test_coins_points_at_the_file_form(self):
+        for arg in ("coins=BTC-USD", "coins="):
+            with self.assertRaisesRegex(ValueError, "set @file"):
+                mb_serial.parse_set_args([arg])
+
+    def test_coins_via_file_body(self):
+        body = '{"config":{"coins":[{"pair":"BTC-USD","source":"coinbase","on":true}]}}'
+        self.assertEqual(mb_serial.parse_set_args([body])["config"]["coins"][0]["pair"], "BTC-USD")
+
     def test_coin_page_switch(self):
         self.assertEqual(mb_serial.parse_set_args(["pages.coin=false"]), {"config": {"pages": {"coin": False}}})
 

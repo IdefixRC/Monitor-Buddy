@@ -379,11 +379,15 @@ def parse_set_args(args):
             if not symbols:
                 raise ValueError("stocks needs at least one ticker (e.g. stocks=AAPL,MSFT)")
             config["stocks"] = [{"symbol": sym, "on": True} for sym in symbols]
+        elif key == "coins":
+            raise ValueError("coins are records (pair, source, on) and do not fit key=value; "
+                             'use a file: set @file.json with {"config":{"coins":[{"pair":"BTC-USD",'
+                             '"source":"coinbase","on":true}]}}')
         elif key in CONFIG_KEYS:
             config[key] = value
         else:
             raise ValueError(f"unknown setting '{key}' (use one of: "
-                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>)")
+                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>; coins via @file)")
     return {"config": config}
 
 

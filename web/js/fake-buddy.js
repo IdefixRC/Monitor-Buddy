@@ -35,7 +35,7 @@ export function fakeDevice(params) {
     answers,
     fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
     cfg_v: params.get("keys") === "1.2.0" ? 1 : 2,
-    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755", stocks: [{ symbol: "AAPL", on: true }, { symbol: "MSFT", on: false }] }),
+    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755", stocks: [{ symbol: "AAPL", on: true }, { symbol: "MSFT", on: false }], coins: [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }], pages: { coin: true } }),
     stored: true,
     added: [],
     wifi: params.has("nowifi") ? { saved: false, ssid: "", password: "" } : { saved: true, ssid: "HomeNet", password: "secret123" },
