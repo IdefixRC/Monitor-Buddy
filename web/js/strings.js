@@ -165,6 +165,19 @@ export const S = {
 
   form: {
     stockSlot: (n) => `Stock ${n}`,
+    coinSlot: (n) => `Coin ${n}`,
+    coinSource: "Source",
+    sourceCoinbase: "Coinbase",
+    sourceFinnhub: "Finnhub",
+    coinDefaultSource: "New coins use",
+    coinDefaultHint: "Coinbase needs no key and draws a 24-hour chart. Finnhub uses your stock key and shows the day's open, high and low against the previous close, with no chart.",
+    coinPick: "Coin",
+    coinSearch: "Type a code, for example BTC",
+    coinCurrency: "Currency",
+    coinCurrencyNote: "Not every coin is available in every currency.",
+    coinListLoading: "Loading the coin list…",
+    coinListFailed: "I couldn't load the coin list. Type the pair instead, for example SOL-EUR.",
+    coinPairManual: "Pair",
     slotOn: "On",
     moveUp: "Move up",
     moveDown: "Move down",
@@ -215,6 +228,7 @@ export const S = {
       units: "Units",
       pages: "Pages",
       stock: "Stock",
+      coin: "Coins",
       github: "GitHub",
       look: "Look",
       firmware: "Firmware",
@@ -324,6 +338,8 @@ export const S = {
   // Field errors, keyed like the firmware's SET errors.
   errors: {
     stockSlotEmpty: "Fill in a ticker, or switch this slot off.",
+    coinSlotEmpty: "Pick a coin, or switch this slot off.",
+    coinNeedsKey: "Finnhub needs your Finnhub key, in the Stock section.",
     mount: "Choose left or right.",
     theme: "Choose one of the five themes.",
     github_user: "Up to 39 letters, digits and dashes.",
@@ -352,6 +368,12 @@ export const S = {
       ticker_not_found: "Ticker not found, or not covered by a free Finnhub key (the free plan covers US stocks only).",
       rate_limited: "Too many checks. Wait a minute.",
       network: "Couldn't reach Finnhub.",
+    },
+    coin: {
+      ok: (pair, price) => `OK — ${pair} ${price}`,
+      not_found: "Pair not found, or not covered by your plan. Check the code and currency, or try the other source.",
+      bad_key: "Key rejected. Check it on finnhub.io.",
+      network: "Couldn't reach the price service.",
     },
     github: {
       ok: (followers, repos) => `OK — ${count(followers, "follower", "followers")}, ${count(repos, "repo", "repos")}`,

@@ -8,8 +8,9 @@ import {
   joinedWifi, resultKind, offered, WIFI_WAIT_MS, locationSummary, FLOWS, afterRecovery, setTicker,
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
+  COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
 } from "../web/js/form.js";
-import { KEYS, mergeConfig, BASELINE_PATHS } from "../web/js/settings.js";
+import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
 import { S } from "../web/js/strings.js";
 
@@ -606,4 +607,71 @@ test("dropSlotErrors: clears the raw server keys of one slot", () => {
   assert.deepEqual(errs, { "stocks[0].symbol": "y", ticker: "t", stocks: "l", theme: "q" });
   dropSlotErrors(f, errs, 0);
   assert.deepEqual(errs, { theme: "q" });
+});
+
+test("coinSlots: five slots, slot 1 on, empty ones off with the default source", () => {
+  const s = coinSlots([{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }], "finnhub");
+  assert.equal(s.length, COIN_SLOTS);
+  assert.deepEqual(s[1], { pair: "SOL-EUR", source: "finnhub", on: false });
+  assert.deepEqual(s[4], { pair: "", source: "finnhub", on: false });
+});
+test("slotsToCoins keeps switched-off coins and drops empty slots", () => {
+  const { coins, slotOf } = slotsToCoins([{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "", source: "coinbase", on: false }, { pair: "ETH-EUR", source: "finnhub", on: false }, { pair: "", source: "coinbase", on: false }, { pair: "", source: "coinbase", on: false }]);
+  assert.deepEqual(coins, [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "ETH-EUR", source: "finnhub", on: false }]);
+  assert.deepEqual(slotOf, [0, 2]);
+});
+test("a Finnhub coin that is on needs the key", () => {
+  const all = [...PATHS_BY_CFG[2]];
+  const f = newFormState({ ...DEFAULTS, stock_key: "" }, { flow: "change", info: INFO_SAVED, supported: all });
+  f.coinSlots[1] = { pair: "SOL-EUR", source: "finnhub", on: true };
+  applyCoinSlots(f);
+  assert.equal(formErrors(f, zones)["coinslot.1"], S.errors.coinNeedsKey);
+});
+test("an empty coin slot that is on is an error", () => {
+  const all = [...PATHS_BY_CFG[2]];
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: all });
+  f.coinSlots[1] = { pair: "", source: "coinbase", on: true };
+  applyCoinSlots(f);
+  assert.equal(formErrors(f, zones)["coinslot.1"], S.errors.coinSlotEmpty);
+});
+test("coin errors stay out of a form whose firmware has no coins", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED });
+  f.coinSlots[1] = { pair: "", source: "coinbase", on: true };
+  applyCoinSlots(f);
+  assert.deepEqual(Object.keys(formErrors(f, zones)).filter((k) => k.startsWith("coin")), []);
+});
+test("previewPageFor maps coin slots to the coin page", () => {
+  assert.equal(previewPageFor("coinslot.2", { ...DEFAULTS }), "coin");
+  assert.equal(previewPageFor("check.coin", { ...DEFAULTS }), "coin");
+});
+test("newFormState sets up coin slots and applyCoinSlots writes coins", () => {
+  const f = newFormState(DEFAULTS, { flow: "change" });
+  assert.equal(f.coinSource, "coinbase");
+  assert.equal(f.coinSlots.length, COIN_SLOTS);
+  assert.deepEqual(f.coinSlotOf, [0]);
+  f.coinSlots[2] = { pair: "ETH-EUR", source: "coinbase", on: false };
+  applyCoinSlots(f);
+  assert.deepEqual(f.config.coins.map((c) => c.pair), ["BTC-USD", "ETH-EUR"]);
+  assert.equal(coinIndexOfSlot(f, 2), 1);
+  assert.equal(coinIndexOfSlot(f, 1), -1);
+});
+test("remapStockErrors remaps coin errors to coin slots", () => {
+  const all = [...PATHS_BY_CFG[2]];
+  const f = newFormState(DEFAULTS, { flow: "change", supported: all });
+  f.coinSlots[3] = { pair: "ETH-EUR", source: "coinbase", on: true };
+  applyCoinSlots(f);
+  const e = remapStockErrors(f, { "coins[1].pair": "x", coins: "l", theme: "q" });
+  assert.deepEqual(e, { "coinslot.3": "x", "coinslot.0": "l", theme: "q" });
+  const g = newFormState(DEFAULTS, { flow: "change" });
+  assert.deepEqual(remapStockErrors(g, { "coins[0].pair": "x", coins: "l", "coinslot.1": "z", theme: "q" }), { theme: "q" });
+});
+test("dropSlotErrors handles coins", () => {
+  const f = newFormState(DEFAULTS, { flow: "change" });
+  f.coinSlots[2] = { pair: "ETH-EUR", source: "coinbase", on: true };
+  applyCoinSlots(f);
+  const errs = { "coins[0].pair": "a", "coins[1].pair": "b", coins: "l", "stocks[0].symbol": "s" };
+  dropSlotErrors(f, errs, 2, "coin");
+  assert.deepEqual(errs, { "coins[0].pair": "a", coins: "l", "stocks[0].symbol": "s" });
+  dropSlotErrors(f, errs, 0, "coin");
+  assert.deepEqual(errs, { "stocks[0].symbol": "s" });
 });

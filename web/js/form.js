@@ -100,6 +100,9 @@ export function newFormState(config, { flow, info = null, added = [], imported =
   };
   state.stockSlots = stockSlots(state.config.stocks);
   state.stockSlotOf = slotsToStocks(state.stockSlots).slotOf;
+  state.coinSource = "coinbase"; // what a new coin slot uses until the user picks
+  state.coinSlots = coinSlots(state.config.coins, state.coinSource);
+  state.coinSlotOf = slotsToCoins(state.coinSlots).slotOf;
   return state;
 }
 
@@ -149,29 +152,64 @@ export function formToRequest(state) {
   return req;
 }
 
-// ── Stock slots (spec stocks-and-coins §6.1) ──────────────
+// ── Slots (spec stocks-and-coins §6.1) ────────────────────
 // Five slots in the form; the board stores the filled ones in slot order,
-// switched-off ones included (on: false). Slot 1 is always on.
+// switched-off ones included (on: false). Slot 1 is always on. Stocks and
+// coins share these two helpers.
 export const STOCK_SLOTS = 5;
+export const COIN_SLOTS = 5;
 
-export function stockSlots(stocks) {
-  const list = Array.isArray(stocks) ? stocks : [];
-  return Array.from({ length: STOCK_SLOTS }, (_, i) => {
-    const e = list[i];
-    if (!e || typeof e.symbol !== "string") return { symbol: "", on: i === 0 };
-    return { symbol: e.symbol, on: i === 0 ? true : e.on !== false };
+// `count` slots from a stored list: entry i fills slot i when isFilled says it
+// is a real entry (fill(entry, i) builds the slot), else the slot is blank(i).
+function slotsFrom(list, blank, isFilled, fill, count) {
+  const src = Array.isArray(list) ? list : [];
+  return Array.from({ length: count }, (_, i) => {
+    const e = src[i];
+    return e && isFilled(e) ? fill(e, i) : blank(i);
   });
 }
 
-export function slotsToStocks(slots) {
-  const stocks = [];
+// The stored list of the filled slots, in slot order, and which form slot
+// each one came from. pick(slot, i) builds the stored entry.
+function slotsToList(slots, isFilled, pick) {
+  const list = [];
   const slotOf = [];
   slots.forEach((s, i) => {
-    if (!s.symbol) return;
-    stocks.push({ symbol: s.symbol, on: i === 0 ? true : !!s.on });
+    if (!isFilled(s)) return;
+    list.push(pick(s, i));
     slotOf.push(i);
   });
-  return { stocks, slotOf };
+  return { list, slotOf };
+}
+
+export function stockSlots(stocks) {
+  return slotsFrom(stocks, (i) => ({ symbol: "", on: i === 0 }),
+    (e) => typeof e.symbol === "string",
+    (e, i) => ({ symbol: e.symbol, on: i === 0 ? true : e.on !== false }), STOCK_SLOTS);
+}
+
+export function slotsToStocks(slots) {
+  const { list, slotOf } = slotsToList(slots, (s) => !!s.symbol,
+    (s, i) => ({ symbol: s.symbol, on: i === 0 ? true : !!s.on }));
+  return { stocks: list, slotOf };
+}
+
+const COIN_SOURCES = ["coinbase", "finnhub"];
+
+export function coinSlots(coins, defaultSource = "coinbase") {
+  return slotsFrom(coins, (i) => ({ pair: "", source: defaultSource, on: i === 0 }),
+    (e) => typeof e.pair === "string",
+    (e, i) => ({
+      pair: e.pair,
+      source: COIN_SOURCES.includes(e.source) ? e.source : defaultSource,
+      on: i === 0 ? true : e.on !== false,
+    }), COIN_SLOTS);
+}
+
+export function slotsToCoins(slots) {
+  const { list, slotOf } = slotsToList(slots, (s) => !!s.pair,
+    (s, i) => ({ pair: s.pair, source: s.source, on: i === 0 ? true : !!s.on }));
+  return { coins: list, slotOf };
 }
 
 export function moveSlot(slots, i, dir) {
@@ -185,6 +223,15 @@ export function moveSlot(slots, i, dir) {
 
 // The index in config.stocks of form slot `slot`, or -1 when that slot isn't stored.
 export const stockIndexOfSlot = (state, slot) => (state.stockSlotOf || []).indexOf(slot);
+
+// The index in config.coins of form slot `slot`, or -1 when that slot isn't stored.
+export const coinIndexOfSlot = (state, slot) => (state.coinSlotOf || []).indexOf(slot);
+
+export function applyCoinSlots(state) {
+  const { coins, slotOf } = slotsToCoins(state.coinSlots);
+  state.config.coins = coins;
+  state.coinSlotOf = slotOf;
+}
 
 export function applySlots(state) {
   const { stocks, slotOf } = slotsToStocks(state.stockSlots);
@@ -236,44 +283,56 @@ export function fieldMessage(key, raw) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// Errors on stocks keyed like the form: stocks[k]... -> stockslot.<slot of k>.
-// With stocks offered, `ticker` and the list's own error land on slot 1 (an
-// existing message there wins); without, every stock key is dropped.
+// Errors on stocks and coins keyed like the form: stocks[k]... -> stockslot.<slot
+// of k>, coins[k]... -> coinslot.<slot of k>. With the list offered, the list's
+// own error (and `ticker` for stocks) lands on slot 1 (an existing message there
+// wins); without, every key of that list is dropped.
 // Works for both the form's own errors and the Buddy's SET errors.
-export function remapStockErrors(state, errors) {
-  const out = { ...errors };
+function remapListErrors(state, out, { list, slotKey, slotOf, extra }) {
+  const re = new RegExp(`^${list}\\[(\\d+)\\]`);
   for (const [key, msg] of Object.entries(out)) {
-    const m = /^stocks\[(\d+)\]/.exec(key);
+    const m = re.exec(key);
     if (!m) continue;
     delete out[key];
-    const slot = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
-    out[`stockslot.${slot}`] = msg;
+    const slot = slotOf ? slotOf[Number(m[1])] : Number(m[1]);
+    out[`${slotKey}.${slot}`] = msg;
   }
-  if (fieldState(state, "stocks") !== "on") {
+  if (fieldState(state, list) !== "on") {
     // Not offered by the deciding firmware: the list is not validated.
     for (const key of Object.keys(out)) {
-      if (key === "stocks" || key.startsWith("stocks[") || key.startsWith("stockslot.")) delete out[key];
+      if (key === list || key.startsWith(`${list}[`) || key.startsWith(`${slotKey}.`)) delete out[key];
     }
   } else {
-    for (const key of ["ticker", "stocks"]) {
+    for (const key of [...extra, list]) {
       if (key in out) {
-        if (!out["stockslot.0"]) out["stockslot.0"] = out[key];
+        if (!out[`${slotKey}.0`]) out[`${slotKey}.0`] = out[key];
         delete out[key];
       }
     }
   }
+}
+
+export function remapStockErrors(state, errors) {
+  const out = { ...errors };
+  remapListErrors(state, out, { list: "stocks", slotKey: "stockslot", slotOf: state.stockSlotOf, extra: ["ticker"] });
+  remapListErrors(state, out, { list: "coins", slotKey: "coinslot", slotOf: state.coinSlotOf, extra: [] });
   return out;
 }
 
-// Delete, in place, the raw server errors (keyed stocks[k]..., ticker, stocks)
-// that belong to form slot `slot`, so editing that slot clears them.
-export function dropSlotErrors(state, errors, slot) {
+// Delete, in place, the raw server errors that belong to form slot `slot`
+// (kind "stock": stocks[k]..., ticker, stocks; kind "coin": coins[k]..., coins),
+// so editing that slot clears them.
+export function dropSlotErrors(state, errors, slot, kind = "stock") {
+  const coin = kind === "coin";
+  const re = coin ? /^coins\[(\d+)\]/ : /^stocks\[(\d+)\]/;
+  const slotOf = coin ? state.coinSlotOf : state.stockSlotOf;
+  const listKeys = coin ? ["coins"] : ["ticker", "stocks"];
   for (const key of Object.keys(errors)) {
-    const m = /^stocks\[(\d+)\]/.exec(key);
+    const m = re.exec(key);
     if (m) {
-      const at = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
+      const at = slotOf ? slotOf[Number(m[1])] : Number(m[1]);
       if (at === slot) delete errors[key];
-    } else if (slot === 0 && (key === "ticker" || key === "stocks")) {
+    } else if (slot === 0 && listKeys.includes(key)) {
       delete errors[key];
     }
   }
@@ -293,6 +352,13 @@ export function formErrors(state, zones) {
   (state.stockSlots || []).forEach((s, i) => {
     if (fieldState(state, "stocks") === "on" && i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
   });
+  if (fieldState(state, "coins") === "on") {
+    const keyless = !String(state.config.stock_key || "").trim();
+    (state.coinSlots || []).forEach((s, i) => {
+      if (i > 0 && s.on && !s.pair) out[`coinslot.${i}`] = S.errors.coinSlotEmpty;
+      else if (s.on && s.pair && s.source === "finnhub" && keyless && !out[`coinslot.${i}`]) out[`coinslot.${i}`] = S.errors.coinNeedsKey;
+    });
+  }
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }
@@ -358,6 +424,7 @@ export function previewPageFor(key, config) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
     case "tz_name": case "tz_rule": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
+    case "check.coin": return "coin";
     case "github_user": case "check.github": return "github";
     case "mount": return "face";
     case "theme": {
@@ -367,6 +434,7 @@ export function previewPageFor(key, config) {
     default: break;
   }
   if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
+  if (typeof key === "string" && key.startsWith("coinslot.")) return "coin";
   if (typeof key === "string" && key.startsWith("pages.")) {
     const page = key.slice("pages.".length);
     return config && config.pages && config.pages[page] === true ? page : null;
