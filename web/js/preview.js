@@ -9,8 +9,8 @@
 // KEEP IN SYNC with src/main.cpp.
 
 import { createFace, bitmapPath, BITMAPS, SCREEN_W, SCREEN_H } from "./face.js";
-import { PAGE_KEYS } from "./settings.js";
 import { S } from "./strings.js";
+import { coinPriceKey } from "./coins.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const FG = "#ffffff";
@@ -60,14 +60,23 @@ export function themeColors(n) {
   return THEMES[Number.isInteger(n) && n >= 0 && n < THEMES.length ? n : 0];
 }
 
+// PAGE_SHOW_ORDER in src/main.cpp. KEEP IN SYNC.
+const SHOWN_ORDER = ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"];
+
+// The coins that are on and usable, in slot order, each with its slot: Coinbase
+// needs nothing, Finnhub needs the stock key (buildCoinList / coinConfigured).
+export const usableCoins = (config) => (Array.isArray(config && config.coins) ? config.coins : [])
+  .map((c, slot) => ({ ...c, slot }))
+  .filter((c) => c && c.pair && c.on !== false && (c.source === "finnhub" ? !!config.stock_key : true));
+
 // The enabled pages in display order, as buildPageList() builds them: an empty
-// github_user hides GitHub, an empty stock_key hides the stock page, and with
-// nothing left the face is shown.
+// github_user hides GitHub, an empty stock_key hides the stock page, no usable
+// coin hides the coin page, and with nothing left the face is shown.
 export function pageList(config) {
   const pages = (config && config.pages) || {};
-  const list = PAGE_KEYS.filter((key) => {
+  const list = SHOWN_ORDER.filter((key) => {
     if (!pages[key]) return false;
-    if (key === "coin") return false;   // until the coin page is drawn (Task 8)
+    if (key === "coin" && !usableCoins(config).length) return false;
     if (key === "github" && !config.github_user) return false;
     if (key === "stock" && !config.stock_key) return false;
     return true;
@@ -76,7 +85,7 @@ export function pageList(config) {
 }
 
 // ── 5x7 pixel font ────────────────────────────────────────
-// Rows top to bottom, "#" lit. Only what the pages print: A-Z, 0-9 and $ % . - : / +.
+// Rows top to bottom, "#" lit. Only what the pages print: A-Z, 0-9 and $ £ € % . - : / +.
 const GLYPHS = {
   "0": ".###.|#...#|#..##|#.#.#|##..#|#...#|.###.", "1": "..#..|.##..|..#..|..#..|..#..|..#..|.###.",
   "2": ".###.|#...#|....#|...#.|..#..|.#...|#####", "3": "#####|...#.|..#..|...#.|....#|#...#|.###.",
@@ -101,6 +110,8 @@ const GLYPHS = {
   "+": ".....|..#..|..#..|#####|..#..|..#..|.....", "%": "##...|##..#|...#.|..#..|.#...|#..##|...##",
   "$": "..#..|.####|#.#..|.###.|..#.#|####.|..#..",
 };
+GLYPHS["£"] = "..##.|.#..#|.#...|###..|.#...|.#...|#####"; // the firmware's drawn glyphs
+GLYPHS["€"] = "..###|.#...|####.|.#...|####.|.#...|..###";
 GLYPHS["—"] = GLYPHS["-"]; // an em dash prints as the font's dash
 
 // Path data for text at the GFX cursor (x, y), size = GFX text size.
@@ -280,6 +291,145 @@ function drawStock(c, config, live, entry) {
     + txt(`HIGH  ${DASH}`, 150, 116, 2, c.value)
     + txt(`LOW   ${DASH}`, 150, 140, 2, c.value);
 }
+
+// ── Coin page ─────────────────────────────────────────────
+
+// formatCoinPrice and currencyOf port lib/coin/coin.cpp. KEEP IN SYNC.
+// 2 decimals from 1 up; 4 significant digits below 1 (decimals = 3 - floor(log10 v),
+// at most 12); "0.00" for zero, negative or non-finite. Rounds like snprintf: the
+// exact binary value, an exact tie going to the even digit.
+export function formatCoinPrice(v) {
+  if (!Number.isFinite(v) || !(v > 0)) return "0.00";
+  const decimals = v >= 1 ? 2 : Math.min(12, 3 - Math.floor(Math.log10(v)));
+  if (v >= 1e21) return `${BigInt(v)}.00`;
+  const full = v.toFixed(100);   // the exact decimal expansion of the double
+  const dot = full.indexOf(".");
+  if (/^50*$/.test(full.slice(dot + 1 + decimals))) {
+    const kept = full.slice(0, dot + 1 + decimals);
+    if ((kept.charCodeAt(kept.length - 1) - 48) % 2 === 0) return kept;
+  }
+  return v.toFixed(decimals);
+}
+
+export function currencyOf(pair) {
+  const text = String(pair);
+  const dash = text.indexOf("-");
+  const code = dash >= 0 ? text.slice(dash + 1) : text;
+  const mark = code === "USD" || code === "USDT" ? "dollar" : code === "GBP" ? "pound" : code === "EUR" ? "euro" : "code";
+  return { mark, code };
+}
+
+// The price line's text size: the largest of 6..3 where the mark plus the
+// number fits 288 px (304 less 16), as drawCoin picks it.
+export function coinPriceSize(markUnits, numLen) {
+  let size = 6;
+  while (size > 3 && (markUnits + numLen) * 6 * size > 304 - 16) size--;
+  return size;
+}
+
+// A click steps to the next entry of a page with several; after the last it
+// moves on to the next page (the device wraps within the entries instead).
+export function clickStep(index, count) {
+  return index + 1 < count ? { index: index + 1, nextPage: false } : { index: 0, nextPage: true };
+}
+
+// Sample values for a coin the preview has no live data for.
+const SAMPLE_PRICES = { BTC: 104532.12, ETH: 3421.5, SOL: 168.42, XRP: 2.31, DOGE: 0.1834, ADA: 0.6512 };
+const SHAPE = (i) => 1 + 0.012 * Math.sin(i / 3.5) + 0.0009 * (i - 12);
+const sampleChart = (price) => Array.from({ length: 24 }, (_, i) => (price * SHAPE(i)) / SHAPE(24));
+
+// The data drawCoin draws: live where there is some, else samples. Without a
+// live reference the colour is "up" and there is no % line, like the stock page.
+function coinData(entry, live) {
+  const pair = String(entry.pair).toUpperCase();
+  const base = pair.split("-")[0];
+  const liveP = live.coinPrices ? live.coinPrices[coinPriceKey(entry.source, pair)] : undefined;
+  const liveChart = live.coinCharts ? live.coinCharts[pair] : undefined;
+  const havePrice = isNum(liveP) && liveP > 0;
+  const price = havePrice ? liveP : (SAMPLE_PRICES[base] ?? 12.3456);
+  const chart = Array.isArray(liveChart) ? liveChart : sampleChart(price);
+  const hi = Math.max(...chart);
+  const lo = Math.min(...chart);
+  return {
+    pair, base, price, chart,
+    ref: havePrice ? 0 : chart[0], open: havePrice ? 0 : chart[0] * 1.003,
+    high: havePrice ? 0 : hi * 1.002, low: havePrice ? 0 : lo * 0.998,
+  };
+}
+
+const signed = (v) => `${v < 0 ? "-" : "+"}${Math.abs(v).toFixed(2)}%`;
+
+// drawCoinChart: the 24 h closes plus the live price scaled into the box, a
+// dotted line at the reference when it is inside the range, a 2 px line and a dot.
+function coinChart(c, d, haveRef, col, sx, sy, sw, sh) {
+  if (d.chart.length < 2) return txt("CHART LOADING", sx + 30, sy + Math.trunc(sh / 2) - 4, 1, c.label);
+  const pts = [...d.chart.slice(0, 24), d.price];
+  let lo = Math.min(...pts);
+  let hi = Math.max(...pts);
+  if (hi - lo <= hi * 1e-6) { const pad = hi * 5e-4 + 1e-9; hi += pad; lo -= pad; }
+  let s = "";
+  if (haveRef && d.ref >= lo && d.ref <= hi) {
+    const ry = sy + sh - 1 - Math.round(((d.ref - lo) / (hi - lo)) * (sh - 1));
+    s += `<line x1="${sx}" y1="${ry + 0.5}" x2="${sx + sw}" y2="${ry + 0.5}" stroke="#505050" stroke-width="1" stroke-dasharray="1 3"/>`;
+  }
+  const xy = pts.map((p, i) => [
+    sx + Math.round((i * (sw - 1)) / (pts.length - 1)),
+    sy + sh - 1 - Math.round(((p - lo) / (hi - lo)) * (sh - 1)),
+  ]);
+  s += `<polyline fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" points="${xy.map(([x, y]) => `${x + 0.5},${y + 1}`).join(" ")}"/>`;
+  const [px, py] = xy[xy.length - 1];
+  return s + `<circle cx="${px}" cy="${py}" r="3" fill="${col}"/>`;
+}
+
+// drawCoin. live.coinStates[key] "notfound" / "updating" draw those states.
+export function drawCoin(c, entry, live) {
+  const key = coinPriceKey(entry.source, String(entry.pair).toUpperCase());
+  const state = live.coinStates ? live.coinStates[key] : undefined;
+  if (state === "notfound") return centred("NOT FOUND", 56, 3, FG) + centred(String(entry.pair).toUpperCase(), 100, 2, FG);
+  if (state === "updating") return centred("UPDATING", 74, 3, FG);
+
+  const d = coinData(entry, live);
+  const finnhub = entry.source === "finnhub";
+  const ref = finnhub && d.ref <= 0 ? d.open : d.ref;   // Finnhub: previous close, else the open
+  const haveRef = ref > 0;
+  const col = !haveRef || d.price >= ref ? c.priceUp : c.priceDown;
+
+  const num = formatCoinPrice(d.price);
+  const cur = currencyOf(d.pair);
+  const mark = cur.mark === "dollar" ? "$" : cur.mark === "pound" ? "£" : cur.mark === "euro" ? "€" : `${cur.code} `;
+  const psize = coinPriceSize([...mark].length, num.length);
+  const lineW = ([...mark].length + num.length) * 6 * psize;
+  let s = txt(mark + num, Math.max(0, Math.floor((304 - lineW) / 2)), 18 + (6 - psize) * 4, psize, col);
+  const base = d.base.slice(0, 11);
+  const pct = haveRef ? signed(((d.price - ref) / ref) * 100) : "";
+
+  if (!finnhub) {
+    let bsize = 4;
+    while (bsize > 1 && base.length * 6 * bsize > 112) bsize--;   // the chart starts at x 132
+    s += txt(base, 14, 82 + (4 - bsize) * 4, bsize, c.ticker);
+    if (haveRef) s += txt(pct, 14, 120, 2, col);
+    if (d.high > 0 && d.low > 0) s += txt(`H ${formatCoinPrice(d.high)}  L ${formatCoinPrice(d.low)}`, 14, 144, 1, c.label);
+    return s + coinChart(c, d, haveRef, col, 132, 82, SCREEN_W - 17 - 132, 58);
+  }
+  // Finnhub: the stock page's layout, with the coin's base code.
+  let tsize = 4;
+  while (tsize > 1 && base.length * 6 * tsize > 132) tsize--;
+  s += txt(base, 14, (haveRef ? 112 : 124) - 4 * tsize, tsize, c.ticker);
+  if (haveRef) s += txt(pct, 14, 132, 2, col);
+  const vals = [d.open, d.high, d.low].map((v) => (v > 0 ? formatCoinPrice(v) : DASH));
+  const mx = Math.max(...vals.map((v) => v.length));
+  const vsize = (6 + mx) * 12 <= 306 - 150 ? 2 : 1;   // the longest value must end before x 306
+  return s + txt(`OPEN  ${vals[0]}`, 150, 92, vsize, c.value)
+    + txt(`HIGH  ${vals[1]}`, 150, 116, vsize, c.value)
+    + txt(`LOW   ${vals[2]}`, 150, 140, vsize, c.value);
+}
+
+// A coin is live when its price came from a Check (and, on Coinbase, its chart).
+const coinIsLive = (entry, live) => {
+  const pair = String(entry.pair).toUpperCase();
+  const p = live.coinPrices ? live.coinPrices[coinPriceKey(entry.source, pair)] : undefined;
+  return isNum(p) && p > 0 && (entry.source === "finnhub" || (live.coinCharts && Array.isArray(live.coinCharts[pair])));
+};
 
 const GITHUB_D = bitmapPath(BITMAPS.github);
 
@@ -480,7 +630,7 @@ export function createPreview(container) {
   let live = {};
   let face = null;
   let tick = 0;
-  let stockIdx = 0;
+  const sub = { stock: 0, coin: 0 };   // the entry shown on the stock and the coin page
   let compact = false;
   // The pause button's text sits in its own span, so the compact strip can
   // show the icon alone and keep the accessible name.
@@ -510,7 +660,9 @@ export function createPreview(container) {
     const c = themeColors(config.theme);
     const now = new Date();
     const stocks = activeStocks(config);
-    const entry = stocks.length ? stocks[stockIdx % stocks.length] : null;
+    const coins = usableCoins(config);
+    const entry = stocks.length ? stocks[sub.stock % stocks.length] : null;
+    const coinEntry = coins.length ? coins[sub.coin % coins.length] : null;
     if (key === "face") {
       page.innerHTML = "";
       if (!face) face = createFace(faceHost);
@@ -522,13 +674,15 @@ export function createPreview(container) {
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)
         : key === "stock" ? drawStock(c, config, live, entry)
+        : key === "coin" ? (coinEntry ? drawCoin(c, coinEntry, live) : "")
         : drawGithub(c, live);
     }
     dotLayer.innerHTML = dots(cycle.pages.length, cycle.index);
-    if (key === "stock" && stocks.length >= 2) {
-      const shown = stockIdx % stocks.length;
-      for (let i = 0; i < stocks.length; i++) {
-        const cy = subDotY(i, stocks.length, SCREEN_H);
+    const entries = key === "stock" ? stocks : key === "coin" ? coins : [];
+    if (entries.length >= 2) {
+      const shown = sub[key] % entries.length;
+      for (let i = 0; i < entries.length; i++) {
+        const cy = subDotY(i, entries.length, SCREEN_H);
         dotLayer.innerHTML += i === shown
           ? `<circle cx="${SCREEN_W - 8}" cy="${cy}" r="3" fill="${FG}"/>`
           : `<circle cx="${SCREEN_W - 8}" cy="${cy}" r="2" fill="none" stroke="${DOT_OFF}" stroke-width="1.25"/>`;
@@ -538,10 +692,12 @@ export function createPreview(container) {
     let text = S.pageNames[key];
     const shownTicker = tickerOf(config, entry);
     if (key === "stock" && shownTicker) text += ` · ${shownTicker}`;
+    if (key === "coin" && coinEntry) text += ` · ${String(coinEntry.pair).toUpperCase()}`;
     if (key === "github") text += ` · ${config.github_user}`;
     const sample = (key === "weather")
       || (key === "stock" && !isNum(priceOf(live, shownTicker)))
-      || (key === "github" && !isNum(live.followers));
+      || (key === "github" && !isNum(live.followers))
+      || (key === "coin" && coinEntry && !coinIsLive(coinEntry, live));
     if (sample) text += ` (${S.previewSample})`;
     caption.textContent = text;
   }
@@ -555,11 +711,16 @@ export function createPreview(container) {
   // The clock's seconds and colon change every second.
   tick = setInterval(() => { if (cycle.page === "clock") draw(); }, 1000);
 
-  // Like a tap on the Buddy: the next stock on a stock page with several, else the next page.
+  // Like a tap on the Buddy: the next entry on a stock or coin page with
+  // several; after the last one, the next page.
   const next = () => {
-    const stocks = activeStocks(config);
-    if (cycle.page === "stock" && stocks.length >= 2) { stockIdx = (stockIdx + 1) % stocks.length; cycle.endHold(); cycle.schedule(); draw(); }
-    else cycle.next();
+    const key = cycle.page;
+    const count = key === "stock" ? activeStocks(config).length : key === "coin" ? usableCoins(config).length : 0;
+    if (count < 2) { cycle.next(); return; }
+    const step = clickStep(sub[key] % count, count);
+    sub[key] = step.index;
+    if (step.nextPage) { cycle.next(); return; }
+    cycle.endHold(); cycle.schedule(); draw();
   };
   button.addEventListener("click", next);
   const togglePause = () => { cycle.setPaused(!cycle.paused); syncPause(); };
@@ -570,7 +731,8 @@ export function createPreview(container) {
   function update(nextConfig, nextLive) {
     config = nextConfig || DEFAULT_CONFIG;
     live = nextLive || {};
-    stockIdx = Math.min(stockIdx, Math.max(0, activeStocks(config).length - 1));
+    sub.stock = Math.min(sub.stock, Math.max(0, activeStocks(config).length - 1));
+    sub.coin = Math.min(sub.coin, Math.max(0, usableCoins(config).length - 1));
     cycle.setPages(pageList(config));
     layout();
     draw();
@@ -583,12 +745,11 @@ export function createPreview(container) {
     update,
     // Jump to the page a settings change affects and hold it (PageCycle.showPage).
     showPage(pageKey, holdMs = HOLD_MS) { return cycle.showPage(pageKey, holdMs); },
-    // Show the stock at `stockIndex` in config.stocks (a Check in the form) and hold the page.
-    showEntry(pageKey, stockIndex, holdMs = HOLD_MS) {
-      if (pageKey === "stock") {
-        const at = activeStocks(config).findIndex((s) => s.slot === stockIndex);
-        if (at >= 0) stockIdx = at;
-      }
+    // Show the stock or coin at slot `slot` of config.stocks / config.coins (a Check in the form) and hold the page.
+    showEntry(pageKey, slot, holdMs = HOLD_MS) {
+      const list = pageKey === "stock" ? activeStocks(config) : pageKey === "coin" ? usableCoins(config) : [];
+      const at = list.findIndex((e) => e.slot === slot);
+      if (at >= 0) sub[pageKey] = at;
       const shown = cycle.showPage(pageKey, holdMs);
       draw();
       return shown;

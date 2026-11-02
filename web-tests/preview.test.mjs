@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textPath, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath } from "../web/js/preview.js";
 import { previewPageFor } from "../web/js/form.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
@@ -215,4 +215,96 @@ test("subDotY mirrors the firmware", () => {
   assert.equal(subDotY(0, 2, 172), 79);
   assert.equal(subDotY(1, 2, 172), 93);
   assert.equal(subDotY(4, 5, 172), 114);
+});
+
+// ── The coin page (Task 8) ────────────────────────────────
+
+test("pageList follows the device's shown order (coin after stock)", () => {
+  const cfg = { pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }, stock_key: "k", github_user: "u", coins: [{ pair: "BTC-USD", source: "coinbase", on: true }] };
+  assert.deepEqual(pageList(cfg), ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"]);
+});
+
+test("the coin page shows only with a coin that is on and usable", () => {
+  const base = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "coinbase", on: true }] };
+  assert.deepEqual(pageList(base), ["coin"]);
+  assert.deepEqual(pageList({ ...base, pages: { coin: false, clock: true } }), ["clock"]);
+  assert.deepEqual(pageList({ ...base, coins: [{ pair: "BTC-USD", source: "coinbase", on: false }] }), ["face"]);
+  assert.deepEqual(pageList({ ...base, coins: [] }), ["face"]);
+  assert.deepEqual(pageList({ ...base, coins: undefined }), ["face"]);
+  // Finnhub needs the stock key.
+  const fh = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "finnhub", on: true }] };
+  assert.deepEqual(pageList(fh), ["face"]);
+  assert.deepEqual(pageList({ ...fh, stock_key: "k" }), ["coin"]);
+  assert.equal(usableCoins({ ...fh, coins: [...fh.coins, { pair: "ETH-USD", source: "coinbase", on: true }] }).length, 1);
+});
+
+test("formatCoinPrice and currencyOf mirror the firmware", () => {
+  assert.equal(formatCoinPrice(104532.123), "104532.12");
+  assert.equal(formatCoinPrice(0.00001234), "0.00001234");
+  assert.deepEqual(currencyOf("SOL-EUR"), { mark: "euro", code: "EUR" });
+  assert.deepEqual(currencyOf("BTC-SGD"), { mark: "code", code: "SGD" });
+});
+
+test("currencyOf: USDT is a dollar, GBP a pound", () => {
+  assert.deepEqual(currencyOf("BTC-USDT"), { mark: "dollar", code: "USDT" });
+  assert.deepEqual(currencyOf("BTC-USD"), { mark: "dollar", code: "USD" });
+  assert.deepEqual(currencyOf("ETH-GBP"), { mark: "pound", code: "GBP" });
+  assert.deepEqual(currencyOf("NOQUOTE"), { mark: "code", code: "NOQUOTE" });
+});
+
+test("formatCoinPrice edge cases match snprintf", () => {
+  assert.equal(formatCoinPrice(0.99995), "1.0000");        // rounds up to 1 at the 4 decimals kept below 1
+  assert.equal(formatCoinPrice(0.99994), "0.9999");
+  assert.equal(formatCoinPrice(0.99999), "1.0000");
+  assert.equal(formatCoinPrice(1), "1.00");
+  assert.equal(formatCoinPrice(2.125), "2.12");            // exact tie: round half to even, like glibc
+  assert.equal(formatCoinPrice(2.375), "2.38");
+  assert.equal(formatCoinPrice(0), "0.00");
+  assert.equal(formatCoinPrice(-5), "0.00");
+  assert.equal(formatCoinPrice(NaN), "0.00");
+  assert.equal(formatCoinPrice(Infinity), "0.00");
+  assert.equal(formatCoinPrice(-Infinity), "0.00");
+  assert.equal(formatCoinPrice(0.5), "0.5000");
+  assert.equal(formatCoinPrice(1e-15), "0.000000000000"); // decimals capped at 12
+});
+
+test("the coin price line takes the largest size 6..3 that fits 288 px", () => {
+  assert.equal(coinPriceSize(1, 4), 6);    // $0.50 : 5 chars
+  assert.equal(coinPriceSize(1, 8), 5);    // $104532.12 -> 9 chars * 30 = 270
+  assert.equal(coinPriceSize(1, 9), 4);
+  assert.equal(coinPriceSize(1, 11), 4);   // 12 * 24 = 288 fits exactly
+  assert.equal(coinPriceSize(1, 12), 3);
+  assert.equal(coinPriceSize(4, 9), 3);    // "SGD " + 9 chars = 13 * 24 = 312 > 288
+  assert.equal(coinPriceSize(1, 40), 3);   // never below 3
+});
+
+test("a click steps through the entries, then goes to the next page", () => {
+  assert.deepEqual(clickStep(0, 3), { index: 1, nextPage: false });
+  assert.deepEqual(clickStep(1, 3), { index: 2, nextPage: false });
+  assert.deepEqual(clickStep(2, 3), { index: 0, nextPage: true });
+  assert.deepEqual(clickStep(0, 1), { index: 0, nextPage: true });
+  assert.deepEqual(clickStep(0, 0), { index: 0, nextPage: true });
+});
+
+test("drawCoin draws both styles, samples and live prices, and the two states", () => {
+  const c = THEMES[2];
+  const cb = { pair: "BTC-USD", source: "coinbase" };
+  const fh = { pair: "SOL-EUR", source: "finnhub" };
+  for (const e of [cb, fh, { pair: "BTC-SGD", source: "coinbase" }, { pair: "DOGE-USDT", source: "finnhub" }]) {
+    const svg = drawCoin(c, e, {});
+    assert.ok(svg.length > 100);
+    assert.doesNotMatch(svg, /NaN|undefined|Infinity/);
+  }
+  // Coinbase draws a chart (line and live dot); Finnhub does not.
+  assert.match(drawCoin(c, cb, {}), /<polyline/);
+  assert.doesNotMatch(drawCoin(c, fh, {}), /<polyline/);
+  // The price comes from the Check result, keyed by source and pair.
+  const live = { coinPrices: { "coinbase:BTC-USD": 12345.67 } };
+  assert.ok(drawCoin(c, cb, live).includes(textPath("$12345.67", 17, 22, 5)));
+  // Finnhub with only a price: no reference, so dashes and the "up" colour.
+  const fhLive = drawCoin(c, fh, { coinPrices: { "finnhub:SOL-EUR": 150.5 } });
+  assert.ok(fhLive.includes(textPath("OPEN  —", 150, 92, 2)));
+  assert.doesNotMatch(fhLive, new RegExp(c.priceDown));
+  assert.ok(drawCoin(c, cb, { coinStates: { "coinbase:BTC-USD": "notfound" } }).includes(textPath("NOT FOUND", 79, 56, 3)));
+  assert.ok(drawCoin(c, cb, { coinStates: { "coinbase:BTC-USD": "updating" } }).includes(textPath("UPDATING", 88, 74, 3)));
 });
