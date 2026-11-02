@@ -40,7 +40,7 @@ uint8_t parseCandleCloses(const char *s, float *out, uint8_t max) {
 }
 
 void formatCoinPrice(double v, char *out, size_t len) {
-  if (!(v > 0.0)) { snprintf(out, len, "0.00"); return; }
+  if (!(v > 0.0) || isinf(v)) { snprintf(out, len, "0.00"); return; }
   if (v >= 1.0)   { snprintf(out, len, "%.2f", v); return; }
   // 4 significant digits below 1: decimals = 3 - floor(log10(v)).
   int decimals = 3 - (int)floor(log10(v));

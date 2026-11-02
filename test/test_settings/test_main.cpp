@@ -373,7 +373,7 @@ static void test_largest_get_reply_fits_with_room() {
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
   for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
     memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
-    s.coins[i].source = COIN_FINNHUB; s.coins[i].on = true;
+    s.coins[i].source = COIN_COINBASE; s.coins[i].on = true;   // the longer word
   }
   s.coinCount = SETTINGS_COIN_MAX;
   strcpy(s.lat, "-12.34567890123");

@@ -39,6 +39,9 @@ static void test_price_format() {
   formatCoinPrice(0.12345, b, sizeof b);     TEST_ASSERT_EQUAL_STRING("0.1235", b);
   formatCoinPrice(0.00001234, b, sizeof b);  TEST_ASSERT_EQUAL_STRING("0.00001234", b);
   formatCoinPrice(0.0, b, sizeof b);         TEST_ASSERT_EQUAL_STRING("0.00", b);
+  formatCoinPrice(INFINITY, b, sizeof b);    TEST_ASSERT_EQUAL_STRING("0.00", b);
+  formatCoinPrice(-INFINITY, b, sizeof b);   TEST_ASSERT_EQUAL_STRING("0.00", b);
+  formatCoinPrice(NAN, b, sizeof b);         TEST_ASSERT_EQUAL_STRING("0.00", b);
 }
 static void test_currency() {
   char c[8];
