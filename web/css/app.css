@@ -1920,9 +1920,10 @@ select.input {
   min-width: 6rem;
 }
 
-/* Wide screens: a little more room for the form, so a coin row fits one line. */
+/* Wide screens: a little more room for the form, so a coin row fits one line.
+   The header and footer follow, so their edges line up with the form. */
 @media (min-width: 1000px) {
-  main.page:has(> .form-layout) {
+  .page, .top__inner {
     max-width: 66rem;
   }
 }
