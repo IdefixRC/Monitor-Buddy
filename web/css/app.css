@@ -1129,6 +1129,10 @@ fieldset.field > legend {
   text-transform: uppercase;
 }
 
+.input--upper::placeholder {
+  text-transform: none;
+}
+
 select.input {
   cursor: pointer;
 }
@@ -1330,6 +1334,11 @@ select.input {
 
 .switch:checked::before {
   transform: translateX(1.25rem);
+}
+
+.switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .pages__grid {

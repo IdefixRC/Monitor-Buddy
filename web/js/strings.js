@@ -172,7 +172,7 @@ export const S = {
     coinDefaultSource: "New coins use",
     coinDefaultHint: "Coinbase needs no key and draws a 24-hour chart. Finnhub uses your stock key and shows the day's open, high and low against the previous close, with no chart.",
     coinPick: "Coin",
-    coinSearch: "Type a code, for example BTC",
+    coinSearch: "e.g. BTC",
     coinCurrency: "Currency",
     coinCurrencyNote: "Not every coin is available in every currency.",
     coinListLoading: "Loading the coin list…",
