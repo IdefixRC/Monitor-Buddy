@@ -105,8 +105,7 @@ export function newFormState(config, { flow, info = null, added = [], imported =
   };
   state.stockSlots = stockSlots(state.config.stocks);
   state.stockSlotOf = slotsToStocks(state.stockSlots).slotOf;
-  state.coinSource = "coinbase"; // what a new coin slot uses until the user picks
-  state.coinSlots = coinSlots(state.config.coins, state.coinSource);
+  state.coinSlots = coinSlots(state.config.coins); // empty slots start on Coinbase
   state.coinSlotOf = slotsToCoins(state.coinSlots).slotOf;
   return state;
 }

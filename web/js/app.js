@@ -736,8 +736,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   f.touched = f.touched || new Set();
   f.serverErrors = f.serverErrors || {};
   f.submitted = !!f.submitted;
+  // The "More stocks" / "More coins" fold-outs, open or closed (kept across
+  // redraws). Focus sent into one (after a Move) opens it.
+  f.folds = f.folds || {};
+  const into = /^(stock|coin)slot\.([1-9]\d*)$/.exec(focus || "");
+  if (into) f.folds[into[1]] = true;
 
-  const slots = new Map();   // error key -> { error, inputs }
+  const slots = new Map();   // error key (or an alias: a second box for the same setting) -> { error, inputs, key }
   const badgeSlots = [];     // [key, element]
   const refreshers = [];     // run on every change
   let currentErrors = {};
@@ -773,14 +778,16 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     return h("div", { class: "field__head" }, labelEl, helpKey ? helpButton(helpKey, labelText) : null, badges);
   }
 
-  function errorSlot(key, inputs) {
+  // alias: the slot's own name when a second box shows the same setting
+  // (the Finnhub key in Stock and in Coins), so neither replaces the other.
+  function errorSlot(key, inputs, alias = key) {
     const error = h("p", { class: "field__error", id: uid("err"), hidden: true });
-    slots.set(key, { error, inputs });
+    slots.set(alias, { error, inputs, key });
     for (const i of inputs) i.setAttribute("aria-describedby", [i.getAttribute("aria-describedby"), error.id].filter(Boolean).join(" "));
     return error;
   }
 
-  function textField({ key, label, help, value, hint, set, type = "text", attrs = {}, extra = null }) {
+  function textField({ key, label, help, value, hint, set, type = "text", attrs = {}, extra = null, alias = key }) {
     const id = uid("f");
     const hintEl = hint ? h("p", { class: "field__hint", id: uid("hint") }, rich(hint)) : null;
     const input = h("input", {
@@ -789,7 +796,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     });
     input.value = value ?? ""; // a property: the password and the key never land in the DOM's attributes
     input.addEventListener("input", () => { set(input.value, input); changed(key); });
-    const error = errorSlot(key, [input]);
+    const error = errorSlot(key, [input], alias);
     const control = extra ? h("div", { class: "input-row" }, input, extra) : input;
     return { input, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, help, key), control, hintEl, error) };
   }
@@ -819,6 +826,45 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
 
   const section = (title, ...kids) => h("section", { class: "section" }, h("h2", { class: "section__title" }, title), kids);
   const note = (text, cls = "") => h("p", { class: `note ${cls}` }, rich(text));
+
+  // ── The compact slot rows (stock and coin) ──
+  // The On tickbox of slots 2-5; its label names the slot for screen readers.
+  function tickBox(name, checked, set) {
+    const input = h("input", { type: "checkbox", checked });
+    input.addEventListener("change", () => { set(input.checked); changed(); });
+    return { input, el: h("label", { class: "slot__on" }, input, h("span", {}, S.form.slotOn), h("span", { class: "sr-only" }, `, ${name}`)) };
+  }
+  // ↑ / ↓, named "Move up, Stock 2".
+  function moveButton(dir, name, onclick) {
+    const text = dir < 0 ? S.form.moveUp : S.form.moveDown;
+    return btn(dir < 0 ? "↑" : "↓", onclick, { class: "btn btn--secondary btn--icon", "aria-label": `${text}, ${name}`, title: text });
+  }
+  // The row's tools, [kind, element] in order; a missing one (slot 1 has no
+  // On and no ↑, slot 5 no ↓) leaves its gap, so the columns line up.
+  const slotTools = (...items) => h("div", { class: "slot__tools" },
+    items.map(([kind, el]) => el || h("span", { class: `slot__gap slot__gap--${kind}`, "aria-hidden": "true" })));
+  // Slots 2-5 in a fold-out like Location's "Advanced settings". Closed, its
+  // title lists what's inside. It opens by itself while a slot inside shows an
+  // error, and its open/closed state lives in the form state (f.folds), so a
+  // redraw keeps it.
+  function foldOut(name, rows, label, summaryOf, errorKeys) {
+    const title = h("span", { class: "advanced__title" }, label);
+    const fold = h("details", { class: "advanced slots__more", open: !!f.folds[name] },
+      h("summary", { class: "advanced__summary" }, title),
+      h("div", { class: "advanced__body slots" }, rows));
+    const hasError = () => errorKeys.some((k) => slots.get(k) && !slots.get(k).error.hidden);
+    const retitle = () => { title.textContent = (!fold.open && summaryOf()) || label; };
+    fold.addEventListener("toggle", () => {
+      if (!fold.open && hasError()) fold.open = true; // keep the error in sight
+      f.folds[name] = fold.open;
+      retitle();
+    });
+    refreshers.push(() => {
+      if (hasError() && !fold.open) { fold.open = true; f.folds[name] = true; }
+      retitle();
+    });
+    return fold;
+  }
 
   screen(S.titles.form, (m) => {
     // The side column: the live preview and the Buddy's bubble.
@@ -1083,13 +1129,20 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
       app.live = { ...app.live, coinPrices: prices, coinStates: states };
     };
+    // The Finnhub key has two boxes, here and in Coins: typing in one sets the
+    // key and mirrors it into the other (never into the box being typed in).
+    const keyBoxes = [];
+    const setKey = (v, from) => {
+      f.config.stock_key = v.trim();
+      app.live = { ...app.live, prices: {} };
+      clearChecks();
+      for (const box of keyBoxes) if (box !== from) box.value = v;
+    };
     const stockKey = textField({
       key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
-      set: (v) => { f.config.stock_key = v.trim(); app.live = { ...app.live, prices: {} }; clearChecks(); },
+      set: (v) => setKey(v, stockKey.input),
     });
-    // The Finnhub coin lists use the key once it is left ("change"), not on
-    // every keystroke: each partial key would be a refused request.
-    stockKey.input.addEventListener("change", () => { coinKey = f.config.stock_key; refresh(); });
+    keyBoxes.push(stockKey.input);
     const tickerCheck = btn(S.form.check, async () => {
       tickerResult.textContent = S.check.checking;
       tickerResult.dataset.state = "";
@@ -1118,20 +1171,29 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       },
     });
     const slotRows = f.stockSlots.map((_, i) => {
+      const key = `stockslot.${i}`;
+      const name = S.form.stockSlot(i + 1);
       const result = slotResults[i];
-      const input = textField({
-        key: `stockslot.${i}`, label: S.form.stockSlot(i + 1), help: "stocks", value: f.stockSlots[i].symbol,
-        attrs: { autocapitalize: "characters", class: "input input--upper" },
-        set: (v, el) => { f.stockSlots[i] = { ...f.stockSlots[i], symbol: upper(v, el) }; applySlots(f); result.textContent = ""; },
+      // One row: the ticker, Check, On, Move up and down. Slot 1 (always on, no
+      // Move up) has the visible label with the help and badges; the rest are
+      // named by aria-label (and placeholder).
+      const id = uid("f");
+      const input = h("input", {
+        id, type: "text", class: "input input--upper slot__input", autocomplete: "off", spellcheck: "false",
+        autocapitalize: "characters", "aria-label": name, placeholder: i === 0 ? null : name,
       });
-      const onSwitch = i === 0 ? null : switchRow({
-        label: S.form.slotOn, checked: f.stockSlots[i].on, badgeKey: "stocks",
-        set: (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); },
+      input.value = f.stockSlots[i].symbol;
+      input.addEventListener("input", () => {
+        f.stockSlots[i] = { ...f.stockSlots[i], symbol: upper(input.value, input) };
+        applySlots(f);
+        result.textContent = "";
+        changed(key);
       });
+      const error = errorSlot(key, [input]);
+      const onBox = i === 0 ? null : tickBox(name, f.stockSlots[i].on, (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); });
       const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}`, moved: dir }); };
-      const label = (t) => `${t}, ${S.form.stockSlot(i + 1)}`;
-      const up = btn(S.form.moveUp, () => move(-1), { kind: "link", "aria-label": label(S.form.moveUp) });
-      const down = btn(S.form.moveDown, () => move(1), { kind: "link", "aria-label": label(S.form.moveDown) });
+      const up = moveButton(-1, name, () => move(-1));
+      const down = moveButton(1, name, () => move(1));
       const check = btn(S.form.check, async () => {
         const sym = f.stockSlots[i].symbol;
         result.textContent = S.check.checking;
@@ -1146,19 +1208,25 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
         refresh();
         { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
-      }, { "aria-label": `${S.form.check}, ${S.form.stockSlot(i + 1)}` });
+      }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${name}` });
       const el = h("div", { class: "slot" },
-        h("div", { class: "slot__main" }, input.el, onSwitch ? onSwitch.el : null),
-        h("div", { class: "slot__tools" }, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null, check),
-        result);
+        i === 0 ? head(h("label", { for: id }, name), name, "stocks", "stocks") : null,
+        h("div", { class: "slot__row" },
+          h("div", { class: "slot__pick" }, input),
+          slotTools(["check", check], ["on", onBox && onBox.el], ["up", i > 0 ? up : null], ["down", i < STOCK_SLOTS - 1 ? down : null])),
+        error, result);
       // After a Move: the ticker, or (an off slot's is disabled) Move again, then the other way.
-      focusTargets[`stockslot.${i}`] = () => [input.input, ...(moved > 0 ? [down, up] : [up, down]), check];
-      return { el, input, onSwitch, up, down, check, i };
+      focusTargets[key] = () => [input, ...(moved > 0 ? [down, up] : [up, down]), check];
+      return { el, input, onBox, up, down, check, i };
     });
+    const moreStocks = foldOut("stock", slotRows.slice(1).map((r) => r.el), S.form.moreStocks, () => {
+      const filled = f.stockSlots.slice(1).filter((s) => s.symbol);
+      return filled.length ? S.form.moreStocksList(filled.map((s) => s.symbol), filled.filter((s) => !s.on).length) : "";
+    }, slotRows.slice(1).map((r) => `stockslot.${r.i}`));
     const slotsNote = note("", "note--info");
     const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
     const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
-    const slotsBlock = h("div", { class: "slots" }, slotRows.map((r) => r.el));
+    const slotsBlock = h("div", { class: "slots" }, slotRows[0].el, moreStocks);
     form.append(section(S.form.sections.stock, tickerBlock, slotsBlock, slotsNote));
     refreshers.push(() => {
       const st = fieldState(f, "stocks");
@@ -1177,8 +1245,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         const greyed = st === "greyed";
         r.el.hidden = greyed && r.i === 0;   // slot 1 is the ticker field while greyed
         const off = r.i > 0 && !f.stockSlots[r.i].on;
-        r.input.input.disabled = greyed || off;
-        if (r.onSwitch) r.onSwitch.input.disabled = greyed;
+        r.input.disabled = greyed || off;
+        if (r.onBox) r.onBox.input.disabled = greyed;
         r.up.disabled = r.down.disabled = greyed;
         r.check.disabled = greyed || off || !f.stockSlots[r.i].symbol || !f.config.stock_key;
       }
@@ -1210,29 +1278,25 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         .finally(() => { loadingLists.delete(id); refresh(); }); // refresh() does nothing once the form is gone
     }
 
-    const defName = uid("coindef");
-    const defHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinDefaultHint);
-    const defInputs = SOURCES.map(([v]) => h("input", { type: "radio", name: defName, value: v, checked: f.coinSource === v }));
-    for (const input of defInputs) {
-      input.addEventListener("change", () => {
-        if (!input.checked) return;
-        f.coinSource = input.value;
-        // The empty slots are the new coins: they follow it.
-        f.coinSlots = f.coinSlots.map((s) => (s.pair ? s : { ...s, source: f.coinSource }));
-        applyCoinSlots(f);
-        changed();
-      });
-    }
-    const defGroup = h("fieldset", { class: "field radios coin-default", "aria-describedby": defHint.id },
-      h("legend", {}, head(h("span", {}, S.form.coinDefaultSource), S.form.coinDefaultSource, null, null)),
-      h("div", { class: "radios__items" }, defInputs.map((input, k) =>
-        h("label", { class: "choice" }, input, h("span", { class: "choice__text" }, SOURCES[k][1])))),
-      defHint);
+    // The Finnhub key again, at the top: the same setting as Stock's box (two
+    // inputs, one value; setKey mirrors each into the other as you type).
+    const coinKeyField = textField({
+      key: "stock_key", alias: "stock_key@coins", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key,
+      hint: S.form.coinKeyHint, set: (v) => setKey(v, coinKeyField.input),
+    });
+    keyBoxes.push(coinKeyField.input);
+    // The Finnhub coin lists use the key once a box is left ("change"), not on
+    // every keystroke: each partial key would be a refused request.
+    for (const box of keyBoxes) box.addEventListener("change", () => { coinKey = f.config.stock_key; refresh(); });
+    // Said once for every currency select (each points at it).
+    const curNote = h("p", { class: "field__hint coin-note", id: uid("hint") }, S.form.coinCurrencyNote);
+    // Why Finnhub can't be picked yet (no key): the disabled option points at it.
+    const needKey = h("p", { class: "sr-only", id: uid("hint") }, S.form.finnhubNeedsKey);
 
     const coinRows = f.coinSlots.map((_, i) => {
       const key = `coinslot.${i}`;
       const slotName = S.form.coinSlot(i + 1);
-      const forSlot = h("span", { class: "sr-only" }, `, ${slotName}`);
+      const forSlot = (t) => `${t}, ${slotName}`;
       const result = h("p", { class: "check__result", "aria-live": "polite" });
       coinResults[i] = result;
       const clearResult = () => { result.textContent = ""; result.dataset.state = ""; };
@@ -1242,13 +1306,14 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const setVerify = (on) => { f.coinSlots[i] = { ...f.coinSlots[i], verify: on }; };
       let shown = "";     // the list id and state the picker was last drawn for
 
-      // The source. A stored source this flasher doesn't know gets its own
-      // radio, so the slot's error makes sense; it goes once another is picked.
+      // The source, a two-way segmented control. A stored source this flasher
+      // doesn't know gets a third option, so the slot's error makes sense; it
+      // goes once another is picked.
       const stored = f.coinSlots[i].source;
       const options = knownSource(stored) ? SOURCES : [...SOURCES, [stored, stored]];
       const srcName = uid("src");
       const srcInputs = options.map(([v]) => h("input", { type: "radio", name: srcName, value: v, checked: v === stored }));
-      const srcLabels = srcInputs.map((input, k) => h("label", { class: "choice" }, input, h("span", { class: "choice__text" }, options[k][1])));
+      const srcLabels = srcInputs.map((input, k) => h("label", { class: "segmented__item" }, input, h("span", {}, options[k][1])));
       for (const input of srcInputs) {
         input.addEventListener("change", () => {
           if (!input.checked) return;
@@ -1256,31 +1321,26 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
           applyCoinSlots(f);
           clearResult();
           changed(key);
-          // Finnhub needs the key: take the user there (the slot's error says so too).
-          if (input.value === "finnhub" && !f.config.stock_key) stockKey.input.focus();
         });
       }
-      const srcGroup = h("fieldset", { class: "radios coin-source" },
-        h("legend", { class: "coin-source__legend" }, S.form.coinSource, forSlot.cloneNode(true)),
-        h("div", { class: "radios__items" }, srcLabels));
+      const finnhubInput = srcInputs[1];
+      const srcGroup = h("fieldset", { class: "segmented" },
+        h("legend", { class: "sr-only" }, forSlot(S.form.coinSource)), srcLabels);
 
       // The picker: a code search and the currencies that coin has on this source.
       const coinId = uid("coin");
       const datalist = h("datalist", { id: uid("coins") });
       const loadingHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListLoading);
       const coinInput = h("input", {
-        id: coinId, type: "search", class: "input input--upper", list: datalist.id, placeholder: S.form.coinSearch,
-        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-describedby": loadingHint.id,
+        id: coinId, type: "search", class: "input input--upper coin-input", list: datalist.id, placeholder: S.form.coinSearch,
+        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-label": slotName, "aria-describedby": loadingHint.id,
       });
-      const curId = uid("cur");
-      const curNote = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinCurrencyNote);
-      const currency = h("select", { id: curId, class: "input", "aria-describedby": curNote.id });
-      // Without the list: the pair as text.
-      const manualId = uid("pair");
+      const currency = h("select", { class: "input coin-currency", "aria-label": forSlot(S.form.coinCurrency), "aria-describedby": curNote.id });
+      // Without the list: the pair as text, in the same place.
       const failedHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListFailed);
       const manual = h("input", {
-        id: manualId, type: "text", class: "input input--upper", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
-        "aria-describedby": failedHint.id,
+        type: "text", class: "input input--upper coin-manual", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+        placeholder: S.form.coinPairManual, "aria-label": forSlot(S.form.coinPairManual), "aria-describedby": failedHint.id,
       });
       const error = errorSlot(key, [coinInput, manual]);
 
@@ -1336,7 +1396,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         if ((state === "ok" || state === "failed") && f.coinSlots[i].verify) setVerify(false);
         const text = state === "failed" || state === "none";
         pickBox.hidden = text;
-        manualBox.hidden = !text;
+        manual.hidden = !text;
         failedHint.hidden = state !== "failed";
         loadingHint.hidden = state !== "loading";
         manual.value = f.coinSlots[i].pair;
@@ -1350,14 +1410,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         }
       }
 
-      const onSwitch = i === 0 ? null : switchRow({
-        label: S.form.slotOn, checked: f.coinSlots[i].on, badgeKey: "coins",
-        set: (v) => { f.coinSlots[i] = { ...f.coinSlots[i], on: v }; applyCoinSlots(f); },
-      });
+      const onBox = i === 0 ? null : tickBox(slotName, f.coinSlots[i].on, (v) => { f.coinSlots[i] = { ...f.coinSlots[i], on: v }; applyCoinSlots(f); });
       const move = (dir) => { f.coinSlots = moveSlot(f.coinSlots, i, dir); applyCoinSlots(f); showForm({ focus: `coinslot.${i + dir}`, moved: dir }); };
-      const label = (t) => `${t}, ${slotName}`;
-      const up = btn(S.form.moveUp, () => move(-1), { kind: "link", "aria-label": label(S.form.moveUp) });
-      const down = btn(S.form.moveDown, () => move(1), { kind: "link", "aria-label": label(S.form.moveDown) });
+      const up = moveButton(-1, slotName, () => move(-1));
+      const down = moveButton(1, slotName, () => move(1));
       const check = btn(S.form.check, async () => {
         const s = f.coinSlots[i];
         const asked = [s.pair, s.source, f.config.stock_key];
@@ -1379,18 +1435,17 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price } };
         refresh();
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
-      }, { "aria-label": `${S.form.check}, ${slotName}` });
+      }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${slotName}` });
 
-      const pickBox = h("div", { class: "coin-pick" },
-        h("div", { class: "field" }, head(h("label", { for: coinId }, slotName), slotName, "coins", "coins"), coinInput, datalist, loadingHint),
-        h("div", { class: "field" }, h("div", { class: "field__head" }, h("label", { for: curId }, S.form.coinCurrency, forSlot.cloneNode(true))), currency, curNote));
-      const manualBox = h("div", { class: "field" },
-        head(h("label", { for: manualId }, S.form.coinPairManual, forSlot.cloneNode(true)), S.form.coinPairManual, "coins", null), manual, failedHint);
+      // One row: source, coin, currency (or the typed pair), then On, Check, ↑ ↓.
+      // The hints, the error and the Check result sit under it.
+      const pickBox = h("div", { class: "coin-pick" }, coinInput, datalist, currency);
       const el = h("div", { class: "slot slot--coin" },
-        srcGroup,
-        h("div", { class: "slot__main" }, h("div", { class: "coin-picker" }, pickBox, manualBox, error), onSwitch ? onSwitch.el : null),
-        h("div", { class: "slot__tools" }, i > 0 ? up : null, i < COIN_SLOTS - 1 ? down : null, check),
-        result);
+        i === 0 ? head(h("label", { for: coinId }, slotName), slotName, "coins", "coins") : null,
+        h("div", { class: "slot__row" },
+          h("div", { class: "slot__pick" }, srcGroup, pickBox, manual),
+          slotTools(["on", onBox && onBox.el], ["check", check], ["up", i > 0 ? up : null], ["down", i < COIN_SLOTS - 1 ? down : null])),
+        loadingHint, failedHint, error, result);
 
       function sync(st) {
         const s = f.coinSlots[i];
@@ -1406,22 +1461,39 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         }
         const sig = `${id}|${state}`;
         if (sig !== shown) { shown = sig; draw(state, list); }
-        for (const input of srcInputs) { input.checked = input.value === s.source; input.disabled = greyed; }
+        const keyless = !f.config.stock_key;
+        for (const input of srcInputs) {
+          input.checked = input.value === s.source;
+          // Finnhub needs the key (a stored keyless Finnhub coin stays selected, with its error).
+          input.disabled = greyed || (input === finnhubInput && keyless);
+        }
+        if (keyless) {
+          finnhubInput.setAttribute("aria-describedby", needKey.id);
+          srcLabels[1].title = S.form.finnhubNeedsKey;
+        } else {
+          finnhubInput.removeAttribute("aria-describedby");
+          srcLabels[1].removeAttribute("title");
+        }
         if (srcLabels[2]) srcLabels[2].hidden = s.source !== stored;
         const off = i > 0 && !s.on;
         coinInput.disabled = greyed || off || state !== "ok";
         currency.disabled = greyed || off || state !== "ok" || !currency.options.length;
         manual.disabled = greyed || off;
-        if (onSwitch) onSwitch.input.disabled = greyed;
+        if (onBox) onBox.input.disabled = greyed;
         up.disabled = down.disabled = greyed;
         check.disabled = greyed || off || !s.pair || !knownSource(s.source) || (s.source === "finnhub" && !f.config.stock_key);
       }
       // After a Move: the coin (or the pair), else the source, then Move again.
       focusTargets[key] = () => [coinInput, manual, srcInputs.find((r) => r.checked), ...(moved > 0 ? [down, up] : [up, down]), check];
-      return { el, sync };
+      return { el, sync, i };
     });
+    const moreCoins = foldOut("coin", coinRows.slice(1).map((r) => r.el), S.form.moreCoins, () => {
+      const filled = f.coinSlots.slice(1).filter((s) => s.pair);
+      return filled.length ? S.form.moreCoinsList(filled.map((s) => s.pair), filled.filter((s) => !s.on).length) : "";
+    }, coinRows.slice(1).map((r) => `coinslot.${r.i}`));
     const coinsNote = note("", "note--info");
-    const coinSection = section(S.form.sections.coin, h("div", { class: "slots" }, defGroup, coinRows.map((r) => r.el)), coinsNote);
+    const coinSection = section(S.form.sections.coin, coinKeyField.el,
+      h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey, coinsNote);
     form.append(coinSection);
     refreshers.push(() => {
       const st = fieldState(f, "coins");
@@ -1429,7 +1501,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
       coinsNote.hidden = st !== "greyed";
       coinsNote.textContent = st === "greyed" && firstCoins ? S.form.needsNewer(firstCoins.version) : "";
-      for (const input of defInputs) input.disabled = st !== "on";
+      coinKeyField.input.disabled = st !== "on";
       for (const r of coinRows) r.sync(st);
     });
 
@@ -1561,7 +1633,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const errs = formErrors(f, app.zones);
     for (const [k, raw] of Object.entries(remapStockErrors(f, f.serverErrors))) errs[k] = fieldMessage(k, raw);
     currentErrors = errs;
-    for (const [key, slot] of slots) {
+    for (const slot of slots.values()) {
+      const { key } = slot;
       const msg = errs[key];
       const shown = !!msg && (f.submitted || f.touched.has(key) || Object.hasOwn(f.serverErrors, key));
       slot.error.hidden = !shown;
@@ -1592,7 +1665,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     f.config = mergeConfig(f.config, res.config);
     const pending = pendingChecks(f);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
-    f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+    f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
     keepPendingChecks(f, pending);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
@@ -1619,7 +1692,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     f.config = mergeConfig(f.config, cfg);
     const pending = pendingChecks(f);
     f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
-    f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+    f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
     keepPendingChecks(f, pending);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
@@ -1881,7 +1954,7 @@ async function afterFlash(entry, ui) {
   f.supported = now;
   const pending = pendingChecks(f);
   f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
-  f.stockSlots = stockSlots(f.config.stocks); applySlots(f); f.coinSlots = coinSlots(f.config.coins, f.coinSource); applyCoinSlots(f);
+  f.stockSlots = stockSlots(f.config.stocks); applySlots(f); f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
   keepPendingChecks(f, pending);
   f.installed = info.fw;
   app.expectDrop = false;

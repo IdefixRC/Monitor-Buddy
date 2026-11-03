@@ -652,7 +652,8 @@ test("previewPageFor maps coin slots to the coin page", () => {
 });
 test("newFormState sets up coin slots and applyCoinSlots writes coins", () => {
   const f = newFormState(DEFAULTS, { flow: "change" });
-  assert.equal(f.coinSource, "coinbase");
+  assert.equal("coinSource" in f, false); // no "New coins use" default any more
+  assert.equal(f.coinSlots[1].source, "coinbase"); // empty slots start on Coinbase
   assert.equal(f.coinSlots.length, COIN_SLOTS);
   assert.deepEqual(f.coinSlotOf, [0]);
   f.coinSlots[2] = { pair: "ETH-EUR", source: "coinbase", on: false };
@@ -699,7 +700,7 @@ test("the coin section loads each source's own list", () => {
 test("a flash re-derives the slots from the new settings", () => {
   assert.match(appSource, /f\.stockSlots = stockSlots\(f\.config\.stocks\)[\s\S]*?f\.coinSlots = coinSlots\(f\.config\.coins/);
   // The afterFlash site itself, not only the imports.
-  assert.match(appSource, /f\.config = filterSupported\(mergeConfig\(fromBoard\(got\.config\), f\.config\), now\);\s*f\.stockSlots = stockSlots\(f\.config\.stocks\); applySlots\(f\); f\.coinSlots = coinSlots\(f\.config\.coins, f\.coinSource\); applyCoinSlots\(f\);/);
+  assert.match(appSource, /f\.config = filterSupported\(mergeConfig\(fromBoard\(got\.config\), f\.config\), now\);\s*f\.stockSlots = stockSlots\(f\.config\.stocks\); applySlots\(f\); f\.coinSlots = coinSlots\(f\.config\.coins\); applyCoinSlots\(f\);/);
 });
 test("a requested focus is applied after screen() focuses its heading", () => {
   // screen() focuses the heading after build(); the form's requested focus must come later.
@@ -774,4 +775,59 @@ test("the Check line shows the device's price and a not-found result reaches the
   assert.doesNotMatch(appSource, /toLocaleString/);
   assert.match(appSource, /states\[askedKey\] = "notfound"/);
   assert.match(appSource, /coinStates: states/);
+});
+
+// ── Compact stock and coin rows (coin-page Task 10) ───────
+test("one Finnhub key, two boxes: Stock's and Coins' both set stock_key", () => {
+  // Both are textFields for stock_key; Coins' registers its error under an alias, so neither replaces the other.
+  assert.match(appSource, /const stockKey = textField\(\{\s*key: "stock_key",/);
+  assert.match(appSource, /const coinKeyField = textField\(\{\s*key: "stock_key", alias: "stock_key@coins",/);
+  assert.match(appSource, /set: \(v\) => setKey\(v, stockKey\.input\)/);
+  assert.match(appSource, /set: \(v\) => setKey\(v, coinKeyField\.input\)/);
+  // One value: typing in one mirrors into the other (never into the box being typed in).
+  assert.match(appSource, /const setKey = \(v, from\) => \{\s*f\.config\.stock_key = v\.trim\(\);[\s\S]{0,120}for \(const box of keyBoxes\) if \(box !== from\) box\.value = v;/);
+  // Leaving either box refreshes the Finnhub lists.
+  assert.match(appSource, /for \(const box of keyBoxes\) box\.addEventListener\("change", \(\) => \{ coinKey = f\.config\.stock_key; refresh\(\); \}\);/);
+  // refresh() looks errors up by the slot's setting, not its map key.
+  assert.match(appSource, /for \(const slot of slots\.values\(\)\) \{\s*const \{ key \} = slot;\s*const msg = errs\[key\];/);
+  assert.match(S.form.coinKeyHint, /Coinbase needs none/);
+});
+test("the coin section has no default-source group", () => {
+  assert.doesNotMatch(appSource, /coinDefault|coindef|coin-default|f\.coinSource/);
+  assert.equal(S.form.coinDefaultSource, undefined);
+  assert.equal(S.form.coinDefaultHint, undefined);
+  const css = readFileSync(new URL("../web/css/app.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css, /coin-default/);
+});
+test("slots 2-5 sit in fold-outs that open on an error inside or on focus sent there", () => {
+  assert.match(appSource, /foldOut\("stock", slotRows\.slice\(1\)[\s\S]*?slotRows\.slice\(1\)\.map\(\(r\) => `stockslot\.\$\{r\.i\}`\)\);/);
+  assert.match(appSource, /foldOut\("coin", coinRows\.slice\(1\)[\s\S]*?coinRows\.slice\(1\)\.map\(\(r\) => `coinslot\.\$\{r\.i\}`\)\);/);
+  // A shown error inside opens it (refresh) and keeps it open (toggle).
+  assert.match(appSource, /const hasError = \(\) => errorKeys\.some\(\(k\) => slots\.get\(k\) && !slots\.get\(k\)\.error\.hidden\);/);
+  assert.match(appSource, /if \(hasError\(\) && !fold\.open\) \{ fold\.open = true; f\.folds\[name\] = true; \}/);
+  assert.match(appSource, /if \(!fold\.open && hasError\(\)\) fold\.open = true;/);
+  // Open or closed is form state; focus into slot 2-5 (after a Move) opens it first.
+  assert.match(appSource, /open: !!f\.folds\[name\]/);
+  assert.ok(appSource.includes(String.raw`const into = /^(stock|coin)slot\.([1-9]\d*)$/.exec(focus || "");
+  if (into) f.folds[into[1]] = true;`));
+  // Closed, the title lists what's inside.
+  assert.equal(S.form.moreStocks, "More stocks (up to 4)");
+  assert.equal(S.form.moreCoins, "More coins (up to 4)");
+  assert.equal(S.form.moreStocksList(["NVDA", "MSFT"], 1), "More stocks: NVDA, MSFT (1 off)");
+  assert.equal(S.form.moreCoinsList(["ETH-GBP", "SOL-EUR"], 0), "More coins: ETH-GBP, SOL-EUR");
+});
+test("compact rows: the pick, then the tools in the brief's order", () => {
+  // Stock: ticker | Check, On, up, down (slot 1: no On, no up; slot 5: no down).
+  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, input\),\s*slotTools\(\["check", check\], \["on", onBox && onBox\.el\], \["up", i > 0 \? up : null\], \["down", i < STOCK_SLOTS - 1 \? down : null\]\)\),\s*error, result\);/);
+  // Coin: source, coin, currency (or the typed pair) | On, Check, up, down; hints, error and result under the row.
+  assert.match(appSource, /const pickBox = h\("div", \{ class: "coin-pick" \}, coinInput, datalist, currency\);/);
+  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, srcGroup, pickBox, manual\),\s*slotTools\(\["on", onBox && onBox\.el\], \["check", check\], \["up", i > 0 \? up : null\], \["down", i < COIN_SLOTS - 1 \? down : null\]\)\),\s*loadingHint, failedHint, error, result\);/);
+  // Moves are icon buttons named for their slot.
+  assert.match(appSource, /btn\(dir < 0 \? "↑" : "↓", onclick, \{ class: "btn btn--secondary btn--icon", "aria-label": `\$\{text\}, \$\{name\}`/);
+  // Finnhub can't be picked without a key; a stored keyless one stays selected.
+  assert.match(appSource, /input\.disabled = greyed \|\| \(input === finnhubInput && keyless\);/);
+  assert.match(appSource, /finnhubInput\.setAttribute\("aria-describedby", needKey\.id\);/);
+  // The currency note is said once, and every currency select points at it.
+  assert.match(appSource, /"aria-describedby": curNote\.id/);
+  assert.equal((appSource.match(/S\.form\.coinCurrencyNote/g) || []).length, 1);
 });
