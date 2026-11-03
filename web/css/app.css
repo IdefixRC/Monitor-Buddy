@@ -1678,9 +1678,10 @@ select.input {
 .check__result[data-state="ok"] { color: var(--ok); }
 .check__result[data-state="bad"] { color: var(--danger); }
 
-/* The stock and coin slots: one compact row each (the pick, then On, Check,
-   Move up and down), its hints, error and Check result under it. Slots 2-5
-   sit in a fold-out (.slots__more, Location's .advanced). */
+/* The stock and coin slots: one compact row each (the pick, then Check, On,
+   and Move up and down at the right end), its hints, error and Check result
+   under it. Slots 2-5 sit in a fold-out (.slots__more, Location's .advanced),
+   as plain rows with a rule between them rather than boxes in a box. */
 .slots {
   display: flex;
   flex-direction: column;
@@ -1695,17 +1696,38 @@ select.input {
   min-width: 0;
 }
 
+.slots__more {
+  margin: 0;
+}
+
+.slots__more > .advanced__body {
+  gap: 0;
+  padding: 0 0.6rem 0.3rem;
+}
+
+.slots__more .slot {
+  padding: 0.55rem 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.slots__more .slot + .slot {
+  border-top: 1px solid var(--border);
+}
+
 .slot__row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem 0.5rem;
+  gap: 0.45rem 0.4rem;
 }
 
-/* The ticker, or the coin's source, code and currency. It may wrap inside
-   itself only when even that line doesn't fit (no sideways scroll). */
+/* The pick takes the free space on the line (grow 999); when the tools wrap
+   onto their own line, they take that whole line (grow 1). It may wrap inside
+   itself only when even its own line is too narrow (no sideways scroll). */
 .slot__pick {
-  flex: 1 1 8rem;
+  flex: 999 1 8rem;
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
@@ -1714,7 +1736,7 @@ select.input {
 }
 
 .slot--coin .slot__pick {
-  flex-basis: 17.5rem;
+  flex-basis: 17.25rem;
 }
 
 .slot .input {
@@ -1726,10 +1748,16 @@ select.input {
   flex: 1 1 6rem;
 }
 
+/* Check and On from the left, the arrows at the right end. */
 .slot__tools {
-  flex: none;
+  flex: 1 0 auto;
   display: flex;
   align-items: center;
+  gap: 0.3rem;
+}
+
+.slot__moves {
+  display: flex;
   gap: 0.3rem;
   margin-left: auto;
 }
@@ -1790,20 +1818,15 @@ select.input {
   margin-top: 0.35rem;
 }
 
-.slots__more {
-  margin: 0;
-}
-
-.slots__more > .advanced__body {
-  padding: 0.65rem 0.45rem 0.5rem;
-}
-
 .coin-note {
   margin: 0;
 }
 
 /* The coin's source: Coinbase | Finnhub as one segmented control. The radios
-   stay in the page (focus, arrow keys), stretched invisibly over their label. */
+   stay in the page (focus, arrow keys), stretched invisibly over their label.
+   The chosen one is filled (white on the button green, 5:1 or better), also
+   when it is disabled (a stored Finnhub coin without a key); an unchosen
+   disabled one is dimmed. */
 .segmented {
   flex: none;
   display: inline-flex;
@@ -1822,6 +1845,7 @@ select.input {
   min-height: 2.5rem;
   padding: 0 0.5rem;
   background: var(--input);
+  color: var(--fg);
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
@@ -1842,9 +1866,9 @@ select.input {
 }
 
 .segmented__item:has(input:checked) {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
+  background: var(--btn);
+  color: var(--btn-fg);
+  font-weight: 700;
 }
 
 .segmented__item:has(input:focus-visible) {
@@ -1853,21 +1877,31 @@ select.input {
 }
 
 .segmented__item:has(input:disabled) {
-  opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* The coin code and its currency, side by side. */
+.segmented__item:has(input:disabled:not(:checked)) {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* Greyed (the firmware has no coins yet): the whole control fades. */
+.segmented:not(:has(input:enabled)) {
+  opacity: 0.6;
+}
+
+/* The coin code takes what the line leaves, its currency beside it. */
 .coin-pick {
-  flex: 1 1 7.5rem;
+  flex: 1 1 7rem;
   min-width: 0;
   display: flex;
   gap: 0.4rem;
 }
 
 .coin-input {
-  flex: 1 1 4.5rem;
-  min-width: 3.75rem;
+  flex: 1 1 auto;
+  width: 4.5rem;
+  min-width: 4.5rem;
 }
 
 /* The search box's clear button would take half of a phone-width box. */
@@ -1881,16 +1915,25 @@ select.input {
 }
 
 .coin-manual {
-  flex: 1 1 7rem;
+  flex: 1 1 auto;
+  width: 7rem;
+  min-width: 6rem;
 }
 
-/* A phone: a coin row is two lines, source, coin and currency, then the tools. */
+/* Wide screens: a little more room for the form, so a coin row fits one line. */
+@media (min-width: 1000px) {
+  main.page:has(> .form-layout) {
+    max-width: 66rem;
+  }
+}
+
+/* A phone: a row is two lines, the pick, then Check, On and the arrows. */
 @media (max-width: 520px) {
   .slot {
     padding: 0.45rem;
   }
   .slots__more > .advanced__body {
-    padding: 0.6rem 0.4rem 0.5rem;
+    padding: 0 0.5rem 0.25rem;
   }
   .segmented__item {
     padding: 0 0.45rem;
