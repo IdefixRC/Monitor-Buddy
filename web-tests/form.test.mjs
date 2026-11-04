@@ -1054,13 +1054,28 @@ test("previewPageFor sends clock_format and night.* to the clock page, and only 
   assert.notEqual(previewPageFor("nightly", cfg), "clock");
 });
 
-test("the Clock box sits between Location and Units; below 1.3 only its note shows", () => {
+test("the Clock box sits right after Location; below 1.3 only its note shows", () => {
   const appSource = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
-  assert.ok(appSource.indexOf("S.form.sections.location") < appSource.indexOf("S.form.sections.clock"));
-  assert.ok(appSource.indexOf("S.form.sections.clock") < appSource.indexOf("S.form.sections.units"));
+  assert.match(appSource, /locationSection, clockSection,/);
   assert.match(appSource, /clockFields\.hidden = st !== "on";/);
   assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED }), "clock_format"), "hidden");
   assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] }), "clock_format"), "on");
+});
+
+test("the settings page follows the setup flow: the boxes are appended in this order", () => {
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  const calls = src.match(/form\.append\(([^;]*)\);/g).map((c) => c.replace(/\s+/g, " "));
+  const order = calls.find((c) => c.includes("wifiSection"));
+  assert.equal(order, "form.append(wifiSection, lookSection, unitsSection, locationSection, clockSection, stockSection, coinSection, githubSection);");
+  // Every box is built from its own section title, and the ones that only
+  // pages joined (not a box of their own) are not appended by themselves.
+  for (const k of ["wifi", "look", "units", "location", "clock", "stock", "coin", "github"]) {
+    assert.ok(src.includes(`section(S.form.sections.${k},`), k);
+  }
+  assert.equal(S.form.sections.look, "Look and pages");
+  // The pages ride inside the Look box, after the day slider.
+  assert.match(src, /lookSection\.append\(levelRows, levelNote, pagesBlock\);/);
+  assert.doesNotMatch(src, /form\.append\(section\(S\.form\.sections\.(?!firmware)/);
 });
 
 test("night errors only count where night mode is offered", () => {
@@ -1132,11 +1147,14 @@ test("an erasing flash keeps the form's brightness: the board only has its defau
   assert.equal(formToRequest(f).config.brightness, 120);
 });
 
-test("the Look box draws both sliders; the night one follows night mode", () => {
+test("the day slider is in Look and pages; the night slider is in the Night mode fold-out", () => {
   const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
   assert.ok(src.indexOf("S.form.sections.look") < src.indexOf("S.form.dayBrightness"));
-  assert.doesNotMatch(src, /nightRows = \[[^\]]*nightLevel/);
+  assert.match(src, /const levelRows = h\("div", \{\}, dayLevel\.el\);/);
+  assert.match(src, /nightRows = \[\s*nightSwitch\.el,\s*h\("div", \{ class: "grid-2" \}, nightStart\.el, nightEnd\.el\), nightError,\s*nightLevel\.el,\s*\];/);
+  assert.match(src, /"night\.end", "night\.enabled", "night\.brightness"\]/);
   assert.match(src, /nightLevel\.input\.disabled = off && nightLevel\.error\.hidden;/);
+  assert.doesNotMatch(src, /nightNeedsSwitch/);
   assert.match(src, /newerNote\(first\.version\)/);
 });
 

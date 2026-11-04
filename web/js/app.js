@@ -1049,7 +1049,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const offSaved = !flow.erase && (app.info ? !!(app.info.wifi && app.info.wifi.saved) : f.flow === "upgrade");
     const offNote = note(offSaved ? S.form.offKeep : S.form.offHotspot);
     const onBox = h("div", { class: "wifi-on" }, choiceGroup, creds);
-    form.append(section(S.form.sections.wifi, configure.el, onBox, offNote));
+    const wifiSection = section(S.form.sections.wifi, configure.el, onBox, offNote);
     refreshers.push(() => {
       onBox.hidden = !f.wifi.configure;
       offNote.hidden = f.wifi.configure;
@@ -1137,7 +1137,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     advanced.addEventListener("toggle", () => {
       if (!advanced.open && advancedError()) advanced.open = true; // keep the error in sight
     });
-    form.append(section(S.form.sections.location, cityField, summaryLine, advanced));
+    const locationSection = section(S.form.sections.location, cityField, summaryLine, advanced);
     refreshers.push(() => {
       // While a fresh install still needs a place, the built-in one must not
       // look chosen, so the line stays empty until the user gives one.
@@ -1163,17 +1163,20 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const nightStart = hourSelect(S.form.nightStart, "start");
     const nightEnd = hourSelect(S.form.nightEnd, "end");
     const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
+    // The night brightness (new in 1.3) sits back under From and Until.
+    const nightLevel = levelSlider({ key: "night.brightness", label: S.form.nightBrightness, hint: S.form.nightAboveDay,
+      level: f.config.night?.brightness ?? DEFAULTS.night.brightness, set: (l) => { f.config.night.brightness = l; } });
     const nightRows = [
       nightSwitch.el,
       h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
+      nightLevel.el,
     ];
-    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night", "night.start", "night.end", "night.enabled"],
+    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night", "night.start", "night.end", "night.enabled", "night.brightness"],
       h("span", { class: "advanced__hint" }, S.form.nightHint));
     nightFold.classList.add("night");
     const clockNote = note("", "note--info");
     const clockFields = h("div", {}, clockFormat, nightFold);
     const clockSection = section(S.form.sections.clock, clockFields, clockNote);
-    form.append(clockSection);
     refreshers.push(() => {
       const st = fieldState(f, "clock_format");
       const first = firstWith("clock_format");
@@ -1189,14 +1192,18 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       nightStart.select.disabled = off && !broken;
       nightEnd.select.disabled = off && !broken;
       nightSwitch.input.disabled = st !== "on";
+      // The level's value stays, ready for when night mode is on. Keep the
+      // slider reachable while its own error shows, as for the hours.
+      nightLevel.input.disabled = off && nightLevel.error.hidden;
+      nightLevel.el.classList.toggle("level--off", off);
     });
 
     // 3b. Units.
-    form.append(section(S.form.sections.units, h("div", { class: "grid-2" },
+    const unitsSection = section(S.form.sections.units, h("div", { class: "grid-2" },
       radioGroup({ key: "temp_unit", legend: S.form.temp, help: "temp_unit", value: f.config.temp_unit,
         options: [["celsius", S.form.celsius], ["fahrenheit", S.form.fahrenheit]], set: (v) => { f.config.temp_unit = v; } }),
       radioGroup({ key: "wind_unit", legend: S.form.wind, help: "wind_unit", value: f.config.wind_unit,
-        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } }))));
+        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } })));
 
     // 4. Pages.
     // Every switch is built; the refresher hides or greys each one for the
@@ -1216,12 +1223,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
     // The legend is the section's title, so the help button sits next to it.
-    form.append(h("section", { class: "section" },
+    // It goes into the Look and pages box, below the day brightness.
+    const pagesBlock = h("div", { class: "pages-block" },
       h("fieldset", { class: "field pages" },
-        h("legend", { class: "section__legend" }, head(h("h2", { class: "section__title" }, S.form.pages), S.form.pages, "pages", "pages")),
+        h("legend", { class: "section__legend" }, head(h("h3", { class: "section__title section__title--sub" }, S.form.pages), S.form.pages, "pages", "pages")),
         h("div", { class: "pages__grid" }, pageRows.map((r) => r.el)),
         errorSlot("pages", [])),
-      allOff, stockHidden, githubHidden));
+      allOff, stockHidden, githubHidden);
     refreshers.push(() => {
       for (const { p, el, input, newer } of pageRows) {
         const st = fieldState(f, `pages.${p}`);
@@ -1371,7 +1379,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
     const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
     const slotsBlock = h("div", { class: "slots" }, slotRows[0].el, moreStocks);
-    form.append(section(S.form.sections.stock, tickerBlock, slotsBlock));
+    const stockSection = section(S.form.sections.stock, tickerBlock, slotsBlock);
     refreshers.push(() => {
       const st = fieldState(f, "stocks");
       const firstStocks = firstWith("stocks");
@@ -1625,7 +1633,6 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const coinFields = h("div", {}, coinKeyField.el,
       h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey);
     const coinSection = section(S.form.sections.coin, coinFields, coinsNote);
-    form.append(coinSection);
     refreshers.push(() => {
       const st = fieldState(f, "coins");
       const firstCoins = firstWith("coins");
@@ -1664,13 +1671,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         ghResult.textContent = "";
       },
     });
-    form.append(section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult)));
+    const githubSection = section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult));
     refreshers.push(() => {
       ghCheck.disabled = !f.config.github_user;
       ghOff.hidden = !!f.config.github_user;
     });
 
-    // 8. Look.
+    // 8. Look and pages.
     const swatch = (i) => {
       const t = THEMES[i];
       const dots = [...new Set([t.sec, t.temp, t.priceUp, t.priceDown, t.ghNum])].slice(0, 4);
@@ -1685,27 +1692,24 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       radioGroup({ key: "mount", legend: S.form.mount, help: "mount", value: f.config.mount, cls: "radios--mount",
         options: [["left", S.form.left, mountIcon("left")], ["right", S.form.right, mountIcon("right")]],
         set: (v) => { f.config.mount = v; } }));
-    // The day and night brightness (new in 1.3). Below 1.3 one note stands in for both.
+    // The day brightness (new in 1.3). Below 1.3 a note stands in for it; the night level lives in Clock.
     const dayLevel = levelSlider({ key: "brightness", label: S.form.dayBrightness, help: "brightness", hint: S.form.dayBrightnessHint,
       level: f.config.brightness ?? DEFAULTS.brightness, set: (l) => { f.config.brightness = l; } });
-    const nightLevel = levelSlider({ key: "night.brightness", label: S.form.nightBrightness, hint: S.form.nightAboveDay,
-      level: f.config.night?.brightness ?? DEFAULTS.night.brightness, set: (l) => { f.config.night.brightness = l; } });
-    const levelRows = h("div", {}, dayLevel.el, nightLevel.el);
+    const levelRows = h("div", {}, dayLevel.el);
     const levelNote = note("", "note--info");
-    lookSection.append(levelRows, levelNote);
-    form.append(lookSection);
+    lookSection.append(levelRows, levelNote, pagesBlock);
     refreshers.push(() => {
       const st = fieldState(f, "brightness");
       const first = firstWith("brightness");
       levelRows.hidden = st !== "on";
       levelNote.hidden = st !== "greyed";
       levelNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
-      const off = !f.config.night?.enabled;   // its value stays, ready for when night mode is on
-      // Keep the slider reachable while its own error shows, as for the hours.
-      nightLevel.input.disabled = off && nightLevel.error.hidden;
-      nightLevel.el.classList.toggle("level--off", off);
-      nightLevel.hintEl.textContent = off ? S.form.nightNeedsSwitch : S.form.nightAboveDay;
     });
+
+    // The boxes go in on the page in the setup flow's order. They were built
+    // in the order above, since they share the Finnhub key boxes, the
+    // refreshers and the pages notes that read the stock state.
+    form.append(wifiSection, lookSection, unitsSection, locationSection, clockSection, stockSection, coinSection, githubSection);
 
     // Firmware version, for the flows that flash.
     let cfgNote = null;
