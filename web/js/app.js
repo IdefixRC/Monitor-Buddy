@@ -1494,13 +1494,15 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       return filled.length ? S.form.moreCoinsList(filled.map((s) => s.pair), filled.filter((s) => !s.on).length) : "";
     }, coinRows.slice(1).map((r) => `coinslot.${r.i}`));
     const coinsNote = note("", "note--info");
-    const coinSection = section(S.form.sections.coin, coinKeyField.el,
-      h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey, coinsNote);
+    const coinFields = h("div", {}, coinKeyField.el,
+      h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey);
+    const coinSection = section(S.form.sections.coin, coinFields, coinsNote);
     form.append(coinSection);
     refreshers.push(() => {
       const st = fieldState(f, "coins");
       const firstCoins = firstWith("coins");
       coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
+      coinFields.hidden = st !== "on"; // all new in 1.3: an older target shows only the note (Eric)
       coinsNote.hidden = st !== "greyed";
       coinsNote.textContent = st === "greyed" && firstCoins ? S.form.needsNewer(firstCoins.version) : "";
       coinKeyField.input.disabled = st !== "on";

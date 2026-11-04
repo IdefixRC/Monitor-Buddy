@@ -833,3 +833,8 @@ test("compact rows: the pick, then the tools in the brief's order", () => {
   assert.match(appSource, /"aria-describedby": curNote\.id/);
   assert.equal((appSource.match(/S\.form\.coinCurrencyNote/g) || []).length, 1);
 });
+
+test("firmware without coins shows only the note in the Coins section", () => {
+  assert.match(appSource, /coinFields\.hidden = st !== "on";/);
+  assert.match(appSource, /section\(S\.form\.sections\.coin, coinFields, coinsNote\)/);
+});
