@@ -14,7 +14,7 @@ import { pageList } from "./preview.js";
 export const DEFAULTS = Object.freeze({
   mount: "left",
   theme: 2,
-  brightness: 204,
+  brightness: 180,
   github_user: "",
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",

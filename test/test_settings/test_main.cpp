@@ -11,7 +11,7 @@ static Settings makeDefaults() {
   Settings s{};
   s.mount = MOUNT_LEFT;
   s.theme = 2;
-  s.brightness = 204;
+  s.brightness = 180;
   strcpy(s.githubUser, "IdefixRC");
   strcpy(s.tzName, "Asia/Singapore");
   strcpy(s.tzRule, "<+08>-8");
@@ -56,7 +56,7 @@ static void test_to_json_writes_every_key() {
   TEST_ASSERT_EQUAL(CONFIG_VERSION, d["v"].as<int>());
   TEST_ASSERT_EQUAL_STRING("left", d["mount"]);
   TEST_ASSERT_EQUAL(2, d["theme"].as<int>());
-  TEST_ASSERT_EQUAL(204, d["brightness"].as<int>());
+  TEST_ASSERT_EQUAL(180, d["brightness"].as<int>());
   TEST_ASSERT_EQUAL_STRING("IdefixRC", d["github_user"]);
   TEST_ASSERT_EQUAL_STRING("Asia/Singapore", d["tz_name"]);
   TEST_ASSERT_EQUAL_STRING("<+08>-8", d["tz_rule"]);

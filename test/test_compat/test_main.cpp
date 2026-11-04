@@ -49,7 +49,7 @@ static void test_k1_k2_a_1_2_0_file_loads_and_gains_stocks() {
   defaults.coinCount = 1;
   defaults.pages[7] = true;
   defaults.clockFormat = CLOCK_24H;
-  defaults.brightness = 204;
+  defaults.brightness = 180;
   defaults.night = {false, 23, 7, 26};
   AddedKeys added;
   JsonDocument inv;

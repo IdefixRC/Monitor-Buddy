@@ -1072,10 +1072,10 @@ test("night errors only count where night mode is offered", () => {
   assert.ok(formErrors(now, zones).night);
 });
 
-test("the default brightness is 80 % by day and 10 % at night", () => {
-  assert.equal(levelToPercent(DEFAULTS.brightness), 80);
+test("the default brightness is 1.2's 180 by day and 10 % at night", () => {
+  assert.equal(DEFAULTS.brightness, 180);
+  assert.equal(levelToPercent(DEFAULTS.brightness), 71);
   assert.equal(levelToPercent(DEFAULTS.night.brightness), 10);
-  assert.equal(percentToLevel(80), DEFAULTS.brightness);
   assert.equal(percentToLevel(10), DEFAULTS.night.brightness);
 });
 

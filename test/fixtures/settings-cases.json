@@ -1,6 +1,6 @@
 {
   "settings": {
-    "defaults": {"mount":"left","theme":2,"brightness":204,"github_user":"","tz_name":"Asia/Singapore","tz_rule":"<+08>-8","ticker":"AAPL","stocks":[{"symbol":"AAPL","on":true}],"stock_key":"","coins":[{"pair":"BTC-USD","source":"coinbase","on":true}],"lat":"1.3119","lon":"103.8149","clock_format":"24h","temp_unit":"celsius","wind_unit":"kmh","night":{"enabled":false,"start":23,"end":7,"brightness":26},"pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":true,"stock":true,"github":true,"coin":true}},
+    "defaults": {"mount":"left","theme":2,"brightness":180,"github_user":"","tz_name":"Asia/Singapore","tz_rule":"<+08>-8","ticker":"AAPL","stocks":[{"symbol":"AAPL","on":true}],"stock_key":"","coins":[{"pair":"BTC-USD","source":"coinbase","on":true}],"lat":"1.3119","lon":"103.8149","clock_format":"24h","temp_unit":"celsius","wind_unit":"kmh","night":{"enabled":false,"start":23,"end":7,"brightness":26},"pages":{"face":true,"clock":true,"date":true,"weather":true,"moon":true,"stock":true,"github":true,"coin":true}},
     "cases": [
       {"name":"clock format","op":"merge","patch":{"clock_format":"12h"},"ok":true,"config":{"clock_format":"12h"}},
       {"name":"bad clock format","op":"merge","patch":{"clock_format":"13h"},"ok":false,"errors":{"clock_format":"must be \"24h\" or \"12h\""}},
@@ -10,7 +10,7 @@
       {"name":"a theme in range","op":"merge","patch":{"theme":4},"ok":true,"config":{"theme":4}},
       {"name":"a theme out of range","op":"merge","patch":{"theme":9},"ok":false,"errors":{"theme":"must be a whole number 0-4"}},
       {"name":"theme as text","op":"merge","patch":{"theme":"2"},"ok":false,"errors":{"theme":"must be a whole number 0-4"}},
-      {"name":"brightness default","op":"merge","patch":{},"ok":true,"config":{"brightness":204}},
+      {"name":"brightness default","op":"merge","patch":{},"ok":true,"config":{"brightness":180}},
       {"name":"a brightness in range","op":"merge","patch":{"brightness":200},"ok":true,"config":{"brightness":200}},
       {"name":"brightness below the minimum","op":"merge","patch":{"brightness":7},"ok":false,"errors":{"brightness":"a number from 8 to 255"}},
       {"name":"brightness above the maximum","op":"merge","patch":{"brightness":256},"ok":false,"errors":{"brightness":"a number from 8 to 255"}},

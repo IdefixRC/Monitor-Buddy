@@ -239,7 +239,7 @@ static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_EN
 static constexpr uint32_t COIN_REFRESH_MS       = 60000UL;
 static constexpr uint32_t COIN_CHART_REFRESH_MS = 15UL * 60UL * 1000UL;
 
-static constexpr uint8_t BRIGHTNESS_DEFAULT = 204;
+static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
 // Save brightness this long after the last step, so a drag writes once.
 static constexpr uint32_t BRIGHTNESS_SAVE_DELAY_MS = 2000;
