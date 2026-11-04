@@ -2,7 +2,7 @@
 // choices, its errors and its help texts. Pure: no DOM, no Web Serial, so the
 // tests run it (web-tests/form.test.mjs). app.js draws the form.
 import { S } from "./strings.js";
-import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported, withStocks } from "./settings.js";
+import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported, mergeConfig, newlyOffered, withStocks } from "./settings.js";
 import { ruleForZone } from "./tz.js";
 import { pageList } from "./preview.js";
 
@@ -14,17 +14,21 @@ import { pageList } from "./preview.js";
 export const DEFAULTS = Object.freeze({
   mount: "left",
   theme: 2,
+  brightness: 180,
   github_user: "",
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",
   ticker: "AAPL",
   stocks: Object.freeze([Object.freeze({ symbol: "AAPL", on: true })]),
   stock_key: "",
+  coins: Object.freeze([Object.freeze({ pair: "BTC-USD", source: "coinbase", on: true })]),
   lat: "1.3119",
   lon: "103.8149",
+  clock_format: "24h",
   temp_unit: "celsius",
   wind_unit: "kmh",
-  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true }),
+  night: Object.freeze({ enabled: false, start: 23, end: 7, brightness: 26 }),
+  pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }),
 });
 
 // Flows, as spec §4. flash: the flow writes firmware; erase: it erases first.
@@ -63,6 +67,24 @@ export function setTicker(config, symbol) {
 export function fromBoard(config) {
   const out = withStocks(config || {});
   if (out.stock_key === PLACEHOLDER_KEY) out.stock_key = "";
+  // A 1.2 board has no coins and no coin page; 1.3 starts with BTC-USD and the
+  // page on (what the board itself does after the flash). filterSupported
+  // strips both again for a target without them.
+  if (!Object.hasOwn(out, "coins")) out.coins = structuredClone(DEFAULTS.coins);
+  if (!out.pages || !Object.hasOwn(out.pages, "coin")) out.pages = { ...out.pages, coin: DEFAULTS.pages.coin };
+  // Likewise the clock format and night mode (both off) that 1.3 added.
+  if (!Object.hasOwn(out, "clock_format")) out.clock_format = DEFAULTS.clock_format;
+  if (!Object.hasOwn(out, "night")) out.night = { ...DEFAULTS.night };
+  // And the brightness, which a 1.2 board keeps in /display.json without showing it.
+  if (!Object.hasOwn(out, "brightness")) out.brightness = DEFAULTS.brightness;
+  return out;
+}
+
+// A board's GET config as a backup keeps it. fromBoard seeds the brightness of
+// a board too old to report one; a backup must not carry that made-up value.
+export function backupConfig(boardConfig) {
+  const out = fromBoard(boardConfig);
+  if (!boardConfig || !Object.hasOwn(boardConfig, "brightness")) delete out.brightness;
   return out;
 }
 
@@ -99,8 +121,14 @@ export function newFormState(config, { flow, info = null, added = [], imported =
   };
   state.stockSlots = stockSlots(state.config.stocks);
   state.stockSlotOf = slotsToStocks(state.stockSlots).slotOf;
+  state.coinSlots = coinSlots(state.config.coins); // empty slots start on Coinbase
+  state.coinSlotOf = slotsToCoins(state.coinSlots).slotOf;
   return state;
 }
+
+// What the preview draws: only what the target firmware has, so a target
+// without coins shows no Coin page.
+export const previewConfig = (state) => filterSupported(state.config, state.supported);
 
 // The form shows a setting only if the Buddy it will be sent to understands
 // it (spec §5.3): the running board's GET for Change settings; the firmware
@@ -148,29 +176,93 @@ export function formToRequest(state) {
   return req;
 }
 
-// ── Stock slots (spec stocks-and-coins §6.1) ──────────────
+// ── Slots (spec stocks-and-coins §6.1) ────────────────────
 // Five slots in the form; the board stores the filled ones in slot order,
-// switched-off ones included (on: false). Slot 1 is always on.
+// switched-off ones included (on: false). Slot 1 is always on. Stocks and
+// coins share these two helpers.
 export const STOCK_SLOTS = 5;
+export const COIN_SLOTS = 5;
 
-export function stockSlots(stocks) {
-  const list = Array.isArray(stocks) ? stocks : [];
-  return Array.from({ length: STOCK_SLOTS }, (_, i) => {
-    const e = list[i];
-    if (!e || typeof e.symbol !== "string") return { symbol: "", on: i === 0 };
-    return { symbol: e.symbol, on: i === 0 ? true : e.on !== false };
+// `count` slots from a stored list: entry i fills slot i when isFilled says it
+// is a real entry (fill(entry, i) builds the slot), else the slot is blank(i).
+function slotsFrom(list, blank, isFilled, fill, count) {
+  const src = Array.isArray(list) ? list : [];
+  return Array.from({ length: count }, (_, i) => {
+    const e = src[i];
+    return e && isFilled(e) ? fill(e, i) : blank(i);
   });
 }
 
-export function slotsToStocks(slots) {
-  const stocks = [];
+// The stored list of the filled slots, in slot order, and which form slot
+// each one came from. pick(slot, i) builds the stored entry.
+function slotsToList(slots, isFilled, pick) {
+  const list = [];
   const slotOf = [];
   slots.forEach((s, i) => {
-    if (!s.symbol) return;
-    stocks.push({ symbol: s.symbol, on: i === 0 ? true : !!s.on });
+    if (!isFilled(s)) return;
+    list.push(pick(s, i));
     slotOf.push(i);
   });
-  return { stocks, slotOf };
+  return { list, slotOf };
+}
+
+export function stockSlots(stocks) {
+  return slotsFrom(stocks, (i) => ({ symbol: "", on: i === 0 }),
+    (e) => typeof e.symbol === "string",
+    (e, i) => ({ symbol: e.symbol, on: i === 0 ? true : e.on !== false }), STOCK_SLOTS);
+}
+
+export function slotsToStocks(slots) {
+  const { list, slotOf } = slotsToList(slots, (s) => !!s.symbol,
+    (s, i) => ({ symbol: s.symbol, on: i === 0 ? true : !!s.on }));
+  return { stocks: list, slotOf };
+}
+
+export function coinSlots(coins) {
+  return slotsFrom(coins, (i) => ({ pair: "", source: "coinbase", on: i === 0 }),
+    (e) => typeof e.pair === "string",
+    (e, i) => ({
+      pair: e.pair,
+      source: typeof e.source === "string" ? e.source : "coinbase", // keep one we don't know; validation flags it
+      on: i === 0 ? true : e.on !== false,
+    }), COIN_SLOTS);
+}
+
+export function slotsToCoins(slots) {
+  const { list, slotOf } = slotsToList(slots, (s) => !!s.pair,
+    (s, i) => ({ pair: s.pair, source: s.source, on: i === 0 ? true : !!s.on }));
+  return { coins: list, slotOf };
+}
+
+export const COIN_SOURCES = Object.freeze(["coinbase", "finnhub"]);
+
+// The id of the coin list a slot needs, or null: no list for a source this
+// flasher doesn't know (the slot shows its pair as text and the error says why),
+// and none for Finnhub without a key.
+export function coinListId(source, key) {
+  if (!COIN_SOURCES.includes(source) || (source === "finnhub" && !key)) return null;
+  return `${source}|${source === "finnhub" ? key : ""}`;
+}
+
+// What a coin row shows. st: fieldState for "coins"; key: the Finnhub key as it
+// stands; listKey: the key the Finnhub lists use (app.js sets it once a key box
+// is left); loaded, failed: the lists by id. id is the list to ask for, null when
+// none is wanted. state: "ok" (list here), "loading", "failed", "none" (no list:
+// no key, or a source we don't know) or "idle" (greyed: nothing is loaded).
+export function coinRowState(st, slot, key, { listKey = key, loaded, failed }) {
+  const greyed = st !== "on";
+  const off = !slot.on;
+  const id = greyed ? null : coinListId(slot.source, listKey);
+  const state = greyed ? "idle" : !id ? "none" : loaded.has(id) ? "ok" : failed.has(id) ? "failed" : "loading";
+  const keyless = !key;
+  return {
+    id, state, greyed, keyless,
+    // Finnhub needs the key, but a stored keyless Finnhub coin stays selected, with its error.
+    finnhubDisabled: greyed || (keyless && slot.source !== "finnhub"),
+    pickDisabled: greyed || off || state !== "ok",
+    manualDisabled: greyed || off,
+    checkDisabled: greyed || off || !slot.pair || !COIN_SOURCES.includes(slot.source) || (slot.source === "finnhub" && keyless),
+  };
 }
 
 export function moveSlot(slots, i, dir) {
@@ -185,11 +277,61 @@ export function moveSlot(slots, i, dir) {
 // The index in config.stocks of form slot `slot`, or -1 when that slot isn't stored.
 export const stockIndexOfSlot = (state, slot) => (state.stockSlotOf || []).indexOf(slot);
 
+// The index in config.coins of form slot `slot`, or -1 when that slot isn't stored.
+export const coinIndexOfSlot = (state, slot) => (state.coinSlotOf || []).indexOf(slot);
+
+export function applyCoinSlots(state) {
+  const { coins, slotOf } = slotsToCoins(state.coinSlots);
+  state.config.coins = coins;
+  state.coinSlotOf = slotOf;
+}
+
 export function applySlots(state) {
   const { stocks, slotOf } = slotsToStocks(state.stockSlots);
   state.config.stocks = stocks;
   state.config.ticker = state.stockSlots[0].symbol;
   state.stockSlotOf = slotOf;
+}
+
+// The slots again from f.config (an import, after a flash), for each list the
+// config has. A list it lacks (a target without stocks or coins, once
+// filterSupported has been through) is left alone: applySlots would blank the
+// ticker and applyCoinSlots would add coins: []. Coin slots waiting for their
+// new source's list to check their pair (slot.verify) keep waiting, matched by
+// pair and source.
+export function rederiveSlots(f) {
+  if (Array.isArray(f.config.stocks)) {
+    f.stockSlots = stockSlots(f.config.stocks);
+    applySlots(f);
+  }
+  if (Array.isArray(f.config.coins)) {
+    const id = (s) => `${s.source}|${s.pair}`;
+    const pending = new Set(f.coinSlots.filter((s) => s.verify).map(id));
+    f.coinSlots = coinSlots(f.config.coins).map((s) => (pending.has(id(s)) ? { ...s, verify: true } : s));
+    applyCoinSlots(f);
+  }
+}
+
+// After a flash: `now`, what the new firmware reports, decides. The form goes
+// over the board's new settings, cut to what that firmware has. -> the paths it
+// has that the form didn't offer.
+export function applyAfterFlash(f, boardConfig, now) {
+  const fresh = newlyOffered(f.supported, now);
+  f.supported = now;
+  f.config = filterSupported(mergeConfig(fromBoard(boardConfig), f.config), now);
+  // The Clock box reads night even where it only shows its note; formToRequest strips it.
+  if (!f.config.night) f.config.night = { ...DEFAULTS.night };
+  // A flash that doesn't erase keeps /display.json, and a board too old to report
+  // its level left only fromBoard's default in the form: the Buddy's own level
+  // stands unless the user chose one. After an erase the form's value is the
+  // one to keep: the board only has its default.
+  const chosen = (f.touched && f.touched.has("brightness")) || (f.imported || []).includes("brightness");
+  const flow = FLOWS[f.flow];
+  if (!chosen && !(flow && flow.erase) && now.has("brightness") && boardConfig && Number.isInteger(boardConfig.brightness)) {
+    f.config.brightness = boardConfig.brightness;
+  }
+  rederiveSlots(f);
+  return fresh;
 }
 
 // "on": the deciding firmware supports it; "greyed": an installable release
@@ -235,44 +377,57 @@ export function fieldMessage(key, raw) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// Errors on stocks keyed like the form: stocks[k]... -> stockslot.<slot of k>.
-// With stocks offered, `ticker` and the list's own error land on slot 1 (an
-// existing message there wins); without, every stock key is dropped.
+// Errors on stocks and coins keyed like the form: stocks[k]... -> stockslot.<slot
+// of k>, coins[k]... -> coinslot.<slot of k>. With the list offered, the list's
+// own error (and `ticker` for stocks) lands on slot 1 (an existing message there
+// wins); without, every key of that list is dropped.
 // Works for both the form's own errors and the Buddy's SET errors.
-export function remapStockErrors(state, errors) {
-  const out = { ...errors };
+function remapListErrors(state, out, { list, slotKey, slotOf, extra }) {
+  const re = new RegExp(`^${list}\\[(\\d+)\\]`);
   for (const [key, msg] of Object.entries(out)) {
-    const m = /^stocks\[(\d+)\]/.exec(key);
+    const m = re.exec(key);
     if (!m) continue;
     delete out[key];
-    const slot = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
-    out[`stockslot.${slot}`] = msg;
+    const slot = slotOf ? slotOf[Number(m[1])] : Number(m[1]);
+    out[`${slotKey}.${slot}`] = msg;
   }
-  if (fieldState(state, "stocks") !== "on") {
+  if (fieldState(state, list) !== "on") {
     // Not offered by the deciding firmware: the list is not validated.
     for (const key of Object.keys(out)) {
-      if (key === "stocks" || key.startsWith("stocks[") || key.startsWith("stockslot.")) delete out[key];
+      if (key === list || key.startsWith(`${list}[`) || key.startsWith(`${slotKey}.`)) delete out[key];
     }
   } else {
-    for (const key of ["ticker", "stocks"]) {
+    for (const key of [...extra, list]) {
       if (key in out) {
-        if (!out["stockslot.0"]) out["stockslot.0"] = out[key];
+        if (!out[`${slotKey}.0`]) out[`${slotKey}.0`] = out[key];
         delete out[key];
       }
     }
   }
+}
+
+// (Name kept from phase 1: it remaps coin errors to coin slots too.)
+export function remapStockErrors(state, errors) {
+  const out = { ...errors };
+  remapListErrors(state, out, { list: "stocks", slotKey: "stockslot", slotOf: state.stockSlotOf, extra: ["ticker"] });
+  remapListErrors(state, out, { list: "coins", slotKey: "coinslot", slotOf: state.coinSlotOf, extra: [] });
   return out;
 }
 
-// Delete, in place, the raw server errors (keyed stocks[k]..., ticker, stocks)
-// that belong to form slot `slot`, so editing that slot clears them.
-export function dropSlotErrors(state, errors, slot) {
+// Delete, in place, the raw server errors that belong to form slot `slot`
+// (kind "stock": stocks[k]..., ticker, stocks; kind "coin": coins[k]..., coins),
+// so editing that slot clears them.
+export function dropSlotErrors(state, errors, slot, kind = "stock") {
+  const coin = kind === "coin";
+  const re = coin ? /^coins\[(\d+)\]/ : /^stocks\[(\d+)\]/;
+  const slotOf = coin ? state.coinSlotOf : state.stockSlotOf;
+  const listKeys = coin ? ["coins"] : ["ticker", "stocks"];
   for (const key of Object.keys(errors)) {
-    const m = /^stocks\[(\d+)\]/.exec(key);
+    const m = re.exec(key);
     if (m) {
-      const at = state.stockSlotOf ? state.stockSlotOf[Number(m[1])] : Number(m[1]);
+      const at = slotOf ? slotOf[Number(m[1])] : Number(m[1]);
       if (at === slot) delete errors[key];
-    } else if (slot === 0 && (key === "ticker" || key === "stocks")) {
+    } else if (slot === 0 && listKeys.includes(key)) {
       delete errors[key];
     }
   }
@@ -292,10 +447,24 @@ export function formErrors(state, zones) {
   (state.stockSlots || []).forEach((s, i) => {
     if (fieldState(state, "stocks") === "on" && i > 0 && s.on && !s.symbol) out[`stockslot.${i}`] = S.errors.stockSlotEmpty;
   });
+  if (fieldState(state, "coins") === "on") {
+    const keyless = !String(state.config.stock_key || "").trim();
+    (state.coinSlots || []).forEach((s, i) => {
+      if (i > 0 && s.on && !s.pair) out[`coinslot.${i}`] = S.errors.coinSlotEmpty;
+      else if (s.on && s.pair && s.source === "finnhub" && keyless && !out[`coinslot.${i}`]) out[`coinslot.${i}`] = S.errors.coinNeedsKey;
+    });
+  }
   if (!out.tz_name && zones && ruleForZone(zones, state.config.tz_name) === null) {
     out.tz_name = S.errors.tzUnknown;
   }
   if (locationMissing(state)) out.location = S.errors.location;
+  // Not offered by the deciding firmware: the Clock box is hidden, so its errors must not block Save.
+  if (fieldState(state, "night.enabled") !== "on") {
+    for (const key of Object.keys(out)) {
+      if (key === "night" || key.startsWith("night.") || key === "clock_format") delete out[key];
+    }
+  }
+  if (fieldState(state, "brightness") !== "on") delete out.brightness;
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") {
     for (const [key, raw] of Object.entries(validateWifi({ ssid: w.ssid, password: w.password }).errors)) {
@@ -345,27 +514,40 @@ export function locationSummary(config, placeLabel = "") {
 // them (Eric, 2026-10-12): the face never uses the theme.
 export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github"]);
 
+// Night mode's hours are stored 0-23; the labels follow the clock format.
+export const hourLabel = (h, format) => {
+  if (format !== "12h") return `${String(h).padStart(2, "0")}:00`;
+  return `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
+};
+// The brightness sliders show percent; the board stores 8-255.
+export const levelToPercent = (l) => Math.round((l * 100) / 255);
+export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
+
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
 // page without jumping), or null (no jump and no hold: Wi-Fi, or a page
-// switched off). "check.stock" and "check.github" are the Check buttons: on
+// switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
 // the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
-// shown (an empty key or user hides stock and GitHub), or stays when there is
-// none. For the other keys, whether the page is shown is the preview's call.
+// shown, or stays when there is
+// none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
-    case "tz_name": case "tz_rule": return "clock";
+    case "tz_name": case "tz_rule": case "clock_format": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
+    case "check.coin": return "coin";
     case "github_user": case "check.github": return "github";
     case "mount": return "face";
+    case "brightness": return "stay"; // the preview doesn't simulate brightness
     case "theme": {
       const shown = pageList(config);
       return THEMED_PAGES.find((p) => shown.includes(p)) || "stay";
     }
     default: break;
   }
+  if (typeof key === "string" && (key === "night" || key.startsWith("night."))) return "clock";
   if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
+  if (typeof key === "string" && key.startsWith("coinslot.")) return "coin";
   if (typeof key === "string" && key.startsWith("pages.")) {
     const page = key.slice("pages.".length);
     return config && config.pages && config.pages[page] === true ? page : null;

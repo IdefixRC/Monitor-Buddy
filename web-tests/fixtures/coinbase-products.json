@@ -1,0 +1,86 @@
+[
+  {
+    "id": "BTC-USD",
+    "base_currency": "BTC",
+    "quote_currency": "USD",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "BTC-EUR",
+    "base_currency": "BTC",
+    "quote_currency": "EUR",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "BTC-GBP",
+    "base_currency": "BTC",
+    "quote_currency": "GBP",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "ETH-USD",
+    "base_currency": "ETH",
+    "quote_currency": "USD",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "ETH-EUR",
+    "base_currency": "ETH",
+    "quote_currency": "EUR",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "SOL-USD",
+    "base_currency": "SOL",
+    "quote_currency": "USD",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "SOL-EUR",
+    "base_currency": "SOL",
+    "quote_currency": "EUR",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "SHIB-USD",
+    "base_currency": "SHIB",
+    "quote_currency": "USD",
+    "status": "online",
+    "quote_increment": "0.00000001"
+  },
+  {
+    "id": "USDC-EUR",
+    "base_currency": "USDC",
+    "quote_currency": "EUR",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "AUDD-USD",
+    "base_currency": "AUDD",
+    "quote_currency": "USD",
+    "status": "online",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "XYZ-USD",
+    "base_currency": "XYZ",
+    "quote_currency": "USD",
+    "status": "delisted",
+    "quote_increment": "0.01"
+  },
+  {
+    "id": "FOO-EUR",
+    "base_currency": "FOO",
+    "quote_currency": "EUR",
+    "status": "online",
+    "quote_increment": "0.01"
+  }
+]

@@ -17,8 +17,9 @@
     python tools/mb_serial.py COM4 selftest    protocol checks; restarts the
                                                Buddy five times
 
-set takes key=value pairs (theme becomes a number; true/false become
-booleans for pages.*; everything else is text), a JSON body, or @file.json.
+set takes key=value pairs (theme, brightness and the night hours and
+level become numbers; true/false become booleans for pages.* and
+night.enabled; everything else is text), a JSON body, or @file.json.
 Prefer key=value in PowerShell and cmd, which strip the quotes from JSON.
 
 wifi asks for the password with getpass, which can hang in Git Bash (mintty).
@@ -240,10 +241,14 @@ def verify_change(s, cmd, body):
             return False, "GET did not answer"
         have = got.get("config") or {}
         for key, value in want.items():
-            if key == "pages" and isinstance(value, dict):
-                for page, on in value.items():
-                    if (have.get("pages") or {}).get(page) is not on:
-                        return False, f"pages.{page} is not {str(on).lower()} on the board"
+            if isinstance(value, dict):   # pages, night: field by field
+                sub = have.get(key)
+                sub = sub if isinstance(sub, dict) else {}
+                for field, want_field in value.items():
+                    ok = sub.get(field) is want_field if isinstance(want_field, bool) else _same(want_field, sub.get(field))
+                    if not ok:
+                        shown = str(want_field).lower() if isinstance(want_field, bool) else want_field
+                        return False, f"{key}.{field} is not {shown} on the board"
             elif not _same(value, have.get(key)):
                 return False, f"{key} is not the requested value on the board"
     wifi = (body or {}).get("wifi")
@@ -303,8 +308,9 @@ def change(s, port, cmd, body=None, wait_restart=False):
 
 
 REDACTED = "<redacted>"
-CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-               "stock_key", "lat", "lon", "temp_unit", "wind_unit"]
+CONFIG_KEYS = ["mount", "theme", "brightness", "github_user", "tz_name", "tz_rule", "ticker",
+               "stock_key", "lat", "lon", "temp_unit", "wind_unit", "clock_format"]
+NIGHT_FIELDS = ["enabled", "start", "end", "brightness"]
 
 
 def expected_keys(version):
@@ -312,11 +318,11 @@ def expected_keys(version):
     keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     if version >= 2:
-        keys |= {"stocks"}
+        keys |= {"stocks", "coins", "clock_format", "night", "brightness"}
     return keys
 
 
-PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"]
+PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]
 
 
 def redact(obj):
@@ -369,21 +375,43 @@ def parse_set_args(args):
             if value.lower() not in ("true", "false"):
                 raise ValueError(f"{key} must be true or false")
             config.setdefault("pages", {})[page] = value.lower() == "true"
+        elif key.startswith("night."):
+            field = key[len("night."):]
+            if field not in NIGHT_FIELDS:
+                raise ValueError(f"unknown night setting '{field}' (use one of: {', '.join(NIGHT_FIELDS)})")
+            if field == "enabled":
+                if value.lower() not in ("true", "false"):
+                    raise ValueError(f"{key} must be true or false")
+                config.setdefault("night", {})[field] = value.lower() == "true"
+            else:
+                try:
+                    config.setdefault("night", {})[field] = int(value)
+                except ValueError:
+                    raise ValueError(f"{key} must be a whole number") from None
         elif key == "theme":
             try:
                 config[key] = int(value)
             except ValueError:
                 raise ValueError("theme must be a whole number (0-4)") from None
+        elif key == "brightness":
+            try:
+                config[key] = int(value)
+            except ValueError:
+                raise ValueError("brightness must be a whole number (8-255)") from None
         elif key == "stocks":
             symbols = [v.strip().upper() for v in value.split(",") if v.strip()]
             if not symbols:
                 raise ValueError("stocks needs at least one ticker (e.g. stocks=AAPL,MSFT)")
             config["stocks"] = [{"symbol": sym, "on": True} for sym in symbols]
+        elif key == "coins":
+            raise ValueError("coins are records (pair, source, on) and do not fit key=value; "
+                             'use a file: set @file.json with {"config":{"coins":[{"pair":"BTC-USD",'
+                             '"source":"coinbase","on":true}]}}')
         elif key in CONFIG_KEYS:
             config[key] = value
         else:
             raise ValueError(f"unknown setting '{key}' (use one of: "
-                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>)")
+                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>, night.<field>; coins via @file)")
     return {"config": config}
 
 
@@ -417,7 +445,7 @@ def selftest(port):
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
     check("INFO cfg_v matches GET v", info.get("cfg_v") == got.get("v"), (info.get("cfg_v"), got.get("v")))
     check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
-    check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
+    check("GET pages", len(original.get("pages", {})) == (8 if original.get("v", 1) >= 2 else 7), original.get("pages"))
     check("GET has a stored flag", isinstance(got.get("stored"), bool), got.get("stored"))
     was_stored = got.get("stored") is True
     if not original:

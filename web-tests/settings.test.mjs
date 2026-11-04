@@ -8,8 +8,8 @@ import {
 
 const DEFAULTS = {
   mount: "left", theme: 2, github_user: "IdefixRC", tz_name: "Asia/Singapore", tz_rule: "<+08>-8",
-  ticker: "AAPL", stocks: [{ symbol: "AAPL", on: true }], stock_key: "", lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
-  pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true },
+  ticker: "AAPL", stocks: [{ symbol: "AAPL", on: true }], stock_key: "", coins: [{ pair: "BTC-USD", source: "coinbase", on: true }], lat: "1.3119", lon: "103.8149", temp_unit: "celsius", wind_unit: "kmh",
+  pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true },
 };
 
 const bad = (patch, key) => {
@@ -27,12 +27,12 @@ const good = (patch) => {
 // -- constants ------------------------------------------------------------
 
 test("KEYS are the firmware's keys in the firmware's order", () => {
-  assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks",
-    "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"]);
+  assert.deepEqual(KEYS, ["mount", "theme", "brightness", "github_user", "tz_name", "tz_rule", "ticker", "stocks",
+    "stock_key", "coins", "lat", "lon", "clock_format", "temp_unit", "wind_unit", "night", "pages"]);
 });
 
 test("PAGE_KEYS are the firmware's pages in order", () => {
-  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github"]);
+  assert.deepEqual(PAGE_KEYS, ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]);
 });
 
 // -- validateConfig: whole object -----------------------------------------
@@ -227,7 +227,7 @@ test("merge changes only the patched key", () => {
 });
 test("merge keeps the other pages", () => {
   const m = mergeConfig(DEFAULTS, { pages: { stock: false } });
-  assert.deepEqual(m.pages, { face: true, clock: true, date: true, weather: true, moon: true, stock: false, github: true });
+  assert.deepEqual(m.pages, { face: true, clock: true, date: true, weather: true, moon: true, stock: false, github: true, coin: true });
 });
 test("merge drops unknown keys, v and unknown pages", () => {
   const m = mergeConfig(DEFAULTS, { v: 1, future_key: 1, pages: { future: true }, theme: 4 });
@@ -313,12 +313,14 @@ test("BASELINE_PATHS are 1.2.0's 18 paths", () => {
 });
 
 test("a 1.2.0 GET supports exactly the baseline", () => {
-  const { stocks, ...v12 } = DEFAULTS;
+  const { stocks, coins, clock_format, night, ...v12 } = DEFAULTS;
+  v12.pages = { ...v12.pages };
+  delete v12.pages.coin;
   assert.deepEqual([...supportedPaths(v12)].sort(), [...BASELINE_PATHS].sort());
 });
 
 test("supportedPaths ignores keys the flasher doesn't know and lists only reported pages", () => {
-  const s = supportedPaths({ theme: 2, later: 1, pages: { face: true, coin: true } });
+  const s = supportedPaths({ theme: 2, later: 1, pages: { face: true, later: true } });
   assert.deepEqual([...s], ["theme", "pages.face"]);
 });
 
@@ -333,8 +335,8 @@ test("filterSupported keeps only supported paths", () => {
 
 test("unsupportedKeys names the top-level keys that lost something", () => {
   const supported = new Set(BASELINE_PATHS.filter((p) => p !== "wind_unit" && p !== "pages.moon"));
-  assert.deepEqual(unsupportedKeys(DEFAULTS, supported), ["stocks", "wind_unit", "pages"]);
-  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(BASELINE_PATHS)), ["stocks"]);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, supported), ["stocks", "coins", "wind_unit", "pages"]);
+  assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(BASELINE_PATHS)), ["stocks", "coins", "pages"]);
   assert.deepEqual(unsupportedKeys(DEFAULTS, new Set(PATHS_BY_CFG[2])), []);
 });
 
@@ -363,7 +365,9 @@ test("withStocks seeds stocks from a 1.2 config's ticker", () => {
 
 test("PATHS_BY_CFG: 1 is the frozen baseline, 2 adds the stocks", () => {
   assert.equal(PATHS_BY_CFG[1], BASELINE_PATHS);
-  assert.deepEqual([...PATHS_BY_CFG[2]], [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on"]);
+  assert.deepEqual([...PATHS_BY_CFG[2]], [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on",
+    "coins", "coins.pair", "coins.source", "coins.on", "pages.coin",
+    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness", "brightness"]);
   assert.ok(Object.isFrozen(PATHS_BY_CFG) && Object.isFrozen(PATHS_BY_CFG[2]));
 });
 

@@ -27,7 +27,8 @@ export async function checkStock(fetchFn, ticker, key) {
   if (body === null) return { status: "network" };
   // Finnhub answers 200 with c = 0 for a symbol it doesn't know.
   if (typeof body.c !== "number" || !(body.c > 0)) return { status: "ticker_not_found" };
-  return { status: "ok", price: body.c };
+  const num = (v) => Number(v) || 0;
+  return { status: "ok", price: body.c, open: num(body.o), high: num(body.h), low: num(body.l), ref: num(body.pc) || num(body.o) };
 }
 
 // -> { status: "ok", followers, repos } | { status: "not_found" | "rate_limited" | "network" }
@@ -45,4 +46,40 @@ export async function checkGithub(fetchFn, user) {
   const body = await bodyOf(res);
   if (body === null) return { status: "network" };
   return { status: "ok", followers: body.followers, repos: body.public_repos };
+}
+
+const COINBASE_PRODUCTS = "https://api.exchange.coinbase.com/products/";
+
+// A coin pair such as "SOL-EUR" on one source ("coinbase" needs no key,
+// "finnhub" uses the stock key).
+// -> { status: "ok", price } | { status: "not_found" | "bad_key" | "network" }
+export async function checkCoin(fetchFn, source, pair, key) {
+  const finnhub = source === "finnhub";
+  const url = finnhub
+    ? `${FINNHUB}?symbol=${encodeURIComponent("COINBASE:" + pair)}&token=${encodeURIComponent(key)}`
+    : `${COINBASE_PRODUCTS}${encodeURIComponent(pair)}/stats`;
+  let res;
+  try {
+    res = await fetchFn(url);
+  } catch {
+    return { status: "network" };
+  }
+  if (res.status === 404) return { status: "not_found" };
+  // Finnhub: 401 is a bad key; 403 means the free plan doesn't cover the symbol.
+  if (finnhub && res.status === 401) return { status: "bad_key" };
+  if (finnhub && res.status === 403) return { status: "not_found" };
+  if (res.status === 401 || res.status === 403) return { status: "network" };
+  if (!res.ok) return { status: "network" };
+  const body = await bodyOf(res);
+  if (body === null) return { status: "network" };
+  const price = finnhub ? body.c : Number(body.last);
+  if (typeof price !== "number" || !(price > 0)) return { status: "not_found" };
+  // The same numbers the Buddy keeps, so the preview can draw the real page.
+  const num = (v) => Number(v) || 0;
+  const open = num(finnhub ? body.o : body.open);
+  return {
+    status: "ok", price, open,
+    high: num(finnhub ? body.h : body.high), low: num(finnhub ? body.l : body.low),
+    ref: finnhub ? num(body.pc) || open : open,
+  };
 }

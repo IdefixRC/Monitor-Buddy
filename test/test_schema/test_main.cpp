@@ -15,15 +15,15 @@ using namespace schema;
 void setUp() {}
 void tearDown() {}
 
-struct Coin  { char pair[22]; uint8_t style; };
-struct Night { bool enabled; uint8_t start, end, brightness; };
+struct DemoCoin  { char pair[22]; uint8_t style; };
+// Night comes from settings.h: the demo group is the real one.
 struct Demo {
   uint8_t theme;
   bool    flags[2];
   Night   night;
   char    names[5][11];
   uint8_t nameCount;
-  Coin    coins[5];
+  DemoCoin    coins[5];
   uint8_t coinCount;
 };
 
@@ -39,7 +39,7 @@ static bool pairCheck(const uint8_t *v) {
 }
 
 static const char *const STYLE_WORDS[] = {"finnhub", "coinbase"};
-static const Coin COIN_DEFAULT = {"BTC-USD", 1};
+static const DemoCoin COIN_DEFAULT = {"BTC-USD", 1};
 
 static const Field FLAG_FIELDS[] = {
   boolField("a", 0, "must be true or false"),
@@ -55,9 +55,9 @@ static const Field NAME_FIELD[] = {
   textField(nullptr, 0, 11, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-", "1-10 characters: A-Z, 0-9, . and -"),
 };
 static const Field COIN_FIELDS[] = {
-  textField("pair", offsetof(Coin, pair), 22, 3, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
+  textField("pair", offsetof(DemoCoin, pair), 22, 3, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
             "3-21 characters: A-Z, 0-9 and one -", pairCheck),
-  choiceField("style", offsetof(Coin, style), STYLE_WORDS, 2, "must be \"finnhub\" or \"coinbase\""),
+  choiceField("style", offsetof(DemoCoin, style), STYLE_WORDS, 2, "must be \"finnhub\" or \"coinbase\""),
 };
 static const Field DEMO[] = {
   intField("theme", offsetof(Demo, theme), 1, 0, 4, "must be a whole number 0-4"),
@@ -66,7 +66,7 @@ static const Field DEMO[] = {
              "start and end must differ", nightCheck),
   listField("names", offsetof(Demo, names), offsetof(Demo, nameCount), sizeof(Demo::names[0]), 1, 5,
             NAME_FIELD, 1, "1-5 entries"),
-  listField("coins", offsetof(Demo, coins), offsetof(Demo, coinCount), sizeof(Coin), 1, 5,
+  listField("coins", offsetof(Demo, coins), offsetof(Demo, coinCount), sizeof(DemoCoin), 1, 5,
             COIN_FIELDS, 2, "1-5 entries", &COIN_DEFAULT),
 };
 static const uint8_t DEMO_N = sizeof(DEMO) / sizeof(DEMO[0]);
