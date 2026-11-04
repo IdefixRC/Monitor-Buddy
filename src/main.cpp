@@ -380,6 +380,7 @@ bool nightDimming();
 void nightWake();
 void updateNightMode();
 void setNightBrightness(uint8_t level);
+void flushNightSave(bool now);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -740,6 +741,10 @@ bool     nightActive     = false;   // inside the night window (needs a trusted 
 bool     nightWoken      = false;   // a tap at night lifts the dimming...
 uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
 uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
+bool     nightBanner      = false;  // the brightness banner shows the night level
+bool     nightSavePending = false;  // a swiped night level is waiting for flushNightSave()
+bool     configReplaced   = false;  // SET or DEFAULTS changed /config.json and a restart
+                                    // is due: `settings` is stale, so don't write it
 uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
@@ -2541,6 +2546,7 @@ void mbSet(JsonDocument &req) {
     JsonDocument file;
     settingsToJson(next, file.to<JsonObject>());
     if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
+    configReplaced = true;                // `next` went out with the swiped level in it
   }
   if (!wifi.isNull()) {
     JsonDocument file;                    // AWM's plain format
@@ -2564,6 +2570,7 @@ void mbDefaults() {
     mbError("could not reset settings");
     return;
   }
+  configReplaced = true;
   mbOk();
   Serial.println("settings: reset to config.h values, restarting");
   scheduleRestart();
@@ -2605,6 +2612,7 @@ void serviceProtocol() {
   }
   if (restartAtMs != 0 && (int32_t)(millis() - restartAtMs) >= 0) {
     flushBrightnessSave(true);            // don't lose a just-swiped brightness
+    flushNightSave(true);
     ESP.restart();
   }
 }
@@ -2632,6 +2640,7 @@ void loadDisplaySettings() {
 
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
+  nightBanner = false;
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
@@ -2812,9 +2821,30 @@ void nightWake() {
   nightWokenAt = millis();
 }
 
-// A swipe at night: changes the level now.
+// A swipe at night: changes the level now, saved once the swipes settle. A
+// swipe stopped at the end of the range shows the banner but has nothing to save.
 void setNightBrightness(uint8_t level) {
+  if (level != settings.night.brightness) nightSavePending = true;
   settings.night.brightness = level;
+  brightnessChangedMs = millis();
+  brightnessBannerUntil = (millis() + 1200) | 1;
+  nightBanner = true;
+  Serial.printf("Night brightness: %u/255\n", (unsigned)level);
+}
+
+// Writes a pending night level once the swipes have settled: one write, never
+// one per swipe. settingsToJson writes the whole file, so everything else stays.
+void flushNightSave(bool now) {
+  if (!nightSavePending) return;
+  if (configReplaced) { nightSavePending = false; return; }
+  if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
+  nightSavePending = false;
+  JsonDocument file;
+  settingsToJson(settings, file.to<JsonObject>());
+  if (!writeJsonAtomic(CONFIG_PATH, file)) { Serial.println("night: could not save"); return; }
+  settingsStored = true;                  // a source build now has a file
+  settingsAdded.count = 0;                // the file has every key now
+  Serial.printf("Night brightness saved: %u/255\n", (unsigned)settings.night.brightness);
 }
 
 void updateNightMode() {
@@ -3134,6 +3164,7 @@ void loop() {
     // Save now, long before anyone can press "erase" in the portal, so a
     // factory reset still removes /display.json.
     flushBrightnessSave(true);
+    flushNightSave(true);
     writeBacklight(brightnessLevel);      // never run setup at night brightness
     servicePortal();
     return;
@@ -3147,6 +3178,7 @@ void loop() {
   readSensors();
   readTouch();
   flushBrightnessSave(false);
+  flushNightSave(false);
 
   // A touch-hold inside readTouch() may have just opened the portal.
   if (wifiManager.isPortalActive()) return;
@@ -3189,7 +3221,8 @@ void loop() {
   if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
   if (brightnessBannerUntil) {
     char msg[20];
-    snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
+    if (nightBanner) snprintf(msg, sizeof(msg), "NIGHT %u%%", (unsigned)levelPercent(settings.night.brightness));
+    else             snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)levelPercent(brightnessLevel));
     uint16_t bannerColor = rgb(0,200,255);
     gfx->setTextSize(1);
     gfx->setTextColor(bannerColor);
