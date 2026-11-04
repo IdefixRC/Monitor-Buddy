@@ -19,6 +19,8 @@ Your monitor has a bezel. That bezel is doing nothing. Monitor-Buddy fixes that.
 
 It is a small touchscreen that clips onto the edge of your screen and keeps you company while you work. Most of the time it just shows a face: it blinks, it glances around, and when you pick it up or tilt it, its eyes roll with the motion. Poke the face and it changes expression. It is pointless and you will love it.
 
+**New in 1.3:** up to five stocks, a coin page with up to five crypto pairs and a 24-hour chart, a 12-hour clock, night mode, and day and night brightness sliders in the web flasher. Already have a Buddy? [Update it from your browser](#the-web-flasher-recommended): your settings stay.
+
 It is also genuinely useful when you swipe past the face:
 
 - **Animated face** with several expressions, driven by the on-board QMI8658 motion sensor
@@ -109,6 +111,13 @@ You need **Chrome or Edge on a computer** (Windows, macOS, Linux or ChromeOS). T
    - **A Buddy you built yourself with 1.1.0 or older:** **Upgrade from 1.1 or older**, then **Import config.h** to bring your old settings across. Your Wi-Fi stays as it is.
    - **A Buddy on 1.2.0 or newer:** **Change settings**, **Update firmware**, **Back up settings** to a file (and import it again later), **Fresh install** or **Reset to defaults**. Nothing needs rebuilding, ever.
 4. While you change things, the preview on the page shows how your Buddy will look. When you save or install, the Buddy restarts with your settings.
+
+**Setting up the newer pages:**
+
+- **Stocks:** enter your free [Finnhub](https://finnhub.io/) key and the first symbol in the **Stock** box. **More stocks** holds four more. Untick **On** to park one without losing it.
+- **Coins:** in the **Coins** box, choose Coinbase (no account needed, with a 24-hour chart) or Finnhub (uses the same key, no chart), then the coin, then the currency. Only pairs that exist on that source are offered. **More coins** holds four more.
+- **Clock and night mode:** the **Clock** box has the 24 or 12-hour choice. Open **Night mode** to pick the hours and the night brightness.
+- **Brightness:** the day slider is in **Look and pages**.
 
 Your settings go straight to the Buddy. The page stores nothing in your browser, and the only requests that leave your computer are the coin lists (Coinbase, and Finnhub if you entered a key), the city search (Open-Meteo) and the **Check** buttons, which ask Finnhub, Coinbase and GitHub whether your key, coins and username work.
 
@@ -281,6 +290,8 @@ The built-in values are the release defaults, or your `config/config.h` settings
 | Symptom                                           | Fix                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The web flasher doesn't list the Buddy            | Use Chrome or Edge on a computer, and a USB-C cable that carries data (many are charge-only). Close any program that has the port open, such as a serial monitor in VS Code, then unplug the Buddy and plug it back in. On Windows, check Device Manager for an unknown device and install the driver linked in [4.6](#46-plug-in-the-board). |
+| The Buddy restarts when you connect it            | Normal after it has been idle for a while. The web flasher restarts it once to reach it, then carries on. Your settings stay. |
+| The flasher calls a working Buddy new or older    | Click **Check again** on that page. Don't choose **Fresh install**, which erases your settings. |
 | The flasher says it's not a Buddy board           | It found an ESP32-C6 without the touchscreen and motion sensor, usually the Waveshare ESP32-C6-LCD-1.47 without touch. Monitor-Buddy needs the touchscreen version, the ESP32-C6-Touch-LCD-1.47 (see [2](#2-what-you-need)). Nothing was written to the board.                                                                                |
 | The flasher says no compatible board was found    | The board isn't an ESP32-C6 at all, for example an ESP32-S3 or ESP32-C3. Connect a Waveshare ESP32-C6-Touch-LCD-1.47 (see [2](#2-what-you-need)). Nothing was written to the board.                                                                                                                                                           |
 | The Buddy stays dark after an interrupted install | Its firmware didn't finish installing. Connect it in the web flasher and choose **Install the firmware again**. The settings saved on the board stay.                                                                                                                                                                                         |
