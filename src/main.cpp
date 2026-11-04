@@ -169,7 +169,7 @@ static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-
 // CLOCK_12H       true shows 1-12 with AM/PM instead of 00-23.
 // NIGHT_MODE      true dims the backlight and gives the face a sleepy look
 //                 from NIGHT_START_HOUR until NIGHT_END_HOUR (local time).
-//                 A touch brings the normal brightness back for
+//                 A tap brings the normal brightness back for
 //                 NIGHT_WAKE_MS. Off until the clock has synced over NTP.
 // NIGHT_BRIGHTNESS backlight level at night, 8-255.
 #ifndef CLOCK_12H
@@ -679,7 +679,7 @@ float   tiltSign       = 1.0f;
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
-bool settingsStored = false;   // booted from a readable /config.json; GET "stored"
+bool settingsStored = false;   // /config.json was readable at boot, or a self-save wrote it; GET "stored"
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
@@ -725,6 +725,7 @@ bool     touchMoved       = false;
 bool     touchSwipeDone   = false;  // page swipe fired; ignore this press until release
 bool     touchDark        = false;  // this press began on a dimmed screen. Decided once,
                                     // so a window edge can't split a press in two
+bool     touchNightStepped = false; // this press changed the night level, so it doesn't wake
 uint8_t  tapCount        = 0;
 uint32_t lastTapMs        = 0;
 uint32_t autoPageBannerUntil = 0;
@@ -743,8 +744,9 @@ uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
 uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
 bool     nightBanner      = false;  // the brightness banner shows the night level
 bool     nightSavePending = false;  // a swiped night level is waiting for flushNightSave()
-bool     configReplaced   = false;  // SET or DEFAULTS changed /config.json and a restart
-                                    // is due: `settings` is stale, so don't write it
+uint8_t  savedNightBrightness = 0;  // night level in /config.json, or the default if none
+bool     configReplaced   = false;  // a SET or DEFAULTS replaced /config.json: `settings`
+                                    // no longer matches it, so no self-save before a restart
 uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
@@ -2735,6 +2737,7 @@ void readTouch() {
       touchSwipeDone = false;
       touchWasDown = true;
       touchDark = dimming;
+      touchNightStepped = false;
       touchPortalArmed = !dimming;   // this press is eligible to open the portal
       return;
     }
@@ -2763,8 +2766,12 @@ void readTouch() {
       touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
-      if (touchDark) setNightBrightness(nightStep(settings.night.brightness, dy < 0));
-      else setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      if (touchDark) {
+        setNightBrightness(nightStep(settings.night.brightness, dy < 0));
+        touchNightStepped = true;
+      } else {
+        setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      }
       // Re-base so a continued drag steps brightness again every 55 px.
       touchStartX = x; touchStartY = y;
       touchMoved = true;
@@ -2778,14 +2785,16 @@ void readTouch() {
     uint32_t pressMs = millis() - touchStartMs;
     int16_t dx = (int16_t)touchLastX-(int16_t)touchStartX;
     int16_t dy = (int16_t)touchLastY-(int16_t)touchStartY;
-    if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
-      if (touchDark) {                            // the dark: only wakes
+    if (touchDark) {
+      // The dark: any press that wasn't a gesture wakes, however long, and
+      // never counts as half a double tap.
+      if (pressMs >= 35 && !touchSwipeDone && !touchNightStepped) {
         nightWake();
-        tapCount = 0;                             // and never half a double tap
+        tapCount = 0;
         lastTapMs = 0;
-      } else {
-        triggerFaceTap();
       }
+    } else if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
+      triggerFaceTap();
     }
     touchWasDown = false;
     touchMissFrames = 0;
@@ -2821,11 +2830,10 @@ void nightWake() {
   nightWokenAt = millis();
 }
 
-// A swipe at night: changes the level now, saved once the swipes settle. A
-// swipe stopped at the end of the range shows the banner but has nothing to save.
+// A swipe at night: changes the level now, saved once the swipes settle.
 void setNightBrightness(uint8_t level) {
-  if (level != settings.night.brightness) nightSavePending = true;
   settings.night.brightness = level;
+  nightSavePending = true;
   brightnessChangedMs = millis();
   brightnessBannerUntil = (millis() + 1200) | 1;
   nightBanner = true;
@@ -2833,15 +2841,21 @@ void setNightBrightness(uint8_t level) {
 }
 
 // Writes a pending night level once the swipes have settled: one write, never
-// one per swipe. settingsToJson writes the whole file, so everything else stays.
+// one per swipe, and none while the finger is down. Skips the write when the
+// level ended where it started. settingsToJson writes every setting, so unknown
+// keys in the file are dropped, as by a SET.
 void flushNightSave(bool now) {
+  if (!now && touchWasDown) return;
   if (!nightSavePending) return;
   if (configReplaced) { nightSavePending = false; return; }
   if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
   nightSavePending = false;
+  if (settings.night.brightness == savedNightBrightness) return;
   JsonDocument file;
   settingsToJson(settings, file.to<JsonObject>());
+  if (file.overflowed()) { Serial.println("night: could not save"); return; }
   if (!writeJsonAtomic(CONFIG_PATH, file)) { Serial.println("night: could not save"); return; }
+  savedNightBrightness = settings.night.brightness;
   settingsStored = true;                  // a source build now has a file
   settingsAdded.count = 0;                // the file has every key now
   Serial.printf("Night brightness saved: %u/255\n", (unsigned)settings.night.brightness);
@@ -2853,7 +2867,8 @@ void updateNightMode() {
     if (inWindow != nightActive) {
       nightActive = inWindow;
       nightWoken  = false;                                  // a wake ends with its night
-      faceMood = inWindow ? MOOD_SLEEPY : MOOD_NORMAL;      // a tap still changes it
+      if (inWindow) faceMood = MOOD_SLEEPY;                 // a tap still changes it
+      else if (faceMood == MOOD_SLEEPY) faceMood = MOOD_NORMAL;
       Serial.printf("Night mode: %s\n", inWindow ? "on" : "off");
     }
   }
@@ -3029,6 +3044,7 @@ void setup() {
   // begin() mounts LittleFS again later; that is a no-op once mounted.
   if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed - using config.h values");
   loadSettings();
+  savedNightBrightness = settings.night.brightness;
   screenRotation = settings.mount == MOUNT_RIGHT ? 3 : 1;
   tiltSign       = settings.mount == MOUNT_RIGHT ? -1.0f : 1.0f;
   setenv("TZ", settings.tzRule, 1);

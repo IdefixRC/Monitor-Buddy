@@ -104,7 +104,7 @@
 // NIGHT_MODE: true dims the backlight from NIGHT_START_HOUR until
 // NIGHT_END_HOUR (local time, 0-23, the span may cross midnight) to
 // NIGHT_BRIGHTNESS (8-255). The two hours must differ.
-// NIGHT_WAKE_MS: how long a touch brings the normal brightness back.
+// NIGHT_WAKE_MS: how long a tap brings the normal brightness back.
 #define CLOCK_12H        false
 #define NIGHT_MODE       false
 #define NIGHT_START_HOUR 23
