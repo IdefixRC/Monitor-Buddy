@@ -27,7 +27,8 @@ export async function checkStock(fetchFn, ticker, key) {
   if (body === null) return { status: "network" };
   // Finnhub answers 200 with c = 0 for a symbol it doesn't know.
   if (typeof body.c !== "number" || !(body.c > 0)) return { status: "ticker_not_found" };
-  return { status: "ok", price: body.c };
+  const num = (v) => Number(v) || 0;
+  return { status: "ok", price: body.c, open: num(body.o), high: num(body.h), low: num(body.l), ref: num(body.pc) || num(body.o) };
 }
 
 // -> { status: "ok", followers, repos } | { status: "not_found" | "rate_limited" | "network" }
@@ -73,5 +74,12 @@ export async function checkCoin(fetchFn, source, pair, key) {
   if (body === null) return { status: "network" };
   const price = finnhub ? body.c : Number(body.last);
   if (typeof price !== "number" || !(price > 0)) return { status: "not_found" };
-  return { status: "ok", price };
+  // The same numbers the Buddy keeps, so the preview can draw the real page.
+  const num = (v) => Number(v) || 0;
+  const open = num(finnhub ? body.o : body.open);
+  return {
+    status: "ok", price, open,
+    high: num(finnhub ? body.h : body.high), low: num(finnhub ? body.l : body.low),
+    ref: finnhub ? num(body.pc) || open : open,
+  };
 }

@@ -788,6 +788,15 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 // the currency is already there.
 const coinPrice = formatCoinPrice;
 
+// A stock Check's numbers, so the preview draws the real page.
+function keepStockQuote(symbol, { price, open, high, low, ref }) {
+  app.live = {
+    ...app.live,
+    prices: { ...(app.live.prices || {}), [symbol]: price },
+    stockStats: { ...(app.live.stockStats || {}), [symbol]: { open, high, low, ref } },
+  };
+}
+
 // checkCoin's result as a sentence.
 function coinMessage(res, pair) {
   if (res.status === "ok") return S.check.coin.ok(pair, coinPrice(res.price));
@@ -1278,14 +1287,16 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
       const states = Object.fromEntries(Object.entries(app.live.coinStates || {})
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
-      app.live = { ...app.live, coinPrices: prices, coinStates: states };
+      const stats = Object.fromEntries(Object.entries(app.live.coinStats || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      app.live = { ...app.live, coinPrices: prices, coinStates: states, coinStats: stats };
     };
     // The Finnhub key has two boxes, here and in Coins: typing in one sets the
     // key and mirrors it into the other (never into the box being typed in).
     const keyBoxes = [];
     const setKey = (v, from) => {
       f.config.stock_key = v.trim();
-      app.live = { ...app.live, prices: {} };
+      app.live = { ...app.live, prices: {}, stockStats: {} };
       clearChecks();
       for (const box of keyBoxes) if (box !== from) box.value = v;
     };
@@ -1306,7 +1317,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       tickerCheck.disabled = false;
       tickerResult.textContent = stockMessage(res, f.config.ticker);
       tickerResult.dataset.state = res.status === "ok" ? "ok" : "bad";
-      if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [asked[0]]: res.price } };
+      if (res.status === "ok") keepStockQuote(asked[0], res);
       refresh();
       preview.showEntry("stock", 0);
     });
@@ -1356,7 +1367,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         check.disabled = false;
         result.textContent = stockMessage(res, sym);
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
-        if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
+        if (res.status === "ok") keepStockQuote(sym, res);
         refresh();
         { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
       }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${name}` });
@@ -1581,7 +1592,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         const states = { ...(app.live.coinStates || {}) };
         if (res.status === "not_found") states[askedKey] = "notfound"; else delete states[askedKey];
         app.live = { ...app.live, coinStates: states };
-        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price } };
+        if (res.status === "ok") {
+          app.live = {
+            ...app.live,
+            coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price },
+            coinStats: { ...(app.live.coinStats || {}), [askedKey]: { open: res.open, high: res.high, low: res.low, ref: res.ref } },
+          };
+        }
         refresh();
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
       }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${slotName}` });

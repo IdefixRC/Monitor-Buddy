@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS, drawClock } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, drawStock, textPath, SHOWN_ORDER, GLYPHS, drawClock } from "../web/js/preview.js";
 import { previewPageFor, previewConfig, newFormState, DEFAULTS } from "../web/js/form.js";
 import { BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
 
@@ -356,4 +356,28 @@ test("drawClock shows AM/PM in a 12-hour config and nothing extra in 24-hour", (
   // No leading zero: 9 o'clock draws one hour digit fewer than 24-hour "09".
   const rects = (svg) => (svg.match(/<rect/g) || []).length;
   assert.ok(rects(drawClock(c, morning, false, true)) < rects(drawClock(c, morning, false, false)));
+});
+
+test("a checked coin keeps its change and high/low on the page", () => {
+  const c = THEMES[2];
+  const coin = { pair: "BTC-USD", source: "coinbase", on: true, slot: 0 };
+  const live = { coinPrices: { "coinbase:BTC-USD": 110 }, coinStats: { "coinbase:BTC-USD": { open: 100, high: 120, low: 90, ref: 100 } } };
+  const svg = drawCoin(c, coin, live);
+  assert.ok(svg.includes(textPath("+10.00%", 14, 120, 2)), "the change");
+  assert.ok(svg.includes(textPath("H 120.00  L 90.00", 14, 144, 1)), "high and low");
+});
+
+test("a checked stock keeps its change and open, high, low on the page", () => {
+  const c = THEMES[2];
+  const cfg = { stocks: [{ symbol: "AAPL", on: true }] };
+  const entry = { symbol: "AAPL" };
+  const live = { prices: { AAPL: 110 }, stockStats: { AAPL: { open: 105, high: 120, low: 90, ref: 100 } } };
+  const svg = drawStock(c, cfg, live, entry);
+  assert.ok(svg.includes(textPath("+10.00%", 14, 132, 2)), "the change");
+  assert.ok(svg.includes(textPath("OPEN  105.00", 150, 92, 2)), "open");
+  // Down: the price colour follows the change.
+  const down = drawStock(c, cfg, { prices: { AAPL: 90 }, stockStats: live.stockStats }, entry);
+  assert.ok(down.includes(c.priceDown));
+  // Sample values before any Check.
+  assert.ok(drawStock(c, cfg, {}, entry).includes(textPath("+1.24%", 14, 132, 2)));
 });

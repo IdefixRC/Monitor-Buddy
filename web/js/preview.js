@@ -281,22 +281,23 @@ const tickerOf = (config, entry) =>
 const priceOf = (live, ticker) => (live.prices ? live.prices[ticker] : undefined);
 
 // Shown until a Check brings real numbers (the caption says "sample values").
-const SAMPLE_STOCK = { price: 182.34, change: "+1.24%", open: "180.12", high: "184.05", low: "179.40" };
+const SAMPLE_STOCK = { price: 182.34, open: 180.12, high: 184.05, low: 179.4, ref: 180.1 };
 const SAMPLE_GITHUB = { followers: 128, repos: 42 };
 
-function drawStock(c, config, live, entry) {
+export function drawStock(c, config, live, entry) {
   const ticker = tickerOf(config, entry);
   const p = priceOf(live, ticker);
-  const isLive = isNum(p);
+  const q = isNum(p) ? { price: p, ...((live.stockStats && live.stockStats[ticker]) || {}) } : SAMPLE_STOCK;
+  const money = (v) => (v > 0 ? v.toFixed(2) : DASH);
+  const col = !(q.ref > 0) || q.price >= q.ref ? c.priceUp : c.priceDown;
   let tsize = 4;
   while (tsize > 1 && ticker.length * 6 * tsize > 132) tsize--;
-  // Without open/high/low the colour is the "up" one (price >= open).
-  return centred(`$${(isLive ? p : SAMPLE_STOCK.price).toFixed(2)}`, 26, 6, c.priceUp)
-    + txt(ticker, 14, (isLive ? 124 : 112) - 4 * tsize, tsize, c.ticker)
-    + (isLive ? "" : txt(SAMPLE_STOCK.change, 14, 132, 2, c.priceUp))
-    + txt(`OPEN  ${isLive ? DASH : SAMPLE_STOCK.open}`, 150, 92, 2, c.value)
-    + txt(`HIGH  ${isLive ? DASH : SAMPLE_STOCK.high}`, 150, 116, 2, c.value)
-    + txt(`LOW   ${isLive ? DASH : SAMPLE_STOCK.low}`, 150, 140, 2, c.value);
+  return centred(`$${q.price.toFixed(2)}`, 26, 6, col)
+    + txt(ticker, 14, (q.ref > 0 ? 112 : 124) - 4 * tsize, tsize, c.ticker)
+    + (q.ref > 0 ? txt(signed(((q.price - q.ref) / q.ref) * 100), 14, 132, 2, col) : "")
+    + txt(`OPEN  ${money(q.open)}`, 150, 92, 2, c.value)
+    + txt(`HIGH  ${money(q.high)}`, 150, 116, 2, c.value)
+    + txt(`LOW   ${money(q.low)}`, 150, 140, 2, c.value);
 }
 
 // ── Coin page ─────────────────────────────────────────────
@@ -358,11 +359,11 @@ function coinData(entry, live) {
   const chart = Array.isArray(liveChart) ? liveChart : sampleChart(price);
   const hi = Math.max(...chart);
   const lo = Math.min(...chart);
-  return {
-    pair, base, price, chart,
-    ref: havePrice ? 0 : chart[0], open: havePrice ? 0 : chart[0] * 1.003,
-    high: havePrice ? 0 : hi * 1.002, low: havePrice ? 0 : lo * 0.998,
-  };
+  const stats = (live.coinStats && live.coinStats[coinPriceKey(entry.source, pair)]) || {};
+  if (havePrice) {
+    return { pair, base, price, chart, ref: stats.ref || 0, open: stats.open || 0, high: stats.high || 0, low: stats.low || 0 };
+  }
+  return { pair, base, price, chart, ref: chart[0], open: chart[0] * 1.003, high: hi * 1.002, low: lo * 0.998 };
 }
 
 const signed = (v) => `${v < 0 ? "-" : "+"}${Math.abs(v).toFixed(2)}%`;
