@@ -2,7 +2,7 @@
 // choices, its errors and its help texts. Pure: no DOM, no Web Serial, so the
 // tests run it (web-tests/form.test.mjs). app.js draws the form.
 import { S } from "./strings.js";
-import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported, withStocks } from "./settings.js";
+import { validateConfig, validateWifi, BASELINE_PATHS, filterSupported, mergeConfig, newlyOffered, withStocks } from "./settings.js";
 import { ruleForZone } from "./tz.js";
 import { pageList } from "./preview.js";
 
@@ -240,6 +240,36 @@ export function applySlots(state) {
   state.config.stocks = stocks;
   state.config.ticker = state.stockSlots[0].symbol;
   state.stockSlotOf = slotOf;
+}
+
+// The slots again from f.config (an import, after a flash), for each list the
+// config has. A list it lacks (a target without stocks or coins, once
+// filterSupported has been through) is left alone: applySlots would blank the
+// ticker and applyCoinSlots would add coins: []. Coin slots waiting for their
+// new source's list to check their pair (slot.verify) keep waiting, matched by
+// pair and source.
+export function rederiveSlots(f) {
+  if (Array.isArray(f.config.stocks)) {
+    f.stockSlots = stockSlots(f.config.stocks);
+    applySlots(f);
+  }
+  if (Array.isArray(f.config.coins)) {
+    const id = (s) => `${s.source}|${s.pair}`;
+    const pending = new Set(f.coinSlots.filter((s) => s.verify).map(id));
+    f.coinSlots = coinSlots(f.config.coins).map((s) => (pending.has(id(s)) ? { ...s, verify: true } : s));
+    applyCoinSlots(f);
+  }
+}
+
+// After a flash: `now`, what the new firmware reports, decides. The form goes
+// over the board's new settings, cut to what that firmware has. -> the paths it
+// has that the form didn't offer.
+export function applyAfterFlash(f, boardConfig, now) {
+  const fresh = newlyOffered(f.supported, now);
+  f.supported = now;
+  f.config = filterSupported(mergeConfig(fromBoard(boardConfig), f.config), now);
+  rederiveSlots(f);
+  return fresh;
 }
 
 // "on": the deciding firmware supports it; "greyed": an installable release

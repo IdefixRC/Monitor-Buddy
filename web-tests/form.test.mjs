@@ -9,8 +9,9 @@ import {
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
   COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
+  applyAfterFlash, rederiveSlots,
 } from "../web/js/form.js";
-import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
+import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG, filterSupported, supportedPaths, validateConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
 import { S } from "../web/js/strings.js";
 
@@ -449,8 +450,12 @@ test("the form knows what an installable release could add", () => {
 });
 
 test("afterFlash sends what the flash added to the review form", () => {
-  assert.match(appSource, /newlyOffered\(f\.supported, now\)/);
-  assert.match(appSource, /f\.supported = now/);
+  assert.match(appSource, /const fresh = applyAfterFlash\(f, got\.config, supportedPaths\(got\.config\)\);/);
+  assert.match(appSource, /const added = \[\.\.\.new Set\(\[\.\.\.\(got\.added \|\| \[\]\), \.\.\.fresh\]\)\];/);
+  const f = newFormState(DEFAULTS, { flow: "upgrade", supported: BASELINE_PATHS });
+  const now = new Set(PATHS_BY_CFG[2]);
+  assert.ok(applyAfterFlash(f, mergeConfig(DEFAULTS, {}), now).includes("stocks"));
+  assert.equal(f.supported, now);
 });
 
 // Replaced in coin-page Task 7: every switch is built, and fieldState hides or
@@ -697,11 +702,88 @@ test("the coin section loads each source's own list", () => {
   assert.match(appSource, /loadCoinList\(/);
   assert.match(appSource, /fieldState\(f, "coins"\)/);
 });
-test("a flash re-derives the slots from the new settings", () => {
-  assert.match(appSource, /f\.stockSlots = stockSlots\(f\.config\.stocks\)[\s\S]*?f\.coinSlots = coinSlots\(f\.config\.coins/);
-  // The afterFlash site itself, not only the imports.
-  assert.match(appSource, /f\.config = filterSupported\(mergeConfig\(fromBoard\(got\.config\), f\.config\), now\);\s*f\.stockSlots = stockSlots\(f\.config\.stocks\); applySlots\(f\); f\.coinSlots = coinSlots\(f\.config\.coins\); applyCoinSlots\(f\);/);
+// The board's GET after a flash, for a target of each settings format.
+const BOARD_12 = () => filterSupported(mergeConfig(DEFAULTS, {}), new Set(BASELINE_PATHS));
+const BOARD_13 = (extra = {}) => mergeConfig(DEFAULTS, extra);
+const typedAvgo = (supported) => {
+  const f = newFormState(DEFAULTS, { flow: "update", info: INFO_SAVED, supported });
+  f.stockSlots[0] = { ...f.stockSlots[0], symbol: "AVGO" };
+  applySlots(f);
+  return f;
+};
+
+test("a flash to a 1.2 target keeps the ticker and adds nothing it doesn't know", () => {
+  const f = typedAvgo(BASELINE_PATHS);
+  const fresh = applyAfterFlash(f, BOARD_12(), new Set(BASELINE_PATHS));
+  assert.deepEqual(fresh, []);
+  assert.equal(f.config.ticker, "AVGO");
+  assert.equal("stocks" in f.config, false);
+  assert.equal("coins" in f.config, false, "Export backup must not carry coins: []");
+  const { config } = formToRequest(f);
+  assert.equal(config.ticker, "AVGO");
+  assert.equal("stocks" in config, false);
+  assert.equal("coins" in config, false);
+  assert.equal("coin" in config.pages, false);
+  assert.deepEqual(validateConfig(config).errors, {});
 });
+
+test("a flash to a 1.3 target re-derives the slots and keeps pending checks", () => {
+  const f = typedAvgo(PATHS_BY_CFG[2]);
+  f.coinSlots[1] = { pair: "SOL-EUR", source: "finnhub", on: true, verify: true }; // waiting for its list
+  f.coinSlots[2] = { pair: "ETH-EUR", source: "coinbase", on: false };
+  applyCoinSlots(f);
+  const fresh = applyAfterFlash(f, BOARD_13(), supportedPaths(DEFAULTS));
+  assert.deepEqual(fresh, []);
+  assert.deepEqual(f.stockSlots.map((s) => s.symbol), ["AVGO", "", "", "", ""]);
+  assert.equal(f.config.ticker, "AVGO");
+  assert.deepEqual(f.coinSlots.slice(0, 3).map((s) => s.pair), ["BTC-USD", "SOL-EUR", "ETH-EUR"]);
+  assert.equal(f.coinSlots[1].verify, true);
+  assert.equal(f.coinSlots[2].verify, undefined);
+  assert.deepEqual(f.coinSlotOf, [0, 1, 2]);
+  assert.equal(formToRequest(f).config.coins.some((c) => "verify" in c), false);
+});
+
+test("a flash that brings stocks and coins fills their slots and says so", () => {
+  const f = newFormState(DEFAULTS, { flow: "upgrade", supported: BASELINE_PATHS });
+  const fresh = applyAfterFlash(f, BOARD_13(), supportedPaths(DEFAULTS));
+  assert.ok(fresh.includes("stocks") && fresh.includes("coins") && fresh.includes("pages.coin"));
+  assert.equal(f.stockSlots[0].symbol, "AAPL");
+  assert.equal(f.coinSlots[0].pair, "BTC-USD");
+});
+
+// The review form after a flash to a 1.2 target has neither list.
+const reviewOn12 = () => {
+  const f = typedAvgo(BASELINE_PATHS);
+  applyAfterFlash(f, BOARD_12(), new Set(BASELINE_PATHS));
+  return f;
+};
+
+test("an import on a 1.2 target keeps the ticker, with or without the lists in the form", () => {
+  for (const f of [typedAvgo(BASELINE_PATHS), reviewOn12()]) {
+    f.config = mergeConfig(f.config, { ticker: "TSLA" }); // what both imports do
+    rederiveSlots(f);
+    assert.equal(f.config.ticker, "TSLA");
+    assert.equal(formToRequest(f).config.ticker, "TSLA");
+    assert.equal("stocks" in formToRequest(f).config, false);
+    assert.equal("coins" in formToRequest(f).config, false);
+  }
+  const g = reviewOn12();
+  rederiveSlots(g);
+  assert.equal("coins" in g.config, false);
+  // A flash flow keeps the lists while 1.2 is picked, so 1.3 can still be picked after an import.
+  const h = typedAvgo(BASELINE_PATHS);
+  h.config = mergeConfig(h.config, { ticker: "TSLA" });
+  rederiveSlots(h);
+  assert.equal(h.stockSlots[0].symbol, "TSLA");
+});
+
+test("an import keeps a pending check when its coin stays", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", supported: PATHS_BY_CFG[2] });
+  f.coinSlots[0] = { ...f.coinSlots[0], verify: true };
+  rederiveSlots(f);
+  assert.equal(f.coinSlots[0].verify, true);
+});
+
 test("a requested focus is applied after screen() focuses its heading", () => {
   // screen() focuses the heading after build(); the form's requested focus must come later.
   assert.doesNotMatch(appSource, /slotInputs\[Number\(slotAt\[1\]\)\]\.focus\(\);\s*\}\);/);

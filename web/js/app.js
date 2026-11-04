@@ -6,7 +6,7 @@ import { BuddyPort, change, probe } from "./serial.js";
 import { sameMac, watchForTrouble } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
-import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered, pathsForCfg, installablePaths } from "./settings.js";
+import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, pathsForCfg, installablePaths } from "./settings.js";
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
@@ -19,9 +19,9 @@ import {
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, locationSummary, locationMissing, afterRecovery,
-  stockSlots, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
-  remapStockErrors, dropSlotErrors,
-  coinSlots, applyCoinSlots, coinIndexOfSlot, COIN_SLOTS,
+  moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
+  remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
+  applyCoinSlots, coinIndexOfSlot, COIN_SLOTS,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -722,14 +722,6 @@ const coinPrice = formatCoinPrice;
 function coinMessage(res, pair) {
   if (res.status === "ok") return S.check.coin.ok(pair, coinPrice(res.price));
   return S.check.coin[res.status] || S.check.coin.network;
-}
-
-// Coin slots waiting for their new source's list to check their pair (a source
-// change: slot.verify) keep waiting when the slots are re-derived from the
-// settings (an import, after a flash), matched by pair and source.
-const pendingChecks = (f) => new Set(f.coinSlots.filter((s) => s.verify).map((s) => `${s.source}|${s.pair}`));
-function keepPendingChecks(f, pending) {
-  f.coinSlots = f.coinSlots.map((s) => (pending.has(`${s.source}|${s.pair}`) ? { ...s, verify: true } : s));
 }
 
 // The first of `els` that can take focus: in the page, not disabled, not inside a hidden box.
@@ -1683,10 +1675,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       return showForm({ say: S.form.badFile, tone: "error" });
     }
     f.config = mergeConfig(f.config, res.config);
-    const pending = pendingChecks(f);
-    f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
-    f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
-    keepPendingChecks(f, pending);
+    rederiveSlots(f);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
@@ -1710,10 +1699,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const left = unsupportedKeys(cfg, f.supported);
     cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
-    const pending = pendingChecks(f);
-    f.stockSlots = stockSlots(f.config.stocks); applySlots(f);
-    f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
-    keepPendingChecks(f, pending);
+    rederiveSlots(f);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
       ? S.form.backupPartly(Object.keys(cfg).length, left)
@@ -1969,13 +1955,7 @@ async function afterFlash(entry, ui) {
   // What the new firmware understands decides what is sent; anything it has
   // that the form didn't offer goes to the review form first (on a fresh
   // install "added" is empty, so this is the only way the user sees it).
-  const now = supportedPaths(got.config);
-  const fresh = newlyOffered(f.supported, now);
-  f.supported = now;
-  const pending = pendingChecks(f);
-  f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
-  f.stockSlots = stockSlots(f.config.stocks); applySlots(f); f.coinSlots = coinSlots(f.config.coins); applyCoinSlots(f);
-  keepPendingChecks(f, pending);
+  const fresh = applyAfterFlash(f, got.config, supportedPaths(got.config));
   f.installed = info.fw;
   app.expectDrop = false;
   const added = [...new Set([...(got.added || []), ...fresh])];
