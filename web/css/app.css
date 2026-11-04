@@ -1736,7 +1736,7 @@ select.input {
 }
 
 .slot--coin .slot__pick {
-  flex-basis: 17.25rem;
+  flex-basis: 20.75rem;
 }
 
 .slot .input {
@@ -1748,7 +1748,7 @@ select.input {
   flex: 1 1 6rem;
 }
 
-/* Check and On from the left, the arrows at the right end. */
+/* Check from the left, the arrows at the right end. */
 .slot__tools {
   flex: 1 0 auto;
   display: flex;
@@ -1781,12 +1781,9 @@ select.input {
   width: 2.25rem;
 }
 
-.slot__on,
-.slot__gap--on {
-  width: 3.1rem;
-}
-
 .slot__on {
+  flex: none;
+  width: 3.1rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;

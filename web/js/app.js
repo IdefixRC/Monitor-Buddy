@@ -839,12 +839,12 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const text = dir < 0 ? S.form.moveUp : S.form.moveDown;
     return btn(dir < 0 ? "↑" : "↓", onclick, { class: "btn btn--secondary btn--icon", "aria-label": `${text}, ${name}`, title: text });
   }
-  // The row's tools: Check, On, then ↑ ↓ at the right end (also when the row
-  // wraps onto a second line). A missing one (slot 1 has no On and no ↑,
-  // slot 5 no ↓) leaves its gap, so the columns line up.
+  // The row's tools: Check, then ↑ ↓ at the right end (also when the row
+  // wraps onto a second line). A missing arrow (slot 1 has no ↑,
+  // slot 5 no ↓) leaves its gap, so the columns line up. On comes first in the row: it enables the rest.
   const gap = (kind) => h("span", { class: `slot__gap slot__gap--${kind}`, "aria-hidden": "true" });
-  const slotTools = (check, on, up, down) => h("div", { class: "slot__tools" },
-    check, on || gap("on"), h("span", { class: "slot__moves" }, up || gap("up"), down || gap("down")));
+  const slotTools = (check, up, down) => h("div", { class: "slot__tools" },
+    check, h("span", { class: "slot__moves" }, up || gap("up"), down || gap("down")));
   // Slots 2-5 in a fold-out like Location's "Advanced settings". Closed, its
   // title lists what's inside. It opens by itself while a slot inside shows an
   // error, and its open/closed state lives in the form state (f.folds), so a
@@ -1214,8 +1214,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const el = h("div", { class: "slot" },
         i === 0 ? head(h("label", { for: id }, name), name, "stocks", "stocks") : null,
         h("div", { class: "slot__row" },
-          h("div", { class: "slot__pick" }, input),
-          slotTools(check, onBox && onBox.el, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null)),
+          h("div", { class: "slot__pick" }, onBox && onBox.el, input),
+          slotTools(check, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null)),
         error, result);
       // After a Move: the ticker, or (an off slot's is disabled) Move again, then the other way.
       focusTargets[key] = () => [input, ...(moved > 0 ? [down, up] : [up, down]), check];
@@ -1439,14 +1439,14 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
       }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${slotName}` });
 
-      // One row: source, coin, currency (or the typed pair), then Check, On, ↑ ↓.
+      // One row: On, source, coin, currency (or the typed pair), then Check, ↑ ↓.
       // The hints, the error and the Check result sit under it.
       const pickBox = h("div", { class: "coin-pick" }, coinInput, datalist, currency);
       const el = h("div", { class: "slot slot--coin" },
         i === 0 ? head(h("label", { for: coinId }, slotName), slotName, "coins", "coins") : null,
         h("div", { class: "slot__row" },
-          h("div", { class: "slot__pick" }, srcGroup, pickBox, manual),
-          slotTools(check, onBox && onBox.el, i > 0 ? up : null, i < COIN_SLOTS - 1 ? down : null)),
+          h("div", { class: "slot__pick" }, onBox && onBox.el, srcGroup, pickBox, manual),
+          slotTools(check, i > 0 ? up : null, i < COIN_SLOTS - 1 ? down : null)),
         loadingHint, failedHint, error, result);
 
       function sync(st) {

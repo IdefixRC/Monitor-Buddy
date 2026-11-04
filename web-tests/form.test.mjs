@@ -817,13 +817,13 @@ test("slots 2-5 sit in fold-outs that open on an error inside or on focus sent t
   assert.equal(S.form.moreCoinsList(["ETH-GBP", "SOL-EUR"], 0), "More coins: ETH-GBP, SOL-EUR");
 });
 test("compact rows: the pick, then the tools in the brief's order", () => {
-  // Stock: ticker | Check, On, up, down (slot 1: no On, no up; slot 5: no down).
-  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, input\),\s*slotTools\(check, onBox && onBox\.el, i > 0 \? up : null, i < STOCK_SLOTS - 1 \? down : null\)\),\s*error, result\);/);
-  // Coin: source, coin, currency (or the typed pair) | Check, On, up, down (as stock, so wrapped rows match); hints, error and result under the row.
+  // Stock: On, ticker | Check, up, down (slot 1: no On, no up; slot 5: no down).
+  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, onBox && onBox\.el, input\),\s*slotTools\(check, i > 0 \? up : null, i < STOCK_SLOTS - 1 \? down : null\)\),\s*error, result\);/);
+  // Coin: On, source, coin, currency (or the typed pair) | Check, up, down; hints, error and result under the row.
   assert.match(appSource, /const pickBox = h\("div", \{ class: "coin-pick" \}, coinInput, datalist, currency\);/);
-  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, srcGroup, pickBox, manual\),\s*slotTools\(check, onBox && onBox\.el, i > 0 \? up : null, i < COIN_SLOTS - 1 \? down : null\)\),\s*loadingHint, failedHint, error, result\);/);
+  assert.match(appSource, /h\("div", \{ class: "slot__pick" \}, onBox && onBox\.el, srcGroup, pickBox, manual\),\s*slotTools\(check, i > 0 \? up : null, i < COIN_SLOTS - 1 \? down : null\)\),\s*loadingHint, failedHint, error, result\);/);
   // The arrows sit together at the right end of the tools.
-  assert.match(appSource, /check, on \|\| gap\("on"\), h\("span", \{ class: "slot__moves" \}, up \|\| gap\("up"\), down \|\| gap\("down"\)\)/);
+  assert.match(appSource, /check, h\("span", \{ class: "slot__moves" \}, up \|\| gap\("up"\), down \|\| gap\("down"\)\)/);
   // Moves are icon buttons named for their slot.
   assert.match(appSource, /btn\(dir < 0 \? "↑" : "↓", onclick, \{ class: "btn btn--secondary btn--icon", "aria-label": `\$\{text\}, \$\{name\}`/);
   // Finnhub can't be picked without a key; a stored keyless one stays selected.
