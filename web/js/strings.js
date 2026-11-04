@@ -66,7 +66,7 @@ export const S = {
   about: {
     heading: "What this is",
     body: "Monitor Buddy is a little screen that sits on the edge of your monitor: an animated face, plus clock, date, weather, moon, stock, crypto and GitHub pages. This page installs its firmware and sets it up over USB, right in the browser.",
-    privacy: "Your settings go straight to the Buddy. Nothing is stored in this browser, and the only outside requests are the city search and the checks you press.",
+    privacy: "Your settings go straight to the Buddy. Nothing is stored in this browser, and the only outside requests are the coin lists, the city search and the checks you press.",
     project: "Project on GitHub",
     projectUrl: "https://github.com/IdefixRC/Monitor-Buddy",
     guide: "Build guide",
