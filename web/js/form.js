@@ -202,12 +202,12 @@ export function slotsToStocks(slots) {
   return { stocks: list, slotOf };
 }
 
-export function coinSlots(coins, defaultSource = "coinbase") {
-  return slotsFrom(coins, (i) => ({ pair: "", source: defaultSource, on: i === 0 }),
+export function coinSlots(coins) {
+  return slotsFrom(coins, (i) => ({ pair: "", source: "coinbase", on: i === 0 }),
     (e) => typeof e.pair === "string",
     (e, i) => ({
       pair: e.pair,
-      source: typeof e.source === "string" ? e.source : defaultSource, // keep one we don't know; validation flags it
+      source: typeof e.source === "string" ? e.source : "coinbase", // keep one we don't know; validation flags it
       on: i === 0 ? true : e.on !== false,
     }), COIN_SLOTS);
 }

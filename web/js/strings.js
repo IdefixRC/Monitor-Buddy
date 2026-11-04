@@ -175,7 +175,6 @@ export const S = {
     moreStocksList: (names, off) => `More stocks: ${[].concat(names).join(", ")}${off ? ` (${off} off)` : ""}`,
     moreCoins: "More coins (up to 4)",
     moreCoinsList: (pairs, off) => `More coins: ${[].concat(pairs).join(", ")}${off ? ` (${off} off)` : ""}`,
-    coinPick: "Coin",
     coinSearch: "e.g. BTC",
     coinCurrency: "Currency",
     coinCurrencyNote: "Not every coin is available in every currency.",

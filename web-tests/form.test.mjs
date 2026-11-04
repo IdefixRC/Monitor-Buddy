@@ -620,11 +620,11 @@ test("dropSlotErrors: clears the raw server keys of one slot", () => {
   assert.deepEqual(errs, { theme: "q" });
 });
 
-test("coinSlots: five slots, slot 1 on, empty ones off with the default source", () => {
-  const s = coinSlots([{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }], "finnhub");
+test("coinSlots: five slots, slot 1 on, empty ones off on Coinbase", () => {
+  const s = coinSlots([{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }]);
   assert.equal(s.length, COIN_SLOTS);
   assert.deepEqual(s[1], { pair: "SOL-EUR", source: "finnhub", on: false });
-  assert.deepEqual(s[4], { pair: "", source: "finnhub", on: false });
+  assert.deepEqual(s[4], { pair: "", source: "coinbase", on: false });
 });
 test("slotsToCoins keeps switched-off coins and drops empty slots", () => {
   const { coins, slotOf } = slotsToCoins([{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "", source: "coinbase", on: false }, { pair: "ETH-EUR", source: "finnhub", on: false }, { pair: "", source: "coinbase", on: false }, { pair: "", source: "coinbase", on: false }]);
@@ -909,8 +909,13 @@ test("compact rows: the pick, then the tools in the brief's order", () => {
   // Moves are icon buttons named for their slot.
   assert.match(appSource, /btn\(dir < 0 \? "↑" : "↓", onclick, \{ class: "btn btn--secondary btn--icon", "aria-label": `\$\{text\}, \$\{name\}`/);
   // Finnhub can't be picked without a key; a stored keyless one stays selected.
-  assert.match(appSource, /input\.disabled = greyed \|\| \(input === finnhubInput && keyless\);/);
-  assert.match(appSource, /finnhubInput\.setAttribute\("aria-describedby", needKey\.id\);/);
+  assert.match(appSource, /input\.disabled = greyed \|\| \(input === finnhubInput && keyless && !input\.checked\);/);
+  assert.match(appSource, /srcGroup\.setAttribute\("aria-describedby", needKey\.id\);/);
+  // A coin row's loading and failed hints describe their input only while they show.
+  assert.doesNotMatch(appSource, /"aria-describedby": (loadingHint|failedHint)\.id/);
+  assert.match(appSource, /describedBy\(coinInput, loadingHint\);\s*describedBy\(manual, failedHint\);/);
+  // Save goes to the first invalid control that can take focus.
+  assert.match(appSource, /const first = focusable\(\[\.\.\.form\.querySelectorAll\('\[aria-invalid="true"\]'\)\]\);/);
   // The currency note is said once, and every currency select points at it.
   assert.match(appSource, /"aria-describedby": curNote\.id/);
   assert.equal((appSource.match(/S\.form\.coinCurrencyNote/g) || []).length, 1);

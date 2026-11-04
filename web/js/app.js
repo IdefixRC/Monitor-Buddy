@@ -1228,7 +1228,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const key = `stockslot.${i}`;
       const name = S.form.stockSlot(i + 1);
       const result = slotResults[i];
-      // One row: the ticker, Check, On, Move up and down. Slot 1 (always on, no
+      // One row: On, the ticker, Check, Move up and down. Slot 1 (always on, no
       // Move up) has the visible label with the help and badges; the rest are
       // named by aria-label (and placeholder).
       const id = uid("f");
@@ -1345,7 +1345,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     for (const box of keyBoxes) box.addEventListener("change", () => { coinKey = f.config.stock_key; refresh(); });
     // Said once for every currency select (each points at it).
     const curNote = h("p", { class: "field__hint coin-note", id: uid("hint") }, S.form.coinCurrencyNote);
-    // Why Finnhub can't be picked yet (no key): the disabled option points at it.
+    // Why Finnhub can't be picked yet (no key): the source group points at it.
     const needKey = h("p", { class: "sr-only", id: uid("hint") }, S.form.finnhubNeedsKey);
 
     const coinRows = f.coinSlots.map((_, i) => {
@@ -1388,14 +1388,14 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const loadingHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListLoading);
       const coinInput = h("input", {
         id: coinId, type: "search", class: "input input--upper coin-input", list: datalist.id, placeholder: S.form.coinSearch,
-        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-label": slotName, "aria-describedby": loadingHint.id,
+        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-label": slotName,
       });
       const currency = h("select", { class: "input coin-currency", "aria-label": forSlot(S.form.coinCurrency), "aria-describedby": curNote.id });
       // Without the list: the pair as text, in the same place.
       const failedHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListFailed);
       const manual = h("input", {
         type: "text", class: "input input--upper coin-manual", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
-        placeholder: S.form.coinPairManual, "aria-label": forSlot(S.form.coinPairManual), "aria-describedby": failedHint.id,
+        placeholder: S.form.coinPairManual, "aria-label": forSlot(S.form.coinPairManual),
       });
       const error = errorSlot(key, [coinInput, manual]);
 
@@ -1436,6 +1436,12 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       });
       manual.addEventListener("input", () => { setPair(upper(manual.value, manual)); changed(key); });
 
+      // A hint describes its input only while it shows; the error's id stays.
+      const describedBy = (input, hint) => {
+        const rest = input.getAttribute("aria-describedby").split(" ").filter((id) => id !== hint.id);
+        input.setAttribute("aria-describedby", (hint.hidden ? rest : [hint.id, ...rest]).join(" "));
+      };
+
       // state: "ok" (list here), "loading", "failed", "none" (no list: no key,
       // or a source we don't know) or "idle" (greyed: nothing is loaded).
       function draw(state, list) {
@@ -1454,6 +1460,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         manual.hidden = !text;
         failedHint.hidden = state !== "failed";
         loadingHint.hidden = state !== "loading";
+        describedBy(coinInput, loadingHint);
+        describedBy(manual, failedHint);
         manual.value = f.coinSlots[i].pair;
         coinInput.value = base;
         if (state === "ok") {
@@ -1520,13 +1528,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         for (const input of srcInputs) {
           input.checked = input.value === s.source;
           // Finnhub needs the key (a stored keyless Finnhub coin stays selected, with its error).
-          input.disabled = greyed || (input === finnhubInput && keyless);
+          input.disabled = greyed || (input === finnhubInput && keyless && !input.checked);
         }
         if (keyless) {
-          finnhubInput.setAttribute("aria-describedby", needKey.id);
+          srcGroup.setAttribute("aria-describedby", needKey.id);
           srcLabels[1].title = S.form.finnhubNeedsKey;
         } else {
-          finnhubInput.removeAttribute("aria-describedby");
+          srcGroup.removeAttribute("aria-describedby");
           srcLabels[1].removeAttribute("title");
         }
         if (srcLabels[2]) srcLabels[2].hidden = s.source !== stored;
@@ -1669,7 +1677,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       refresh();
       if (Object.keys(currentErrors).length) {
         say(currentErrors.location ? S.form.needLocation : S.form.invalid, "error");
-        const first = [...form.querySelectorAll('[aria-invalid="true"]')][0];
+        const first = focusable([...form.querySelectorAll('[aria-invalid="true"]')]); // a hidden or disabled one can't take focus
         if (first) first.focus();
         return;
       }
