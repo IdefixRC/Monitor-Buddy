@@ -1984,7 +1984,6 @@ function showResult(kind, { ssid = "", installed = null } = {}) {
       const g = guide(m, { mood: "love", say: S.result.connected(escapeRich(ssid)) });
       if (installed) g.add(S.result.installed(escapeRich(installed)));
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
-      confetti();
     } else if (kind === "wifiFailed") {
       const g = guide(m, { mood: "sad", say: installed ? S.result.installed(escapeRich(installed)) : S.result.wifiFailed(escapeRich(ssid)) });
       if (installed) g.add(S.result.wifiFailed(escapeRich(ssid)), "error");
@@ -2002,6 +2001,7 @@ function showResult(kind, { ssid = "", installed = null } = {}) {
       guide(m, { mood: "happy", say: installed ? S.result.installed(escapeRich(installed)) : S.result.saved });
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
     }
+    if (kind === "connected" || (installed && kind !== "wifiFailed")) confetti();
   });
 }
 
@@ -2018,7 +2018,7 @@ function showProblem(text, err, { retry, retryLabel, back } = {}) {
   });
 }
 
-// ── Confetti, for a Buddy that made it onto the Wi-Fi ─────
+// ── Confetti, for a finished flash or a Buddy that made it onto the Wi-Fi ─────
 
 function confetti() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;

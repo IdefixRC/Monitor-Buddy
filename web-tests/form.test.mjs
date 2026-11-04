@@ -850,3 +850,8 @@ test("the note about stocks 2-5 sits in their fold-out's title, visible while cl
   assert.match(appSource, /const slotsNote = h\("span", \{ class: "advanced__hint" \}\);/);
   assert.match(appSource, /`stockslot\.\$\{r\.i\}`\), slotsNote\);/);
 });
+
+test("confetti after every finished flash, not after a plain settings save", () => {
+  assert.match(appSource, /if \(kind === "connected" \|\| \(installed && kind !== "wifiFailed"\)\) confetti\(\);/);
+  assert.equal((appSource.match(/\bconfetti\(\);/g) || []).length, 1);
+});
