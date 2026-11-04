@@ -528,7 +528,7 @@ export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 2
 // page without jumping), or null (no jump and no hold: Wi-Fi, or a page
 // switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
 // the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
-// shown (an empty key or user hides stock and GitHub), or stays when there is
+// shown, or stays when there is
 // none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {

@@ -11,11 +11,11 @@ const all = { face: true, clock: true, date: true, weather: true, moon: true, st
 test("page list mirrors buildPageList", () => {
   const c = { github_user: "octocat", stock_key: "k", pages: all };
   assert.deepEqual(pageList(c), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
-  assert.deepEqual(pageList({ ...c, stock_key: "" }), ["face", "clock", "date", "weather", "moon", "github"]);
-  assert.deepEqual(pageList({ ...c, github_user: "" }), ["face", "clock", "date", "weather", "moon", "stock"]);
+  assert.deepEqual(pageList({ ...c, stock_key: "" }), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
+  assert.deepEqual(pageList({ ...c, github_user: "" }), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
   assert.deepEqual(pageList({ ...c, pages: { clock: true, moon: true } }), ["clock", "moon"]);
   // Nothing left: the face, so the screen is never blank.
-  assert.deepEqual(pageList({ github_user: "", stock_key: "", pages: { stock: true, github: true } }), ["face"]);
+  assert.deepEqual(pageList({ github_user: "", stock_key: "", pages: { stock: true, github: true } }), ["stock", "github"]);
   assert.deepEqual(pageList({ pages: {} }), ["face"]);
   assert.deepEqual(pageList(undefined), ["face"]);
 });
@@ -169,8 +169,8 @@ test("a theme change jumps to a page that shows the theme", () => {
   assert.equal(previewPageFor("theme", cfg({ clock: false, date: false, weather: false })), "moon");
   // Hidden pages are skipped: stock without a key, GitHub without a user.
   const onlyHidden = { clock: false, date: false, weather: false, moon: false };
-  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "" })), "github");
-  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "", github_user: "" })), "stay");
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "" })), "stock", "the preview shows it before the key is in");
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "", github_user: "" })), "stock");
   // Only the face: nothing themed to show, so it stays.
   assert.equal(previewPageFor("theme", { pages: { face: true } }), "stay");
 });
@@ -235,18 +235,18 @@ test("pageList follows the device's shown order (coin after stock)", () => {
   assert.deepEqual(pageList(cfg), ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"]);
 });
 
-test("the coin page shows only with a coin that is on and usable", () => {
+test("the coin page shows with a coin that is on, even before the Finnhub key is in", () => {
   const base = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "coinbase", on: true }] };
   assert.deepEqual(pageList(base), ["coin"]);
   assert.deepEqual(pageList({ ...base, pages: { coin: false, clock: true } }), ["clock"]);
   assert.deepEqual(pageList({ ...base, coins: [{ pair: "BTC-USD", source: "coinbase", on: false }] }), ["face"]);
   assert.deepEqual(pageList({ ...base, coins: [] }), ["face"]);
   assert.deepEqual(pageList({ ...base, coins: undefined }), ["face"]);
-  // Finnhub needs the stock key.
+  // The Buddy needs the key for Finnhub; the preview shows the page anyway.
   const fh = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "finnhub", on: true }] };
-  assert.deepEqual(pageList(fh), ["face"]);
+  assert.deepEqual(pageList(fh), ["coin"]);
   assert.deepEqual(pageList({ ...fh, stock_key: "k" }), ["coin"]);
-  assert.equal(usableCoins({ ...fh, coins: [...fh.coins, { pair: "ETH-USD", source: "coinbase", on: true }] }).length, 1);
+  assert.equal(usableCoins({ ...fh, coins: [...fh.coins, { pair: "ETH-USD", source: "coinbase", on: true }] }).length, 2);
 });
 
 test("formatCoinPrice and currencyOf mirror the firmware", () => {

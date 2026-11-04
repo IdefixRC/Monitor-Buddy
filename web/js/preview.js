@@ -63,22 +63,21 @@ export function themeColors(n) {
 // PAGE_SHOW_ORDER in src/main.cpp. KEEP IN SYNC.
 export const SHOWN_ORDER = ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"];
 
-// The coins that are on and usable, in slot order, each with its slot: Coinbase
-// needs nothing, Finnhub needs the stock key (buildCoinList / coinConfigured).
+// The coins that are on, in slot order, each with its slot. A Finnhub coin needs
+// the key on the Buddy, but the preview shows it anyway (see pageList).
 export const usableCoins = (config) => (Array.isArray(config && config.coins) ? config.coins : [])
   .map((c, slot) => ({ ...c, slot }))
-  .filter((c) => c && c.pair && c.on !== false && (c.source === "finnhub" ? !!config.stock_key : true));
+  .filter((c) => c && c.pair && c.on !== false);
 
-// The enabled pages in display order, as buildPageList() builds them: an empty
-// github_user hides GitHub, an empty stock_key hides the stock page, no usable
-// coin hides the coin page, and with nothing left the face is shown.
+// The enabled pages in display order. Unlike buildPageList(), a missing Finnhub key
+// or GitHub user doesn't hide a page: the page switches come before those fields,
+// so the preview shows sample values and the form says what the Buddy will do.
+// No coin hides the coin page, and with nothing left the face is shown.
 export function pageList(config) {
   const pages = (config && config.pages) || {};
   const list = SHOWN_ORDER.filter((key) => {
     if (!pages[key]) return false;
     if (key === "coin" && !usableCoins(config).length) return false;
-    if (key === "github" && !config.github_user) return false;
-    if (key === "stock" && !config.stock_key) return false;
     return true;
   });
   return list.length ? list : ["face"];
@@ -281,18 +280,23 @@ const tickerOf = (config, entry) =>
   String(entry ? entry.symbol : config.ticker || "").toUpperCase().slice(0, 10);
 const priceOf = (live, ticker) => (live.prices ? live.prices[ticker] : undefined);
 
+// Shown until a Check brings real numbers (the caption says "sample values").
+const SAMPLE_STOCK = { price: 182.34, change: "+1.24%", open: "180.12", high: "184.05", low: "179.40" };
+const SAMPLE_GITHUB = { followers: 128, repos: 42 };
+
 function drawStock(c, config, live, entry) {
   const ticker = tickerOf(config, entry);
   const p = priceOf(live, ticker);
-  const price = isNum(p) ? `$${p.toFixed(2)}` : `$${DASH}`;
+  const isLive = isNum(p);
   let tsize = 4;
   while (tsize > 1 && ticker.length * 6 * tsize > 132) tsize--;
   // Without open/high/low the colour is the "up" one (price >= open).
-  return centred(price, 26, 6, c.priceUp)
-    + txt(ticker, 14, 124 - 4 * tsize, tsize, c.ticker)
-    + txt(`OPEN  ${DASH}`, 150, 92, 2, c.value)
-    + txt(`HIGH  ${DASH}`, 150, 116, 2, c.value)
-    + txt(`LOW   ${DASH}`, 150, 140, 2, c.value);
+  return centred(`$${(isLive ? p : SAMPLE_STOCK.price).toFixed(2)}`, 26, 6, c.priceUp)
+    + txt(ticker, 14, (isLive ? 124 : 112) - 4 * tsize, tsize, c.ticker)
+    + (isLive ? "" : txt(SAMPLE_STOCK.change, 14, 132, 2, c.priceUp))
+    + txt(`OPEN  ${isLive ? DASH : SAMPLE_STOCK.open}`, 150, 92, 2, c.value)
+    + txt(`HIGH  ${isLive ? DASH : SAMPLE_STOCK.high}`, 150, 116, 2, c.value)
+    + txt(`LOW   ${isLive ? DASH : SAMPLE_STOCK.low}`, 150, 140, 2, c.value);
 }
 
 // ── Coin page ─────────────────────────────────────────────
@@ -458,8 +462,8 @@ export function followerTextSize(formatted) {
 }
 
 function drawGithub(c, live) {
-  const followers = isNum(live.followers) ? formatCount(live.followers) : DASH;
-  const repos = isNum(live.repos) ? formatCount(live.repos) : DASH;
+  const followers = formatCount(isNum(live.followers) ? live.followers : SAMPLE_GITHUB.followers);
+  const repos = formatCount(isNum(live.repos) ? live.repos : SAMPLE_GITHUB.repos);
   const rx = 150;
   return `<path fill="${c.ghLogo}" shape-rendering="crispEdges" transform="translate(14 ${(SCREEN_H - 112) / 2}) scale(2)" d="${GITHUB_D}"/>`
     + txt(followers, rx, 22, followerTextSize(followers), c.ghNum)
@@ -697,7 +701,7 @@ export function createPreview(container) {
     const shownTicker = tickerOf(config, entry);
     if (key === "stock" && shownTicker) text += ` · ${shownTicker}`;
     if (key === "coin" && coinEntry) text += ` · ${String(coinEntry.pair).toUpperCase()}`;
-    if (key === "github") text += ` · ${config.github_user}`;
+    if (key === "github" && config.github_user) text += ` · ${config.github_user}`;
     const sample = (key === "weather")
       || (key === "stock" && !isNum(priceOf(live, shownTicker)))
       || (key === "github" && !isNum(live.followers))
