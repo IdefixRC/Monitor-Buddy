@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, probe, PROBE_WRITES, verifyChange, lookAfterCheck } from "../web/js/serial.js";
 import { fakeDevice } from "../web/js/fake-buddy.js";
+import { heardBuddy } from "../web/js/protocol.js";
 
 // A Web Serial port that never answers. With stall, writes never complete,
 // like a Buddy that doesn't read USB (boot loop, or Chrome's 255-byte buffer full).
@@ -282,6 +283,7 @@ const rxIdle = () => ({ last: 0, status: false });
 const look = (bp, opts = {}) => lookAfterCheck(bp, {
   listen: async () => null,
   ask: () => probe(bp, rxIdle(), fast),
+  proof: async () => true,
   settleMs: 0, windowMs: 200, retryMs: 5, ...opts,
 });
 const infoOf = (mac) => ({ ok: true, cmd: "INFO", mac });
@@ -334,6 +336,73 @@ test("a port that goes away while the look listens is the gap: nothing written, 
   assert.equal(seen.info.mac, OURS);
   assert.equal(bp.writes, 1);
   assert.equal(bp.opened.length, 2);
+});
+
+test("a board that never printed a 1.2+ line is never written to, and the port is closed", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS) });
+  let asks = 0;
+  const seen = await look(bp, { proof: async () => false, ask: async () => { asks++; return infoOf(OURS); } });
+  assert.deepEqual(seen, { unproven: true });
+  assert.equal(asks, 0);
+  assert.equal(bp.writes, 0);
+  assert.equal(bp.isOpen, false);
+});
+
+test("a board that proved itself is asked exactly once", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS) });
+  let asks = 0;
+  const seen = await look(bp, { ask: async () => { asks++; return infoOf(OURS); } });
+  assert.equal(seen.info.mac, OURS);
+  assert.equal(asks, 1);
+});
+
+test("the proof is awaited after listening and before any write", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS) });
+  const order = [];
+  await look(bp, {
+    listen: async () => { order.push("listen"); return null; },
+    proof: async () => { order.push(`proof@${bp.writes}`); return true; },
+    ask: async () => { order.push("ask"); return infoOf(OURS); },
+  });
+  assert.deepEqual(order, ["listen", "proof@0", "ask"]);
+});
+
+test("a MAC mismatch after proof still passes over the other board", async () => {
+  const dead = fakePort();
+  const theirs = fakePort();
+  const ours = fakePort();
+  setPorts([theirs]);
+  const bp = new LookPort(dead, {
+    answers: (p) => {
+      if (p !== theirs) return infoOf(OURS);
+      setPorts([theirs, ours]);
+      return infoOf(THEIRS);
+    },
+  });
+  const seen = await look(bp);
+  assert.equal(seen.info.mac, OURS);
+  assert.deepEqual(bp.opened, [theirs, ours]);
+});
+
+test("the simulated stalled Buddy prints its banner after the board check, and ?fake=b never does", async () => {
+  const lines = async (q) => {
+    const d = fakeDevice(new URLSearchParams(q));
+    const bp = await d.BuddyPort.pick();
+    const got = [];
+    bp.onLine((l, dir) => { if (dir === "rx") got.push(l); });
+    await d.checkBuddy(bp.port, {});
+    await bp.open();
+    await new Promise((r) => setTimeout(r, 450));
+    return got;
+  };
+  assert.equal(heardBuddy(await lines("fake=a&stalled")), true);
+  assert.equal(heardBuddy(await lines("fake=b")), false);
 });
 
 test("a port that fails after a write ends the look and hands the error back", async () => {

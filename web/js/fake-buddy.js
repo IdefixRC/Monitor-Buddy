@@ -44,6 +44,7 @@ export function fakeDevice(params) {
     wifi: params.has("nowifi") ? { saved: false, ssid: "", password: "" } : { saved: true, ssid: "HomeNet", password: "secret123" },
     restarting: false,
     booting: params.has("boot"),
+    banner: false, // the next open prints the banner (set by the board check on ?stalled)
   };
   // The paths the firmware on the fake board knows (spec §5.3, C3, C6b).
   const everything = () => supportedPaths(DEFAULTS);
@@ -101,6 +102,11 @@ export function fakeDevice(params) {
         board.awake = false;
       } else {
         board.awake = true;
+        // A Buddy that restarts prints its banner, which is what the second look waits for.
+        if (board.banner) {
+          board.banner = false;
+          setTimeout(() => this._emit(`ESP32-C6 Monitor-Buddy ${board.fw} starting`, "rx"), 300);
+        }
       }
     }
     async close() { this.isOpen = false; }
@@ -189,7 +195,7 @@ export function fakeDevice(params) {
     if (refusal) { say(`Board check: ${refusal.message}`); throw new FlashError("connect", refusal); }
     say("Board check: motion sensor and touch controller found");
     say("Restarting the board");
-    if (params.has("stalled")) board.answers = true;
+    if (params.has("stalled")) { board.answers = true; board.banner = board.fw !== null; }
     checked = true;
     gapUntil = Date.now() + Number(params.get("gap") || 0);
     return { mac: "b0:a6:04:00:00:01" };

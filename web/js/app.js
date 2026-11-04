@@ -2,8 +2,8 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS } from "./serial.js";
-import { sameMac, watchForTrouble } from "./protocol.js";
+import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS, LOOK_PROOF_MS } from "./serial.js";
+import { sameMac, watchForTrouble, heardBuddy } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, pathsForCfg, installablePaths } from "./settings.js";
@@ -301,7 +301,10 @@ const probeAndRoute = () => oneAtATime(probeAndRouteOnce);
 
 // Path B's "Check again". After a second look nobody answered, a board that
 // doesn't read still holds those INFOs, and a first look's would overfill it
-// (PROBE_WRITES). The board check resets it, so that comes first.
+// (PROBE_WRITES). The board check resets it, so that comes first. The second
+// look writes only after proof of a 1.2+ Buddy, so it leaves nothing behind
+// when it finds none (unproven); silentAfterCheck is for a Buddy that proved
+// itself and still did not answer.
 const checkAgain = () => oneAtATime(() => (app.silentAfterCheck ? checkThenPathB({ askAgain: true }) : probeAndRouteOnce()));
 
 async function probeAndRouteOnce() {
@@ -365,6 +368,17 @@ async function secondLook() {
       app.trouble = await watchForTrouble(app.rx.recent, LISTEN_MS);
       return app.trouble;
     },
+    // Writes only after a line that only firmware 1.2+ prints. listen() filled
+    // app.rx.recent (kept to the last 100 lines, so the banner is still there),
+    // and a board still booting may print it a moment later.
+    proof: async () => {
+      const end = Date.now() + LOOK_PROOF_MS;
+      for (;;) {
+        if (heardBuddy(app.rx.recent)) return true;
+        if (Date.now() >= end || !bp.isOpen || bp.lost) return false;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    },
     ask: () => {
       app.rx.status = false;
       return probe(bp, app.rx, { firstWaitMs: LOOK_FIRST_WAIT_MS, onBooting: () => g.say(S.connecting.booting) });
@@ -377,6 +391,7 @@ async function secondLook() {
     bp.mac = seen.info.mac || bp.mac;
     return showHome();
   }
+  if (seen.unproven) log("no line from a Buddy that reads USB: nothing sent", "* ");
   if (seen.trouble) log(`no firmware running (${seen.trouble}): nothing sent`, "* ");
   if (seen.otherBoard) log("only another board answered: path B, where a flash still refuses it", "* ");
   await closeThenPathB();
@@ -392,7 +407,7 @@ async function closeThenPathB() {
 // the form for a board that will be refused. The board restarts once.
 // askAgain: a Buddy left running for a long time can miss the first INFO, and
 // the restart clears that, so a working Buddy isn't called new or older: ask
-// once more first (Eric, COM12 and COM4, 2026-11-04).
+// once more first, but only a board that proved it reads USB (secondLook) (Eric, COM12 and COM4, 2026-11-04).
 async function checkThenPathB({ askAgain = false } = {}) {
   screen(S.titles.connecting, (m) => {
     guide(m, { mood: "curious", say: S.connecting.checking });

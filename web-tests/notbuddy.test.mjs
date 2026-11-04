@@ -71,6 +71,13 @@ test("a board check that reaches another Buddy is refused, not adopted", () => {
   assert.match(check, /if \(known && mac && !sameMac\(mac, known\)\) \{\s*app\.bp\.port = picked;[^\n]*\n[^\n]*\n\s*return showProblem\(S\.flash\.wrongBoard, null, \{ retry: checkAgain \}\);\s*\}\s*app\.bp\.mac = mac \|\| known;/);
 });
 
+test("the second look writes only after proof of a 1.2+ Buddy, and unproven goes to path B with nothing sent", () => {
+  const look = fn("async function secondLook(");
+  assert.match(look, /proof: async \(\) => \{[\s\S]*LOOK_PROOF_MS[\s\S]*heardBuddy\(app\.rx\.recent\)/);
+  assert.match(look, /if \(seen\.unproven\)/);
+  assert.match(look, /app\.silentAfterCheck = !!seen\.silent;/); // unproven wrote nothing: not silent
+});
+
 test("the second look reports what ended it and asks with the longer wait, no extra write", () => {
   const look = fn("async function secondLook(");
   assert.match(look, /firstWaitMs: LOOK_FIRST_WAIT_MS/);
