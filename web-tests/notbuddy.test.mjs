@@ -57,6 +57,14 @@ test("the port going away stays expected until the second look ends", () => {
   assert.equal((check.slice(0, check.indexOf("function showNotBuddy(")).match(/app\.expectDrop = false/g) || []).length, 1);
 });
 
+test("Check again after a silent second look starts with the board check, which empties the buffer", () => {
+  assert.match(app, /btn\(S\.pathB\.retry, checkAgain,/);
+  assert.match(app, /app\.silentAfterCheck \? checkThenPathB\(\{ askAgain: true \}\) : probeAndRouteOnce\(\)/);
+  assert.match(fn("async function secondLook("), /app\.silentAfterCheck = !!seen\.silent;/);
+  assert.match(fn("async function checkThenPathB("), /app\.silentAfterCheck = false;[^\n]*\n\s*if \(askAgain\)/);
+  assert.match(fn("async function probeAndRouteOnce(", 3000), /bp\.mac = info\.mac \|\| "";[^\n]*\n\s*app\.silentAfterCheck = false;/);
+});
+
 test("the second look reports what ended it and asks with the longer wait, no extra write", () => {
   const look = fn("async function secondLook(");
   assert.match(look, /firstWaitMs: LOOK_FIRST_WAIT_MS/);

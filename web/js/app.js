@@ -53,6 +53,7 @@ const app = {
   expectDrop: false, // a flash or restart is under way: the port going away is expected
   rx: { last: 0, status: false, recent: [] }, // recent: the latest lines, for romTrouble
   trouble: null,     // romTrouble() at connect: the firmware isn't running (path B, recovery)
+  silentAfterCheck: false, // the second look's INFOs went unanswered, so they may still fill the board's buffer
 };
 // How long connect listens before it writes anything (E2): a boot loop prints
 // every ~40 ms, a running Buddy gets its INFO half a second later.
@@ -234,6 +235,7 @@ async function startOver() {
   app.info = null;
   app.form = null;
   app.live = {};
+  app.silentAfterCheck = false;
   showStart();
 }
 
@@ -285,15 +287,21 @@ async function connect() {
 
 // Opens the port and asks INFO: an answer is path A, none is path B.
 let probing = false;
-async function probeAndRoute() {
+async function oneAtATime(fn) {
   if (probing) return;
   probing = true;
   try {
-    await probeAndRouteOnce();
+    await fn();
   } finally {
     probing = false;
   }
 }
+const probeAndRoute = () => oneAtATime(probeAndRouteOnce);
+
+// Path B's "Check again". After a second look nobody answered, a board that
+// doesn't read still holds those INFOs, and a first look's would overfill it
+// (PROBE_WRITES). The board check resets it, so that comes first.
+const checkAgain = () => oneAtATime(() => (app.silentAfterCheck ? checkThenPathB({ askAgain: true }) : probeAndRouteOnce()));
 
 async function probeAndRouteOnce() {
   const bp = app.bp;
@@ -330,7 +338,10 @@ async function probeAndRouteOnce() {
   // answer means the port lookup found the wrong one.
   if (info && bp.mac && info.mac && !sameMac(info.mac, bp.mac)) return showProblem(S.flash.wrongBoard, null, { retry: probeAndRoute });
   app.info = info;
-  if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
+  if (info) {
+    bp.mac = info.mac || ""; // from now on, only this board is accepted
+    app.silentAfterCheck = false;
+  }
   if (info) showHome();
   else await checkThenPathB({ askAgain: true });
 }
@@ -360,6 +371,7 @@ async function secondLook() {
   });
   report(seen.error);
   app.info = seen.info || null;
+  app.silentAfterCheck = !!seen.silent; // a look that wrote nothing leaves the buffer empty
   if (seen.info) {
     bp.mac = seen.info.mac || bp.mac;
     return showHome();
@@ -400,6 +412,7 @@ async function checkThenPathB({ askAgain = false } = {}) {
       if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
       return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
     }
+    app.silentAfterCheck = false; // the restart emptied its buffer
     if (askAgain) return await secondLook();
   } finally {
     app.expectDrop = false;
@@ -641,7 +654,7 @@ function showPathB() {
         () => (recover ? startRecovery() : startFlashFlow("upgrade")), { primary: true, disabled: !installable() }),
       actionCard(S.pathB.fresh, S.pathB.freshHint, () => startFlashFlow("install"), { disabled: !installable() })));
     m.append(h("div", { class: "actions actions--small" },
-      btn(S.pathB.retry, probeAndRoute, { kind: "link" }),
+      btn(S.pathB.retry, checkAgain, { kind: "link" }),
       btn(S.home.disconnect, startOver, { kind: "link" })));
   });
 }
