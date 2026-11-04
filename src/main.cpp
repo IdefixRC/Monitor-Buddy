@@ -102,6 +102,7 @@
 #include <AyresWiFiManager.h>
 #include <esp_mac.h>
 #include "settings.h"
+#include "nightmode.h"
 #include "protocol.h"
 #include "display_fmt.h"
 #include "coin.h"
@@ -373,6 +374,12 @@ void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
+void writeBacklight(uint8_t level);
+uint8_t backlightTarget();
+bool nightDimming();
+void nightWake();
+void updateNightMode();
+void setNightBrightness(uint8_t level);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -665,8 +672,9 @@ float   tiltSign       = 1.0f;
 
 // ── Settings ──────────────────────────────────────────────
 // Loaded once in setup() from /config.json, with the config.h values as the
-// defaults. Never changed while running: every save restarts the board, so
-// netTask may read them without a lock.
+// defaults. Only night.brightness changes while running, written from the
+// loop by a night swipe, and netTask never reads it. The rest stays as loaded:
+// every other save restarts the board, so netTask may read them without a lock.
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
@@ -714,6 +722,8 @@ uint32_t touchStartMs    = 0;
 uint8_t  touchMissFrames  = 0;
 bool     touchMoved       = false;
 bool     touchSwipeDone   = false;  // page swipe fired; ignore this press until release
+bool     touchDark        = false;  // this press began on a dimmed screen. Decided once,
+                                    // so a window edge can't split a press in two
 uint8_t  tapCount        = 0;
 uint32_t lastTapMs        = 0;
 uint32_t autoPageBannerUntil = 0;
@@ -726,6 +736,10 @@ uint32_t brightnessBannerUntil = 0;
 uint8_t  savedBrightness       = BRIGHTNESS_DEFAULT;  // level in /display.json
 bool     brightnessSavePending = false;
 uint32_t brightnessChangedMs   = 0;
+bool     nightActive     = false;   // inside the night window (needs a trusted clock)
+bool     nightWoken      = false;   // a tap at night lifts the dimming...
+uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
+uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
 uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
@@ -1854,12 +1868,23 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 
 void drawClock() {
   const LocalNow now = localNow();
-  const uint8_t hh = now.hour, mm = now.min, ss = now.sec;
+  uint8_t hh = now.hour;
+  const uint8_t mm = now.min, ss = now.sec;
+  const bool h12 = settings.clockFormat == CLOCK_12H_FORMAT;
+  const bool pm = hh >= 12;
+  if (h12) hh = hour12(hh);
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
-  drawDigit(8,   Y, hh/10, W, H, T, COL_TIME);
+  // 12-hour: no leading zero (" 9:41", not "09:41").
+  if (!h12 || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
   drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
+  if (h12) {
+    // AM/PM above the seconds, top-aligned with the digits.
+    gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
+    gfx->setCursor(282, Y + 4);
+    gfx->print(pm ? "PM" : "AM");
+  }
   if ((ss%2)==0) {
     gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
     gfx->fillRoundRect(134, Y+62, 11, 11, 5, COL_TIME);
@@ -2607,7 +2632,6 @@ void loadDisplaySettings() {
 
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
-  ledcWrite(LCD_BL, brightnessLevel);
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
@@ -2692,6 +2716,8 @@ void readTouch() {
   bsp_touch_read();
   if (bsp_touch_get_coordinates(&x, &y)) {
     uint32_t now = millis();
+    const bool dimming = nightDimming();  // first: this retires a wake that has run out
+    if (nightWoken) nightWokenAt = now;   // still in use: keep the night wake going
     touchLastX = x; touchLastY = y;
     touchMissFrames = 0;
     if (!touchWasDown) {
@@ -2699,7 +2725,8 @@ void readTouch() {
       touchMoved = false;
       touchSwipeDone = false;
       touchWasDown = true;
-      touchPortalArmed = true;   // this press is eligible to open the portal
+      touchDark = dimming;
+      touchPortalArmed = !dimming;   // this press is eligible to open the portal
       return;
     }
     // A page swipe already fired for this press: the rest of the contact is
@@ -2711,7 +2738,7 @@ void readTouch() {
 
     // Touch-and-hold (still, ~2.5 s) → open the Wi-Fi setup portal.
     // Fires once per press; a swipe cancels it.
-    if (touchPortalArmed && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
+    if (touchPortalArmed && !dimming && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
       touchPortalArmed = false;
       openSetupPortal("touch hold");
       return;
@@ -2721,12 +2748,14 @@ void readTouch() {
     // moved, so holding still afterwards can't open the portal and lifting
     // can't count as a tap. The press ends only when the finger lifts.
     if (abs(dx) > 55 && abs(dx) > abs(dy)+18) {
-      switchApp(dx < 0 ? 1 : -1);
+      if (touchDark) nightWake();                 // the dark: wake, don't flip the page
+      else switchApp(dx < 0 ? 1 : -1);
       touchSwipeDone = true;     // one page per swipe
       touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
-      setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      if (touchDark) setNightBrightness(nightStep(settings.night.brightness, dy < 0));
+      else setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
       // Re-base so a continued drag steps brightness again every 55 px.
       touchStartX = x; touchStartY = y;
       touchMoved = true;
@@ -2741,7 +2770,13 @@ void readTouch() {
     int16_t dx = (int16_t)touchLastX-(int16_t)touchStartX;
     int16_t dy = (int16_t)touchLastY-(int16_t)touchStartY;
     if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
-      triggerFaceTap();
+      if (touchDark) {                            // the dark: only wakes
+        nightWake();
+        tapCount = 0;                             // and never half a double tap
+        lastTapMs = 0;
+      } else {
+        triggerFaceTap();
+      }
     }
     touchWasDown = false;
     touchMissFrames = 0;
@@ -2749,6 +2784,50 @@ void readTouch() {
     touchSwipeDone = false;
     touchPortalArmed = false;
   }
+}
+
+// ── Night mode ────────────────────────────────────────────
+// The only place that writes the backlight, so backlightOut stays true.
+void writeBacklight(uint8_t level) {
+  if (level == backlightOut) return;
+  ledcWrite(LCD_BL, level);
+  backlightOut = level;
+}
+
+// True while night mode has the screen dimmed. A tap lifts it for NIGHT_WAKE_MS.
+bool nightDimming() {
+  if (nightWoken && millis() - nightWokenAt >= NIGHT_WAKE_MS) nightWoken = false;
+  return settings.night.enabled && nightActive && !nightWoken;
+}
+
+// The backlight level right now: the night level as the user set it (it may be
+// above the day brightness), or the day brightness.
+uint8_t backlightTarget() {
+  return nightDimming() ? settings.night.brightness : brightnessLevel;
+}
+
+void nightWake() {
+  if (!settings.night.enabled || !nightActive) return;
+  nightWoken   = true;
+  nightWokenAt = millis();
+}
+
+// A swipe at night: changes the level now.
+void setNightBrightness(uint8_t level) {
+  settings.night.brightness = level;
+}
+
+void updateNightMode() {
+  if (settings.night.enabled && clockTrusted) {
+    const bool inWindow = inNightWindow(currentClockHour(), settings.night.start, settings.night.end);
+    if (inWindow != nightActive) {
+      nightActive = inWindow;
+      nightWoken  = false;                                  // a wake ends with its night
+      faceMood = inWindow ? MOOD_SLEEPY : MOOD_NORMAL;      // a tap still changes it
+      Serial.printf("Night mode: %s\n", inWindow ? "on" : "off");
+    }
+  }
+  writeBacklight(backlightTarget());
 }
 
 void updateFaceTimers() {
@@ -2930,7 +3009,7 @@ void setup() {
   lcdRegInit();
   display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -3002,7 +3081,7 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to
   // LittleFS. AWM serves those in preference to its built-in, multilingual
@@ -3055,6 +3134,7 @@ void loop() {
     // Save now, long before anyone can press "erase" in the portal, so a
     // factory reset still removes /display.json.
     flushBrightnessSave(true);
+    writeBacklight(brightnessLevel);      // never run setup at night brightness
     servicePortal();
     return;
   }
@@ -3073,6 +3153,7 @@ void loop() {
 
   updateAutoPage();
   updateFaceTimers();
+  updateNightMode();
 
   // Retry NTP if Wi-Fi came up after boot, and resync every 6 h to
   // correct drift and to undo any UTC-only resync done by AWM.
