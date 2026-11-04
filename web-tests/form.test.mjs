@@ -9,7 +9,7 @@ import {
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
   COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
-  applyAfterFlash, rederiveSlots,
+  applyAfterFlash, rederiveSlots, coinListId, coinRowState,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG, filterSupported, supportedPaths, validateConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -687,6 +687,53 @@ test("dropSlotErrors handles coins", () => {
   dropSlotErrors(f, errs, 0, "coin");
   assert.deepEqual(errs, { "stocks[0].symbol": "s" });
 });
+const COIN_ON = { pair: "BTC-USD", source: "coinbase", on: true };
+const NO_LISTS = { loaded: new Map(), failed: new Set() };
+
+test("coinRowState: a greyed row wants no list and has nothing to use", () => {
+  const row = coinRowState("greyed", COIN_ON, "key", NO_LISTS);
+  assert.equal(row.id, null, "no list request");
+  assert.equal(row.state, "idle");
+  for (const k of ["finnhubDisabled", "pickDisabled", "manualDisabled", "checkDisabled"]) assert.equal(row[k], true, k);
+});
+
+test("coinRowState: a stored keyless Finnhub coin stays selected in none, other slots can't pick it", () => {
+  const stored = { pair: "SOL-EUR", source: "finnhub", on: true };
+  const row = coinRowState("on", stored, "", NO_LISTS);
+  assert.equal(row.id, null);
+  assert.equal(row.state, "none");
+  assert.equal(row.finnhubDisabled, false, "the checked radio stays enabled");
+  assert.equal(row.manualDisabled, false, "the pair stays editable");
+  assert.equal(row.checkDisabled, true);
+  assert.equal(coinRowState("on", COIN_ON, "", NO_LISTS).finnhubDisabled, true);
+  assert.equal(coinRowState("on", COIN_ON, "key", NO_LISTS).finnhubDisabled, false);
+});
+
+test("coinRowState: a source this flasher doesn't know wants no list and can't be checked", () => {
+  const row = coinRowState("on", { pair: "BTC-USD", source: "kraken", on: true }, "key", NO_LISTS);
+  assert.equal(row.id, null);
+  assert.equal(row.state, "none");
+  assert.equal(row.checkDisabled, true);
+  assert.equal(row.manualDisabled, false);
+});
+
+test("coinRowState: loading, loaded, failed, and a key only counts once the box is left", () => {
+  const coinbase = coinListId("coinbase", "key");
+  assert.equal(coinbase, "coinbase|");
+  assert.equal(coinRowState("on", COIN_ON, "", NO_LISTS).id, coinbase, "Coinbase needs no key");
+  assert.equal(coinRowState("on", COIN_ON, "", NO_LISTS).state, "loading");
+  assert.equal(coinRowState("on", COIN_ON, "", NO_LISTS).pickDisabled, true);
+  const loaded = { loaded: new Map([[coinbase, new Map()]]), failed: new Set() };
+  assert.equal(coinRowState("on", COIN_ON, "", loaded).state, "ok");
+  assert.equal(coinRowState("on", COIN_ON, "", loaded).pickDisabled, false);
+  assert.equal(coinRowState("on", { ...COIN_ON, on: false }, "", loaded).pickDisabled, true);
+  assert.equal(coinRowState("on", { ...COIN_ON, on: false }, "", loaded).checkDisabled, true);
+  assert.equal(coinRowState("on", COIN_ON, "", { loaded: new Map(), failed: new Set([coinbase]) }).state, "failed");
+  const typing = coinRowState("on", { ...COIN_ON, source: "finnhub" }, "newkey", { ...NO_LISTS, listKey: "" });
+  assert.equal(typing.id, null);
+  assert.equal(typing.checkDisabled, false, "Check uses the key as it stands");
+});
+
 test("a stored coin with an unknown source keeps it and is flagged on its slot", () => {
   const all = [...PATHS_BY_CFG[2]];
   const cfg = { ...DEFAULTS, coins: [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "BTC-USD", source: "kraken", on: true }] };
@@ -908,8 +955,8 @@ test("compact rows: the pick, then the tools in the brief's order", () => {
   assert.match(appSource, /check, h\("span", \{ class: "slot__moves" \}, up \|\| gap\("up"\), down \|\| gap\("down"\)\)/);
   // Moves are icon buttons named for their slot.
   assert.match(appSource, /btn\(dir < 0 \? "↑" : "↓", onclick, \{ class: "btn btn--secondary btn--icon", "aria-label": `\$\{text\}, \$\{name\}`/);
-  // Finnhub can't be picked without a key; a stored keyless one stays selected.
-  assert.match(appSource, /input\.disabled = greyed \|\| \(input === finnhubInput && keyless && !input\.checked\);/);
+  // Why Finnhub can't be picked without a key sits on the source group (coinRowState decides).
+  assert.match(appSource, /input\.disabled = input === finnhubInput \? row\.finnhubDisabled : row\.greyed;/);
   assert.match(appSource, /srcGroup\.setAttribute\("aria-describedby", needKey\.id\);/);
   // A coin row's loading and failed hints describe their input only while they show.
   assert.doesNotMatch(appSource, /"aria-describedby": (loadingHint|failedHint)\.id/);

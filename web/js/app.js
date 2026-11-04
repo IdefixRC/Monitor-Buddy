@@ -21,7 +21,7 @@ import {
   previewPageFor, previewConfig, locationSummary, locationMissing, afterRecovery,
   moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
-  applyCoinSlots, coinIndexOfSlot, COIN_SLOTS,
+  applyCoinSlots, coinIndexOfSlot, COIN_SLOTS, COIN_SOURCES, coinListId, coinRowState,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -1312,19 +1312,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     // per source and key (loadCoinList) and kept in app.coinLists across
     // redraws. A list that failed is asked for again on the next drawing.
     const SOURCES = [["coinbase", S.form.sourceCoinbase], ["finnhub", S.form.sourceFinnhub]];
-    const knownSource = (src) => SOURCES.some(([v]) => v === src);
     let coinKey = f.config.stock_key; // the key the Finnhub lists use (follows the key field when it is left)
     const failedLists = new Set();
     const loadingLists = new Set();
-    const listId = (source) => `${source}|${source === "finnhub" ? coinKey : ""}`;
-    // The list slot i needs, or null: no list for a source this flasher doesn't
-    // know (the slot shows its pair as text and the error says why), and none
-    // for Finnhub without a key.
-    const wantedList = (i) => {
-      const src = f.coinSlots[i].source;
-      if (!knownSource(src) || (src === "finnhub" && !coinKey)) return null;
-      return listId(src);
-    };
     function requestList(id, source) {
       if (app.coinLists.has(id) || failedLists.has(id) || loadingLists.has(id)) return;
       loadingLists.add(id);
@@ -1365,7 +1355,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       // doesn't know gets a third option, so the slot's error makes sense; it
       // goes once another is picked.
       const stored = f.coinSlots[i].source;
-      const options = knownSource(stored) ? SOURCES : [...SOURCES, [stored, stored]];
+      const options = COIN_SOURCES.includes(stored) ? SOURCES : [...SOURCES, [stored, stored]];
       const srcName = uid("src");
       const srcInputs = options.map(([v]) => h("input", { type: "radio", name: srcName, value: v, checked: v === stored }));
       const srcLabels = srcInputs.map((input, k) => h("label", { class: "segmented__item" }, input, h("span", {}, options[k][1])));
@@ -1399,7 +1389,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       });
       const error = errorSlot(key, [coinInput, manual]);
 
-      const listNow = () => { const id = wantedList(i); return id ? app.coinLists.get(id) || null : null; };
+      const listNow = () => app.coinLists.get(coinListId(f.coinSlots[i].source, coinKey)) || null;
       const setPair = (pair) => {
         if (pair === f.coinSlots[i].pair) return;
         f.coinSlots[i] = { ...f.coinSlots[i], pair };
@@ -1442,8 +1432,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         input.setAttribute("aria-describedby", (hint.hidden ? rest : [hint.id, ...rest]).join(" "));
       };
 
-      // state: "ok" (list here), "loading", "failed", "none" (no list: no key,
-      // or a source we don't know) or "idle" (greyed: nothing is loaded).
+      // state: as coinRowState's.
       function draw(state, list) {
         let { base = "", quote = "" } = f.coinSlots[i].pair ? splitPair(f.coinSlots[i].pair) : {};
         let ask = false;
@@ -1512,25 +1501,15 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
 
       function sync(st) {
         const s = f.coinSlots[i];
-        const greyed = st !== "on";
-        let id = null;
-        let list = null;
-        let state = "idle";
-        if (!greyed) {
-          id = wantedList(i);
-          if (id) requestList(id, s.source);
-          list = id ? app.coinLists.get(id) || null : null;
-          state = !id ? "none" : list ? "ok" : failedLists.has(id) ? "failed" : "loading";
-        }
-        const sig = `${id}|${state}`;
-        if (sig !== shown) { shown = sig; draw(state, list); }
-        const keyless = !f.config.stock_key;
+        const row = coinRowState(st, s, f.config.stock_key, { listKey: coinKey, loaded: app.coinLists, failed: failedLists });
+        if (row.id) requestList(row.id, s.source);
+        const sig = `${row.id}|${row.state}`;
+        if (sig !== shown) { shown = sig; draw(row.state, app.coinLists.get(row.id) || null); }
         for (const input of srcInputs) {
           input.checked = input.value === s.source;
-          // Finnhub needs the key (a stored keyless Finnhub coin stays selected, with its error).
-          input.disabled = greyed || (input === finnhubInput && keyless && !input.checked);
+          input.disabled = input === finnhubInput ? row.finnhubDisabled : row.greyed;
         }
-        if (keyless) {
+        if (row.keyless) {
           srcGroup.setAttribute("aria-describedby", needKey.id);
           srcLabels[1].title = S.form.finnhubNeedsKey;
         } else {
@@ -1538,13 +1517,12 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
           srcLabels[1].removeAttribute("title");
         }
         if (srcLabels[2]) srcLabels[2].hidden = s.source !== stored;
-        const off = i > 0 && !s.on;
-        coinInput.disabled = greyed || off || state !== "ok";
-        currency.disabled = greyed || off || state !== "ok" || !currency.options.length;
-        manual.disabled = greyed || off;
-        if (onBox) onBox.input.disabled = greyed;
-        up.disabled = down.disabled = greyed;
-        check.disabled = greyed || off || !s.pair || !knownSource(s.source) || (s.source === "finnhub" && !f.config.stock_key);
+        coinInput.disabled = row.pickDisabled;
+        currency.disabled = row.pickDisabled || !currency.options.length;
+        manual.disabled = row.manualDisabled;
+        if (onBox) onBox.input.disabled = row.greyed;
+        up.disabled = down.disabled = row.greyed;
+        check.disabled = row.checkDisabled;
       }
       // After a Move: the coin (or the pair), else the source, then Move again.
       focusTargets[key] = () => [coinInput, manual, srcInputs.find((r) => r.checked), ...(moved > 0 ? [down, up] : [up, down]), check];

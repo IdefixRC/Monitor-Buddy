@@ -218,6 +218,37 @@ export function slotsToCoins(slots) {
   return { coins: list, slotOf };
 }
 
+export const COIN_SOURCES = Object.freeze(["coinbase", "finnhub"]);
+
+// The id of the coin list a slot needs, or null: no list for a source this
+// flasher doesn't know (the slot shows its pair as text and the error says why),
+// and none for Finnhub without a key.
+export function coinListId(source, key) {
+  if (!COIN_SOURCES.includes(source) || (source === "finnhub" && !key)) return null;
+  return `${source}|${source === "finnhub" ? key : ""}`;
+}
+
+// What a coin row shows. st: fieldState for "coins"; key: the Finnhub key as it
+// stands; listKey: the key the Finnhub lists use (app.js sets it once a key box
+// is left); loaded, failed: the lists by id. id is the list to ask for, null when
+// none is wanted. state: "ok" (list here), "loading", "failed", "none" (no list:
+// no key, or a source we don't know) or "idle" (greyed: nothing is loaded).
+export function coinRowState(st, slot, key, { listKey = key, loaded, failed }) {
+  const greyed = st !== "on";
+  const off = !slot.on;
+  const id = greyed ? null : coinListId(slot.source, listKey);
+  const state = greyed ? "idle" : !id ? "none" : loaded.has(id) ? "ok" : failed.has(id) ? "failed" : "loading";
+  const keyless = !key;
+  return {
+    id, state, greyed, keyless,
+    // Finnhub needs the key, but a stored keyless Finnhub coin stays selected, with its error.
+    finnhubDisabled: greyed || (keyless && slot.source !== "finnhub"),
+    pickDisabled: greyed || off || state !== "ok",
+    manualDisabled: greyed || off,
+    checkDisabled: greyed || off || !slot.pair || !COIN_SOURCES.includes(slot.source) || (slot.source === "finnhub" && keyless),
+  };
+}
+
 export function moveSlot(slots, i, dir) {
   const j = i + dir;
   if (i < 0 || j < 0 || i >= slots.length || j >= slots.length) return slots;
