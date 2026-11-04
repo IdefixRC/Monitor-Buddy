@@ -42,15 +42,26 @@ test("a refused flash shows the matching screen, not the replug advice", () => {
 });
 
 test("a board that doesn't answer INFO is checked before path B is offered", () => {
-  const route = app.slice(app.indexOf("async function probeAndRouteOnce("), app.indexOf("async function checkThenPathB("));
-  assert.ok(route.length > 500, "probeAndRouteOnce not found before checkThenPathB");
-  // Path B directly only on the second look, which comes after the check.
-  const direct = route.slice(0, route.indexOf("async function closeThenPathB(")).split(/\r?\n/).filter((l) => /(showPathB|closeThenPathB)\(\)/.test(l));
-  assert.equal(direct.length, 4);
-  for (const line of direct) assert.match(line, /afterCheck/, "path B is shown without the check");
-  assert.equal((route.match(/checkThenPathB\(/g) || []).length, 2, "both ways into path B go through the check");
+  const first = app.slice(app.indexOf("async function probeAndRouteOnce("), app.indexOf("async function secondLook("));
+  assert.ok(first.length > 500, "probeAndRouteOnce not found before secondLook");
+  // The first look never reaches path B itself; only the check and the second look after it do.
+  assert.doesNotMatch(first, /showPathB\(|closeThenPathB\(/, "path B is shown without the check");
+  assert.equal((first.match(/checkThenPathB\(/g) || []).length, 2, "both ways into path B go through the check");
   const check = app.slice(app.indexOf("async function checkThenPathB("));
-  assert.match(check.slice(0, 1500), /dev\.checkBuddy\(port,[\s\S]*showNotBuddy\(e\.cause\.kind\)[\s\S]*showPathB\(\)/);
+  assert.match(check.slice(0, 1700), /dev\.checkBuddy\(port,[\s\S]*showNotBuddy\(e\.cause\.kind\)[\s\S]*showPathB\(\)/);
+});
+
+test("the port going away stays expected until the second look ends", () => {
+  const check = fn("async function checkThenPathB(");
+  assert.match(check, /app\.expectDrop = true;\s*try \{[\s\S]*if \(askAgain\) return await secondLook\(\);\s*\} finally \{\s*app\.expectDrop = false;\s*\}/);
+  assert.equal((check.slice(0, check.indexOf("function showNotBuddy(")).match(/app\.expectDrop = false/g) || []).length, 1);
+});
+
+test("the second look reports what ended it and asks with the longer wait, no extra write", () => {
+  const look = fn("async function secondLook(");
+  assert.match(look, /firstWaitMs: LOOK_FIRST_WAIT_MS/);
+  assert.match(look, /report\(seen\.error\);/);
+  assert.doesNotMatch(look, /reconnect\(/);
 });
 
 test("both refusal screens use the sad face", () => {

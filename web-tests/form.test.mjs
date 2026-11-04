@@ -940,8 +940,7 @@ test("confetti after every finished flash, not after a plain settings save", () 
 
 test("a silent board gets a second look after the board check, once", () => {
   assert.match(appSource, /else await checkThenPathB\(\{ askAgain: true \}\);/);
-  assert.match(appSource, /if \(askAgain\) return probeAndRouteOnce\(\{ afterCheck: true \}\);/);
-  assert.match(appSource, /else if \(afterCheck\) await closeThenPathB\(\);/);
+  assert.match(appSource, /if \(askAgain\) return await secondLook\(\);/);
   // Trouble seen before writing (a boot loop, download mode) doesn't ask again.
-  assert.match(appSource, /return afterCheck \? closeThenPathB\(\) : checkThenPathB\(\);/);
+  assert.match(appSource, /app\.info = null;\s*return checkThenPathB\(\);/);
 });

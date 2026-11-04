@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, probe, PROBE_WRITES, verifyChange } from "../web/js/serial.js";
+import { BuddyPort, NoReply, ESPRESSIF_VID, BUDDY_PID, probe, PROBE_WRITES, verifyChange, lookAfterCheck } from "../web/js/serial.js";
+import { fakeDevice } from "../web/js/fake-buddy.js";
 
 // A Web Serial port that never answers. With stall, writes never complete,
 // like a Buddy that doesn't read USB (boot loop, or Chrome's 255-byte buffer full).
@@ -241,6 +242,165 @@ test("reconnect() without a MAC doesn't take another board's port", async () => 
   const bp = new StubPort(Array(20).fill({ ok: true, cmd: "INFO", mac: "58:8c:81:5a:33:fc" }));
   await assert.rejects(bp.reconnect(1200), NoReply);
   assert.equal(bp.opens, 0);
+});
+
+// ── The second look after the board check (review of the coin page) ──
+
+const OURS = "b0:a6:04:8b:03:f0";
+const THEIRS = "58:8c:81:5a:33:fc";
+
+// A board behind each port: answers(port) is its INFO reply, or null for one
+// that doesn't read. opens that fail stand for the USB gap.
+class LookPort extends BuddyPort {
+  constructor(port, { answers = () => null, failOpens = 0, dead = null } = {}) {
+    super(port);
+    this.answers = answers;
+    this.failOpens = failOpens;
+    this.dead = dead; // a handle from before the USB drop: it never opens again
+    this.opened = [];
+    this.writes = 0;
+    this.mac = OURS;
+  }
+  async open() {
+    if (this.failOpens-- > 0 || this.port === this.dead) throw new DOMException("Failed to open serial port.", "NetworkError");
+    this.isOpen = true;
+    this.lost = false;
+    this.opened.push(this.port);
+  }
+  async close() { this.isOpen = false; }
+  async command() {
+    if (!this.isOpen) throw new Error("the port is not open");
+    this.writes++;
+    const r = this.answers(this.port);
+    if (!r) throw new NoReply("no reply to INFO");
+    return r;
+  }
+  async waitForReply() { return null; }
+}
+
+const rxIdle = () => ({ last: 0, status: false });
+const look = (bp, opts = {}) => lookAfterCheck(bp, {
+  listen: async () => null,
+  ask: () => probe(bp, rxIdle(), fast),
+  settleMs: 0, windowMs: 200, retryMs: 5, ...opts,
+});
+const infoOf = (mac) => ({ ok: true, cmd: "INFO", mac });
+
+test("the second look waits out the USB gap and writes nothing until the port opens", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS), failOpens: 3 });
+  const seen = await look(bp);
+  assert.equal(seen.info.mac, OURS);
+  assert.equal(bp.writes, 1);
+  assert.equal(bp.opened.length, 1);
+});
+
+test("the second look waits about 1.5 s first", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS) });
+  const t0 = Date.now();
+  await look(bp, { settleMs: 60 });
+  assert.ok(Date.now() - t0 >= 50, "it opened at once");
+});
+
+test("a port that never comes back ends the look with nothing written, and says why", async () => {
+  setPorts([]);
+  const bp = new LookPort(fakePort(), { failOpens: 1000 });
+  const seen = await look(bp, { windowMs: 30 });
+  assert.equal(seen.gone, true);
+  assert.equal(seen.error.name, "NetworkError");
+  assert.equal(bp.writes, 0);
+});
+
+test("a board that doesn't read ends the look after PROBE_WRITES, and isn't asked again", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port);
+  const logging = { last: Date.now(), status: false }; // the worst case: boot lines keep the probe waiting
+  const seen = await look(bp, { ask: () => probe(bp, logging, { ...fast, maxMs: 30 }) });
+  assert.deepEqual(seen, { silent: true });
+  assert.equal(bp.writes, PROBE_WRITES);
+  assert.equal(bp.opened.length, 1);
+});
+
+test("a port that goes away while the look listens is the gap: nothing written, look again", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port, { answers: () => infoOf(OURS) });
+  let listens = 0;
+  const seen = await look(bp, { listen: async () => { if (++listens === 1) bp.lost = true; return null; } });
+  assert.equal(seen.info.mac, OURS);
+  assert.equal(bp.writes, 1);
+  assert.equal(bp.opened.length, 2);
+});
+
+test("a port that fails after a write ends the look and hands the error back", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port);
+  const boom = new Error("the port went away");
+  const seen = await look(bp, { ask: async () => { throw boom; } });
+  assert.deepEqual(seen, { silent: true, error: boom });
+  assert.equal(bp.opened.length, 1);
+});
+
+test("trouble seen while listening ends the look with nothing written", async () => {
+  const port = fakePort();
+  setPorts([port]);
+  const bp = new LookPort(port);
+  assert.deepEqual(await look(bp, { listen: async () => "bootloop" }), { trouble: "bootloop" });
+  assert.equal(bp.writes, 0);
+});
+
+test("another Buddy in our USB gap is closed and passed over, and ours is found behind it", async () => {
+  const dead = fakePort();
+  const theirs = fakePort();
+  const ours = fakePort();
+  setPorts([theirs]); // ours is off USB: the only Buddy listed is the other one
+  const bp = new LookPort(dead, {
+    answers: (p) => {
+      if (p !== theirs) return infoOf(OURS);
+      setPorts([theirs, ours]); // and now ours is back
+      return infoOf(THEIRS);
+    },
+  });
+  const seen = await look(bp);
+  assert.equal(seen.info.mac, OURS);
+  assert.deepEqual(bp.opened, [theirs, ours]);
+  assert.equal(bp.port, ours);
+});
+
+test("only another Buddy answering ends in otherBoard, with the port not left on it", async () => {
+  const dead = fakePort();
+  const theirs = fakePort();
+  setPorts([theirs]);
+  const bp = new LookPort(dead, { answers: () => infoOf(THEIRS), dead });
+  const seen = await look(bp, { windowMs: 30 });
+  assert.deepEqual(seen, { otherBoard: true });
+  assert.equal(bp.port, dead);
+  assert.equal(bp.isOpen, false);
+  assert.equal(bp.mac, OURS);
+  assert.deepEqual(bp.opened, [theirs], "it was asked once");
+});
+
+test("refind() looks past a port that answered as another board", async () => {
+  const dead = fakePort();
+  const theirs = fakePort();
+  const ours = fakePort();
+  const bp = new BuddyPort(dead);
+  bp.mac = OURS;
+  setPorts([theirs, ours]);
+  assert.equal(await bp.refind({ avoid: [theirs] }), ours);
+});
+
+test("the simulated board rides out ?gap and ?twin the same way", async () => {
+  const d = fakeDevice(new URLSearchParams("fake=a&stalled&gap=250&twin=1"));
+  const bp = await d.BuddyPort.pick();
+  bp.mac = (await d.checkBuddy(bp.port)).mac;
+  const seen = await look(bp, { windowMs: 2000, ask: () => probe(bp, rxIdle()) });
+  assert.equal(seen.info.mac, bp.mac);
 });
 
 // ── verifyChange after a lost SET reply: paths, not keys ──

@@ -9,6 +9,8 @@
 //   busy             opening the port fails as if another program held it
 //   boot             the Buddy prints boot lines for a few seconds before it answers
 //   stalled          the Buddy answers nothing until the board check restarts it
+//   gap=2500         after the board check the port won't open for this long, ms (the USB gap)
+//   twin=1           after the board check, this many INFOs come from another Buddy (two on one computer)
 //   flashfail=connect|erase|write   the first flash fails at that stage
 //   noreturn=SET|DEFAULTS   after that command the Buddy doesn't come back on the first reconnect
 //   added=key,key    keys the new firmware reports in GET's "added"
@@ -52,9 +54,13 @@ export function fakeDevice(params) {
   const loseOnce = new Set(params.get("lost") ? [params.get("lost")] : []);
   const noReturn = new Set(params.get("noreturn") ? [params.get("noreturn")] : []);
   let stayAway = false;
+  let gapUntil = 0;
+  let checked = false;
+  let twins = Number(params.get("twin") || 0);
+  const twinNow = () => checked && twins > 0 && twins-- > 0;
 
   const info = () => ({
-    ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: "b0:a6:04:00:00:01",
+    ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: twinNow() ? "58:8c:81:00:00:02" : "b0:a6:04:00:00:01",
     wifi: {
       saved: board.wifi.saved, ssid: board.wifi.ssid,
       connected: board.wifi.saved && board.wifi.password !== "wrongpass",
@@ -82,6 +88,7 @@ export function fakeDevice(params) {
     async open() {
       if (this.isOpen) return;
       await sleep(150);
+      if (Date.now() < gapUntil) throw new DOMException("Failed to open serial port.", "NetworkError");
       if (params.has("busy")) throw new DOMException("Failed to open serial port.", "NetworkError");
       this.isOpen = true;
       if (board.booting) {
@@ -183,6 +190,8 @@ export function fakeDevice(params) {
     say("Board check: motion sensor and touch controller found");
     say("Restarting the board");
     if (params.has("stalled")) board.answers = true;
+    checked = true;
+    gapUntil = Date.now() + Number(params.get("gap") || 0);
     return { mac: "b0:a6:04:00:00:01" };
   }
 

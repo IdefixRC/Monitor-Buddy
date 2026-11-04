@@ -2,7 +2,7 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, change, probe } from "./serial.js";
+import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS } from "./serial.js";
 import { sameMac, watchForTrouble } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
@@ -295,8 +295,7 @@ async function probeAndRoute() {
   }
 }
 
-// afterCheck: the second look, once the board check has restarted the board.
-async function probeAndRouteOnce({ afterCheck = false } = {}) {
+async function probeAndRouteOnce() {
   const bp = app.bp;
   let g;
   screen(S.titles.connecting, (m) => {
@@ -307,7 +306,6 @@ async function probeAndRouteOnce({ afterCheck = false } = {}) {
     await bp.refind(); // the board check restarts it, and it may come back as a new port
     await bp.open();
   } catch (e) {
-    if (afterCheck) return showPathB(); // still coming back: "Check again" is on that screen
     const busyPort = e && (e.name === "NetworkError" || e.name === "InvalidStateError");
     return showProblem(busyPort ? S.connecting.portBusy : S.connecting.openFailed, e, { retry: probeAndRoute });
   }
@@ -319,14 +317,13 @@ async function probeAndRouteOnce({ afterCheck = false } = {}) {
   if (app.trouble) {
     log(`no firmware running (${app.trouble}): nothing sent`, "* ");
     app.info = null;
-    return afterCheck ? closeThenPathB() : checkThenPathB();
+    return checkThenPathB();
   }
   let info = null;
   app.rx.status = false;
   try {
     info = await probe(bp, app.rx, { onBooting: () => g.say(S.connecting.booting) });
   } catch (e) {
-    if (afterCheck) return closeThenPathB();
     return showProblem(S.connecting.lost, e, { retry: connect, retryLabel: S.connect });
   }
   // The board check read a MAC (path B, "Check again"): another board's
@@ -335,8 +332,41 @@ async function probeAndRouteOnce({ afterCheck = false } = {}) {
   app.info = info;
   if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
   if (info) showHome();
-  else if (afterCheck) await closeThenPathB();
   else await checkThenPathB({ askAgain: true });
+}
+
+// The second look, once the board check has restarted the board (the caller
+// keeps app.expectDrop on: the board drops off USB here). Nothing but an INFO
+// answer from this board leads home. Every other end is path B, where "Check
+// again" is: another Buddy that kept answering is safe there too, because the
+// flash passes this board's MAC and refuses any other (WrongBoard).
+async function secondLook() {
+  const bp = app.bp;
+  let g;
+  screen(S.titles.connecting, (m) => {
+    g = guide(m, { mood: "curious", say: S.connecting.say });
+    m.append(spinner());
+  });
+  const seen = await lookAfterCheck(bp, {
+    listen: async () => {
+      app.rx.recent = [];
+      app.trouble = await watchForTrouble(app.rx.recent, LISTEN_MS);
+      return app.trouble;
+    },
+    ask: () => {
+      app.rx.status = false;
+      return probe(bp, app.rx, { firstWaitMs: LOOK_FIRST_WAIT_MS, onBooting: () => g.say(S.connecting.booting) });
+    },
+  });
+  report(seen.error);
+  app.info = seen.info || null;
+  if (seen.info) {
+    bp.mac = seen.info.mac || bp.mac;
+    return showHome();
+  }
+  if (seen.trouble) log(`no firmware running (${seen.trouble}): nothing sent`, "* ");
+  if (seen.otherBoard) log("only another board answered: path B, where a flash still refuses it", "* ");
+  await closeThenPathB();
 }
 
 async function closeThenPathB() {
@@ -356,22 +386,24 @@ async function checkThenPathB({ askAgain = false } = {}) {
     m.append(spinner());
   });
   app.expectDrop = true;
-  try { await app.bp.close(); } catch { /* already closed */ }
-  // No MAC is known yet, so this is the port that was picked: refind() never
-  // swaps it for another board's. If it died (a boot loop drops off USB),
-  // only picking it again can tell which board it is.
-  const port = await app.bp.refind();
   try {
-    const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
-    app.bp.mac = mac || ""; // from now on, only this board is accepted
-  } catch (e) {
+    try { await app.bp.close(); } catch { /* already closed */ }
+    // No MAC is known yet, so this is the port that was picked: refind() never
+    // swaps it for another board's. If it died (a boot loop drops off USB),
+    // only picking it again can tell which board it is.
+    const port = await app.bp.refind();
+    try {
+      const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
+      app.bp.mac = mac || ""; // from now on, only this board is accepted
+    } catch (e) {
+      report(e);
+      if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
+      return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
+    }
+    if (askAgain) return await secondLook();
+  } finally {
     app.expectDrop = false;
-    report(e);
-    if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
-    return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
   }
-  app.expectDrop = false;
-  if (askAgain) return probeAndRouteOnce({ afterCheck: true });
   showPathB();
 }
 
