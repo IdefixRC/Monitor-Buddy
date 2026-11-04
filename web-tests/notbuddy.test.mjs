@@ -48,11 +48,11 @@ test("a board that doesn't answer INFO is checked before path B is offered", () 
   assert.doesNotMatch(first, /showPathB\(|closeThenPathB\(/, "path B is shown without the check");
   assert.equal((first.match(/checkThenPathB\(/g) || []).length, 2, "both ways into path B go through the check");
   const check = app.slice(app.indexOf("async function checkThenPathB("));
-  assert.match(check.slice(0, 1700), /dev\.checkBuddy\(port,[\s\S]*showNotBuddy\(e\.cause\.kind\)[\s\S]*showPathB\(\)/);
+  assert.match(check.slice(0, 2400), /dev\.checkBuddy\(port,[\s\S]*showNotBuddy\(e\.cause\.kind\)[\s\S]*showPathB\(\)/);
 });
 
 test("the port going away stays expected until the second look ends", () => {
-  const check = fn("async function checkThenPathB(");
+  const check = fn("async function checkThenPathB(", 2600);
   assert.match(check, /app\.expectDrop = true;\s*try \{[\s\S]*if \(askAgain\) return await secondLook\(\);\s*\} finally \{\s*app\.expectDrop = false;\s*\}/);
   assert.equal((check.slice(0, check.indexOf("function showNotBuddy(")).match(/app\.expectDrop = false/g) || []).length, 1);
 });
@@ -61,8 +61,14 @@ test("Check again after a silent second look starts with the board check, which 
   assert.match(app, /btn\(S\.pathB\.retry, checkAgain,/);
   assert.match(app, /app\.silentAfterCheck \? checkThenPathB\(\{ askAgain: true \}\) : probeAndRouteOnce\(\)/);
   assert.match(fn("async function secondLook("), /app\.silentAfterCheck = !!seen\.silent;/);
-  assert.match(fn("async function checkThenPathB("), /app\.silentAfterCheck = false;[^\n]*\n\s*if \(askAgain\)/);
+  assert.match(fn("async function checkThenPathB(", 2600), /app\.silentAfterCheck = false;[^\n]*\n\s*if \(askAgain\)/);
   assert.match(fn("async function probeAndRouteOnce(", 3000), /bp\.mac = info\.mac \|\| "";[^\n]*\n\s*app\.silentAfterCheck = false;/);
+});
+
+test("a board check that reaches another Buddy is refused, not adopted", () => {
+  const check = fn("async function checkThenPathB(", 2600);
+  assert.match(check, /const known = app\.bp\.mac;\s*const picked = app\.bp\.port;\s*const port = await app\.bp\.refind\(\);/);
+  assert.match(check, /if \(known && mac && !sameMac\(mac, known\)\) \{\s*app\.bp\.port = picked;[^\n]*\n[^\n]*\n\s*return showProblem\(S\.flash\.wrongBoard, null, \{ retry: checkAgain \}\);\s*\}\s*app\.bp\.mac = mac \|\| known;/);
 });
 
 test("the second look reports what ended it and asks with the longer wait, no extra write", () => {

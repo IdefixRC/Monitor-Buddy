@@ -400,13 +400,22 @@ async function checkThenPathB({ askAgain = false } = {}) {
   app.expectDrop = true;
   try {
     try { await app.bp.close(); } catch { /* already closed */ }
-    // No MAC is known yet, so this is the port that was picked: refind() never
-    // swaps it for another board's. If it died (a boot loop drops off USB),
-    // only picking it again can tell which board it is.
+    // The first time no MAC is known, so this is the port that was picked:
+    // refind() never swaps it for another board's. If it died (a boot loop drops
+    // off USB), only picking it again can tell which board it is. Check again
+    // comes here with the MAC known, and in a USB gap refind() can land on
+    // another Buddy, so a different MAC is refused, never adopted.
+    const known = app.bp.mac;
+    const picked = app.bp.port;
     const port = await app.bp.refind();
     try {
       const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
-      app.bp.mac = mac || ""; // from now on, only this board is accepted
+      if (known && mac && !sameMac(mac, known)) {
+        app.bp.port = picked; // refind() keeps a port that is listed: don't stay on the other board's
+        log("the board check reached another board: nothing written", "* ");
+        return showProblem(S.flash.wrongBoard, null, { retry: checkAgain });
+      }
+      app.bp.mac = mac || known; // from now on, only this board is accepted
     } catch (e) {
       report(e);
       if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
