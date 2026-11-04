@@ -14,6 +14,7 @@ import { pageList } from "./preview.js";
 export const DEFAULTS = Object.freeze({
   mount: "left",
   theme: 2,
+  brightness: 204,
   github_user: "",
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",
@@ -26,7 +27,7 @@ export const DEFAULTS = Object.freeze({
   clock_format: "24h",
   temp_unit: "celsius",
   wind_unit: "kmh",
-  night: Object.freeze({ enabled: false, start: 23, end: 7, brightness: 8 }),
+  night: Object.freeze({ enabled: false, start: 23, end: 7, brightness: 26 }),
   pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }),
 });
 
@@ -74,6 +75,8 @@ export function fromBoard(config) {
   // Likewise the clock format and night mode (both off) that 1.3 added.
   if (!Object.hasOwn(out, "clock_format")) out.clock_format = DEFAULTS.clock_format;
   if (!Object.hasOwn(out, "night")) out.night = { ...DEFAULTS.night };
+  // And the brightness, which a 1.2 board keeps in /display.json without showing it.
+  if (!Object.hasOwn(out, "brightness")) out.brightness = DEFAULTS.brightness;
   return out;
 }
 
@@ -308,6 +311,15 @@ export function applyAfterFlash(f, boardConfig, now) {
   const fresh = newlyOffered(f.supported, now);
   f.supported = now;
   f.config = filterSupported(mergeConfig(fromBoard(boardConfig), f.config), now);
+  // A flash that doesn't erase keeps /display.json, and a board too old to report
+  // its level left only fromBoard's default in the form: the Buddy's own level
+  // stands unless the user chose one. After an erase the form's value is the
+  // one to keep: the board only has its default.
+  const chosen = (f.touched && f.touched.has("brightness")) || (f.imported || []).includes("brightness");
+  const flow = FLOWS[f.flow];
+  if (!chosen && !(flow && flow.erase) && now.has("brightness") && boardConfig && Number.isInteger(boardConfig.brightness)) {
+    f.config.brightness = boardConfig.brightness;
+  }
   rederiveSlots(f);
   return fresh;
 }
@@ -442,6 +454,7 @@ export function formErrors(state, zones) {
       if (key === "night" || key.startsWith("night.") || key === "clock_format") delete out[key];
     }
   }
+  if (fieldState(state, "brightness") !== "on") delete out.brightness;
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") {
     for (const [key, raw] of Object.entries(validateWifi({ ssid: w.ssid, password: w.password }).errors)) {
@@ -503,7 +516,7 @@ export const hourLabel = (h, format) => {
   if (format !== "12h") return `${String(h).padStart(2, "0")}:00`;
   return `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
 };
-// The night slider shows percent; the board stores 8-255.
+// The brightness sliders show percent; the board stores 8-255.
 export const levelToPercent = (l) => Math.round((l * 100) / 255);
 export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
 
@@ -515,6 +528,7 @@ export function previewPageFor(key, config) {
     case "check.coin": return "coin";
     case "github_user": case "check.github": return "github";
     case "mount": return "face";
+    case "brightness": return "stay"; // the preview doesn't simulate brightness
     case "theme": {
       const shown = pageList(config);
       return THEMED_PAGES.find((p) => shown.includes(p)) || "stay";

@@ -11,6 +11,7 @@ static Settings makeDefaults() {
   Settings s{};
   s.mount = MOUNT_LEFT;
   s.theme = 2;
+  s.brightness = 204;
   strcpy(s.githubUser, "IdefixRC");
   strcpy(s.tzName, "Asia/Singapore");
   strcpy(s.tzRule, "<+08>-8");
@@ -23,7 +24,7 @@ static Settings makeDefaults() {
   s.clockFormat = CLOCK_24H;
   s.tempUnit = TEMP_CELSIUS;
   s.windUnit = WIND_KMH;
-  s.night = {false, 23, 7, 8};
+  s.night = {false, 23, 7, 26};
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) s.pages[i] = true;
   return s;
 }
@@ -55,6 +56,7 @@ static void test_to_json_writes_every_key() {
   TEST_ASSERT_EQUAL(CONFIG_VERSION, d["v"].as<int>());
   TEST_ASSERT_EQUAL_STRING("left", d["mount"]);
   TEST_ASSERT_EQUAL(2, d["theme"].as<int>());
+  TEST_ASSERT_EQUAL(204, d["brightness"].as<int>());
   TEST_ASSERT_EQUAL_STRING("IdefixRC", d["github_user"]);
   TEST_ASSERT_EQUAL_STRING("Asia/Singapore", d["tz_name"]);
   TEST_ASSERT_EQUAL_STRING("<+08>-8", d["tz_rule"]);
@@ -84,7 +86,7 @@ static void test_load_without_file_keeps_defaults_and_adds_nothing() {
 static void test_load_applies_every_key() {
   JsonDocument file;
   deserializeJson(file,
-    "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"github_user\":\"octo-cat\","
+    "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"brightness\":99,\"github_user\":\"octo-cat\","
     "\"tz_name\":\"Europe/Berlin\",\"tz_rule\":\"CET-1CEST,M3.5.0,M10.5.0/3\","
     "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"coins\":[{\"pair\":\"BTC-USD\",\"source\":\"coinbase\",\"on\":true}],\"lat\":\"48.1374\",\"lon\":\"11.5755\","
     "\"clock_format\":\"12h\",\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
@@ -360,6 +362,26 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
   TEST_ASSERT_FALSE(tzRuleFromOffset(8, tiny, sizeof tiny));
 }
 
+// The firmware copies its level into `current` first, so a SET without the key
+// leaves it alone (src/main.cpp, mbSet).
+static void test_merge_keeps_brightness_when_the_key_is_absent() {
+  Settings current = makeDefaults(), out{};
+  current.brightness = 120;
+  JsonDocument patch, errs;
+  deserializeJson(patch, "{\"theme\":1}");
+  TEST_ASSERT_TRUE(settingsMerge(current, patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(120, out.brightness);
+  TEST_ASSERT_EQUAL(1, out.theme);
+}
+
+static void test_merge_takes_a_new_brightness() {
+  Settings out{};
+  JsonDocument patch, errs;
+  deserializeJson(patch, "{\"brightness\":200}");
+  TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(200, out.brightness);
+}
+
 // ── The @MB line budget (spec §4.6) ───────────────────────
 
 // The largest GET reply a board can really send: every text field at its
@@ -388,13 +410,14 @@ static void test_largest_get_reply_fits_with_room() {
   strcpy(s.lon, "-123.4567890123");
   s.tempUnit = TEMP_FAHRENHEIT;
   s.clockFormat = CLOCK_12H_FORMAT;
+  s.brightness = 255;
   s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["ok"] = true; d["cmd"] = "GET"; d["id"] = 4294967295UL;
   d["v"] = CONFIG_VERSION; d["stored"] = true;
   settingsToJson(s, d["config"].to<JsonObject>());
   JsonArray added = d["added"].to<JsonArray>();
-  const char *all[] = {"clock_format", "night", "coins", "pages.coin"};
+  const char *all[] = {"brightness", "clock_format", "night", "coins", "pages.coin"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
   TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line);
@@ -415,6 +438,7 @@ static void test_largest_set_line_fits_with_room() {
   }
   s.coinCount = SETTINGS_COIN_MAX;
   s.clockFormat = CLOCK_12H_FORMAT;
+  s.brightness = 255;
   s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["id"] = 4294967295UL;
@@ -427,6 +451,8 @@ static void test_largest_set_line_fits_with_room() {
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_merge_keeps_brightness_when_the_key_is_absent);
+  RUN_TEST(test_merge_takes_a_new_brightness);
   RUN_TEST(test_tz_rule_whole_hours_east);
   RUN_TEST(test_tz_rule_whole_hours_west);
   RUN_TEST(test_tz_rule_half_and_quarter_hours);

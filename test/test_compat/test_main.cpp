@@ -49,11 +49,13 @@ static void test_k1_k2_a_1_2_0_file_loads_and_gains_stocks() {
   defaults.coinCount = 1;
   defaults.pages[7] = true;
   defaults.clockFormat = CLOCK_24H;
-  defaults.night = {false, 23, 7, 8};
+  defaults.brightness = 204;
+  defaults.night = {false, 23, 7, 26};
   AddedKeys added;
   JsonDocument inv;
   settingsLoad(defaults, doc.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
-  TEST_ASSERT_EQUAL(4, added.count);   // #24 adds clock_format and night on purpose
+  TEST_ASSERT_EQUAL(5, added.count);   // #24 adds brightness, clock_format and night on purpose
+  TEST_ASSERT_TRUE(added.has("brightness"));
   TEST_ASSERT_TRUE(added.has("clock_format"));
   TEST_ASSERT_TRUE(added.has("night"));
   TEST_ASSERT_TRUE(added.has("coins"));
@@ -105,6 +107,7 @@ static void test_current_code_loads_a_future_file() {
   TEST_ASSERT_EQUAL(COIN_FINNHUB, out.coins[1].source);
   TEST_ASSERT_FALSE(out.coins[1].on);
   TEST_ASSERT_TRUE(out.pages[7]);
+  TEST_ASSERT_EQUAL(200, out.brightness);
 }
 
 int main() {

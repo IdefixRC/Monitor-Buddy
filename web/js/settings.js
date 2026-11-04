@@ -22,6 +22,7 @@ const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArr
 export const SCHEMA = Object.freeze([
   { name: "mount", kind: "choice", words: ["left", "right"], error: 'must be "left" or "right"' },
   { name: "theme", kind: "int", min: 0, max: 4, error: "must be a whole number 0-4" },
+  { name: "brightness", kind: "int", min: 8, max: 255, error: "a number from 8 to 255" },
   { name: "github_user", kind: "text", min: 0, max: 39, chars: ALNUM + "-", error: "0-39 characters: letters, digits and -" },
   { name: "tz_name", kind: "text", min: 1, max: 64, chars: ALNUM + "/_+-", error: "1-64 characters: letters, digits and / _ + -" },
   { name: "tz_rule", kind: "text", min: 1, max: 64, chars: ALNUM + "<>+-:,./", error: "1-64 characters of a POSIX TZ rule" },
@@ -286,7 +287,8 @@ export const PATHS_BY_CFG = Object.freeze({
   1: BASELINE_PATHS,
   2: Object.freeze([...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on",
     "coins", "coins.pair", "coins.source", "coins.on", "pages.coin",
-    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness"]),
+    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness",
+    "brightness"]),
 });
 const KNOWN_CFG = Object.keys(PATHS_BY_CFG).map(Number).sort((a, b) => a - b);
 

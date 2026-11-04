@@ -185,7 +185,7 @@ static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-
   #define NIGHT_END_HOUR 7
 #endif
 #ifndef NIGHT_BRIGHTNESS
-  #define NIGHT_BRIGHTNESS 8
+  #define NIGHT_BRIGHTNESS 26
 #endif
 #ifndef NIGHT_WAKE_MS
   #define NIGHT_WAKE_MS 30000UL
@@ -239,7 +239,7 @@ static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_EN
 static constexpr uint32_t COIN_REFRESH_MS       = 60000UL;
 static constexpr uint32_t COIN_CHART_REFRESH_MS = 15UL * 60UL * 1000UL;
 
-static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
+static constexpr uint8_t BRIGHTNESS_DEFAULT = 204;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
 // Save brightness this long after the last step, so a drag writes once.
 static constexpr uint32_t BRIGHTNESS_SAVE_DELAY_MS = 2000;
@@ -676,6 +676,9 @@ float   tiltSign       = 1.0f;
 // defaults. Only night.brightness changes while running, written from the
 // loop by a night swipe, and netTask never reads it. The rest stays as loaded:
 // every other save restarts the board, so netTask may read them without a lock.
+// settings.brightness is only a copy of brightnessLevel for GET and for the
+// file: /display.json is the one truth, so a swipe never creates /config.json
+// and the copy in the file is ignored at boot. Refresh it before using it.
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
@@ -2362,6 +2365,7 @@ Settings defaultsFromConfig() {
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
   d.clockFormat = CLOCK_12H ? CLOCK_12H_FORMAT : CLOCK_24H;
+  d.brightness = BRIGHTNESS_DEFAULT;
   d.night = {NIGHT_MODE, NIGHT_START_HOUR, NIGHT_END_HOUR, NIGHT_BRIGHTNESS};
   d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
   d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
@@ -2521,6 +2525,7 @@ void mbGet() {
   JsonDocument doc;
   doc["v"]      = CONFIG_VERSION;
   doc["stored"] = settingsStored;
+  settings.brightness = brightnessLevel;   // it may have been swiped since boot
   settingsToJson(settings, doc["config"].to<JsonObject>());
   JsonArray added = doc["added"].to<JsonArray>();
   for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
@@ -2535,6 +2540,7 @@ void mbSet(JsonDocument &req) {
   JsonVariantConst cfg  = req["config"];
   JsonVariantConst wifi = req["wifi"];
 
+  settings.brightness = brightnessLevel;   // a partial SET keeps it
   JsonDocument res;
   JsonObject errors = res["errors"].to<JsonObject>();
   Settings next = settings;
@@ -2549,6 +2555,10 @@ void mbSet(JsonDocument &req) {
     settingsToJson(next, file.to<JsonObject>());
     if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
     configReplaced = true;                // `next` went out with the swiped level in it
+    if (next.brightness != brightnessLevel) {   // /display.json holds it, written by the restart's flush
+      brightnessLevel = next.brightness;
+      brightnessSavePending = true;
+    }
   }
   if (!wifi.isNull()) {
     JsonDocument file;                    // AWM's plain format
@@ -2856,6 +2866,7 @@ void flushNightSave(bool now) {
   if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
   nightSavePending = false;
   if (settings.night.brightness == savedNightBrightness) return;
+  settings.brightness = brightnessLevel;
   JsonDocument file;
   settingsToJson(settings, file.to<JsonObject>());
   if (file.overflowed()) { Serial.println("night: could not save"); return; }
@@ -3132,6 +3143,7 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
+  settings.brightness = brightnessLevel;
   writeBacklight(brightnessLevel);
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to

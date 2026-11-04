@@ -27,7 +27,7 @@ const good = (patch) => {
 // -- constants ------------------------------------------------------------
 
 test("KEYS are the firmware's keys in the firmware's order", () => {
-  assert.deepEqual(KEYS, ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stocks",
+  assert.deepEqual(KEYS, ["mount", "theme", "brightness", "github_user", "tz_name", "tz_rule", "ticker", "stocks",
     "stock_key", "coins", "lat", "lon", "clock_format", "temp_unit", "wind_unit", "night", "pages"]);
 });
 
@@ -367,7 +367,7 @@ test("PATHS_BY_CFG: 1 is the frozen baseline, 2 adds the stocks", () => {
   assert.equal(PATHS_BY_CFG[1], BASELINE_PATHS);
   assert.deepEqual([...PATHS_BY_CFG[2]], [...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on",
     "coins", "coins.pair", "coins.source", "coins.on", "pages.coin",
-    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness"]);
+    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness", "brightness"]);
   assert.ok(Object.isFrozen(PATHS_BY_CFG) && Object.isFrozen(PATHS_BY_CFG[2]));
 });
 

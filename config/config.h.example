@@ -109,7 +109,7 @@
 #define NIGHT_MODE       false
 #define NIGHT_START_HOUR 23
 #define NIGHT_END_HOUR   7
-#define NIGHT_BRIGHTNESS 8
+#define NIGHT_BRIGHTNESS 26
 #define NIGHT_WAKE_MS    30000UL
 
 // ── Setup hotspot (optional, source builds only) ────────────

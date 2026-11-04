@@ -303,7 +303,7 @@ def change(s, port, cmd, body=None, wait_restart=False):
 
 
 REDACTED = "<redacted>"
-CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+CONFIG_KEYS = ["mount", "theme", "brightness", "github_user", "tz_name", "tz_rule", "ticker",
                "stock_key", "lat", "lon", "temp_unit", "wind_unit", "clock_format"]
 NIGHT_FIELDS = ["enabled", "start", "end", "brightness"]
 
@@ -313,7 +313,7 @@ def expected_keys(version):
     keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     if version >= 2:
-        keys |= {"stocks", "coins", "clock_format", "night"}
+        keys |= {"stocks", "coins", "clock_format", "night", "brightness"}
     return keys
 
 
@@ -388,6 +388,11 @@ def parse_set_args(args):
                 config[key] = int(value)
             except ValueError:
                 raise ValueError("theme must be a whole number (0-4)") from None
+        elif key == "brightness":
+            try:
+                config[key] = int(value)
+            except ValueError:
+                raise ValueError("brightness must be a whole number (8-255)") from None
         elif key == "stocks":
             symbols = [v.strip().upper() for v in value.split(",") if v.strip()]
             if not symbols:

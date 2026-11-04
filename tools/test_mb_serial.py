@@ -25,7 +25,7 @@ class ParseSetArgs(unittest.TestCase):
         self.assertIn("stocks", mb_serial.expected_keys(2))
         self.assertNotIn("coins", mb_serial.expected_keys(1))
         self.assertIn("coins", mb_serial.expected_keys(2))
-        for key in ("clock_format", "night"):
+        for key in ("clock_format", "night", "brightness"):
             self.assertNotIn(key, mb_serial.expected_keys(1))
             self.assertIn(key, mb_serial.expected_keys(2))
 
@@ -37,6 +37,11 @@ class ParseSetArgs(unittest.TestCase):
             mb_serial.parse_set_args(["night.start=late"])
         with self.assertRaises(ValueError):
             mb_serial.parse_set_args(["night.colour=1"])
+
+    def test_set_brightness_is_a_number(self):
+        self.assertEqual(mb_serial.parse_set_args(["brightness=200"]), {"config": {"brightness": 200}})
+        with self.assertRaisesRegex(ValueError, "brightness must be a whole number"):
+            mb_serial.parse_set_args(["brightness=bright"])
 
     def test_coins_points_at_the_file_form(self):
         for arg in ("coins=BTC-USD", "coins="):

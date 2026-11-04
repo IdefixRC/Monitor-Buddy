@@ -48,6 +48,7 @@ struct Night {
 struct Settings {
   uint8_t mount;              // MOUNT_*
   uint8_t theme;              // 0-4
+  uint8_t brightness;         // 8-255: a copy of /display.json's level, which wins at boot
   char    githubUser[40];     // "" hides the GitHub page
   char    tzName[65];         // IANA name, for the weather request
   char    tzRule[65];         // POSIX TZ rule, for the clock

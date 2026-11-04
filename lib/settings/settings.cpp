@@ -97,6 +97,7 @@ bool nightHoursDiffer(const uint8_t *g) {
 const Field SETTINGS_FIELDS[] = {
   schema::choiceField("mount", AT(mount), MOUNT_WORDS, 2, "must be \"left\" or \"right\""),
   schema::intField("theme", AT(theme), 1, 0, 4, "must be a whole number 0-4"),
+  schema::intField("brightness", AT(brightness), 1, 8, 255, "a number from 8 to 255"),
   schema::textField("github_user", AT(githubUser), sizeof(Settings::githubUser), 0,
                     ALNUM_ "-", "0-39 characters: letters, digits and -"),
   schema::textField("tz_name", AT(tzName), sizeof(Settings::tzName), 1,

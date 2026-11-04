@@ -886,6 +886,26 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     return { input, el: h("div", { class: "switch-row" }, head(h("label", { for: id }, label), label, help, badgeKey), input, error) };
   }
 
+  // A brightness slider: percent on screen, 8-255 on the board. `set` runs only
+  // on the slider's own input, so drawing the form never rounds a stored level.
+  function levelSlider({ key, label, level, hint, set, help = null }) {
+    const id = uid("f");
+    const hintEl = h("p", { class: "field__hint", id: uid("hint") }, hint);
+    const input = h("input", { id, type: "range", class: "level__range", min: "3", max: "100", step: "1", "aria-describedby": hintEl.id });
+    const value = h("span", { class: "level__value", "aria-hidden": "true" });
+    const show = () => {
+      value.textContent = S.form.nightLevel(Number(input.value));
+      input.setAttribute("aria-valuetext", value.textContent);
+    };
+    input.value = String(levelToPercent(level));
+    show();
+    input.addEventListener("input", () => { set(percentToLevel(Number(input.value))); show(); changed(key); });
+    const error = errorSlot(key, [input]);
+    const top = head(h("label", { for: id }, label), label, help, key);
+    top.append(value);
+    return { input, hintEl, el: h("div", { class: "field level" }, top, input, hintEl, error) };
+  }
+
   const section = (title, ...kids) => h("section", { class: "section" }, h("h2", { class: "section__title" }, title), kids);
   const note = (text, cls = "") => h("p", { class: `note ${cls}` }, rich(text));
 
@@ -1128,23 +1148,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const nightStart = hourSelect(S.form.nightStart, "start");
     const nightEnd = hourSelect(S.form.nightEnd, "end");
     const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
-    const levelId = uid("f");
-    const aboveId = uid("hint");
-    const levelValue = h("span", { class: "night__value", "aria-hidden": "true" });
-    const nightLevel = h("input", { id: levelId, type: "range", class: "night__range", min: "3", max: "100", step: "1", "aria-describedby": aboveId });
-    nightLevel.value = String(levelToPercent(f.config.night.brightness));
-    nightLevel.setAttribute("aria-valuetext", S.form.nightLevel(Number(nightLevel.value)));
-    const showLevel = () => {
-      levelValue.textContent = S.form.nightLevel(Number(nightLevel.value));
-      nightLevel.setAttribute("aria-valuetext", levelValue.textContent);
-    };
-    nightLevel.addEventListener("input", () => { f.config.night.brightness = percentToLevel(Number(nightLevel.value)); showLevel(); changed("night.brightness"); });
     const nightRows = [
       nightSwitch.el,
       h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
-      h("div", { class: "field" },
-        h("div", { class: "field__head" }, h("label", { for: levelId }, S.form.nightBrightness), levelValue), nightLevel),
-      h("p", { class: "field__hint", id: aboveId }, S.form.nightAboveDay),
     ];
     const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night"],
       h("span", { class: "advanced__hint" }, S.form.nightHint));
@@ -1167,9 +1173,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       const broken = !nightError.hidden; // keep the hours reachable so the error can be fixed
       nightStart.select.disabled = off && !broken;
       nightEnd.select.disabled = off && !broken;
-      nightLevel.disabled = off;
       nightSwitch.input.disabled = st !== "on";
-      showLevel();
     });
 
     // 3b. Units.
@@ -1660,12 +1664,32 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         h("span", { class: "swatch__dots" }, dots.map((c) => h("i", { style: `background:${c}` }))));
     };
     const mountIcon = (side) => h("span", { class: `mount-icon mount-icon--${side}`, "aria-hidden": "true" }, h("i"), h("b"));
-    form.append(section(S.form.sections.look,
+    const lookSection = section(S.form.sections.look,
       radioGroup({ key: "theme", legend: S.form.theme, help: "theme", value: f.config.theme, cls: "radios--swatches",
         options: S.themeNames.map((name, i) => [i, name, swatch(i)]), set: (v) => { f.config.theme = v; } }),
       radioGroup({ key: "mount", legend: S.form.mount, help: "mount", value: f.config.mount, cls: "radios--mount",
         options: [["left", S.form.left, mountIcon("left")], ["right", S.form.right, mountIcon("right")]],
-        set: (v) => { f.config.mount = v; } })));
+        set: (v) => { f.config.mount = v; } }));
+    // The day and night brightness (new in 1.3). Below 1.3 one note stands in for both.
+    const dayLevel = levelSlider({ key: "brightness", label: S.form.dayBrightness, help: "brightness", hint: S.form.dayBrightnessHint,
+      level: f.config.brightness ?? DEFAULTS.brightness, set: (l) => { f.config.brightness = l; } });
+    const nightLevel = levelSlider({ key: "night.brightness", label: S.form.nightBrightness, hint: S.form.nightAboveDay,
+      level: f.config.night?.brightness ?? DEFAULTS.night.brightness, set: (l) => { f.config.night.brightness = l; } });
+    const levelRows = h("div", {}, dayLevel.el, nightLevel.el);
+    const levelNote = note("", "note--info");
+    lookSection.append(levelRows, levelNote);
+    form.append(lookSection);
+    refreshers.push(() => {
+      const st = fieldState(f, "brightness");
+      const first = firstWith("brightness");
+      levelRows.hidden = st !== "on";
+      levelNote.hidden = st !== "greyed";
+      levelNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+      const off = !f.config.night?.enabled;   // its value stays, ready for when night mode is on
+      nightLevel.input.disabled = off;
+      nightLevel.el.classList.toggle("level--off", off);
+      nightLevel.hintEl.textContent = off ? S.form.nightNeedsSwitch : S.form.nightAboveDay;
+    });
 
     // Firmware version, for the flows that flash.
     let cfgNote = null;

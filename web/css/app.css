@@ -2113,17 +2113,22 @@ select.input {
   }
 }
 
-/* Clock box: night mode's brightness slider. */
-.night__range {
+/* Look box: the day and night brightness sliders. */
+.level__range {
   width: 100%;
   max-width: 100%;
   margin: 0.4rem 0 0;
   accent-color: var(--accent, currentColor);
 }
 
-.night__value {
+.level__value {
   font-variant-numeric: tabular-nums;
   margin-left: auto;
+}
+
+.level--off .field__head,
+.level--off .level__range {
+  opacity: 0.5;
 }
 
 .night .switch-row:first-child {
