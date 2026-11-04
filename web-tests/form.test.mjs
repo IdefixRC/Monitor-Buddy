@@ -800,7 +800,7 @@ test("the coin section has no default-source group", () => {
   assert.doesNotMatch(css, /coin-default/);
 });
 test("slots 2-5 sit in fold-outs that open on an error inside or on focus sent there", () => {
-  assert.match(appSource, /foldOut\("stock", slotRows\.slice\(1\)[\s\S]*?slotRows\.slice\(1\)\.map\(\(r\) => `stockslot\.\$\{r\.i\}`\)\);/);
+  assert.match(appSource, /foldOut\("stock", slotRows\.slice\(1\)[\s\S]*?slotRows\.slice\(1\)\.map\(\(r\) => `stockslot\.\$\{r\.i\}`\), slotsNote\);/);
   assert.match(appSource, /foldOut\("coin", coinRows\.slice\(1\)[\s\S]*?coinRows\.slice\(1\)\.map\(\(r\) => `coinslot\.\$\{r\.i\}`\)\);/);
   // A shown error inside opens it (refresh) and keeps it open (toggle).
   assert.match(appSource, /const hasError = \(\) => errorKeys\.some\(\(k\) => slots\.get\(k\) && !slots\.get\(k\)\.error\.hidden\);/);
@@ -843,4 +843,10 @@ test("the greyed note offers the picker only where there is one", () => {
   assert.match(appSource, /flow\.flash \? S\.form\.needsNewer\(version\) : S\.form\.needsUpdate\(version\)/);
   assert.equal(S.form.needsUpdate("1.3.0"), "Available from firmware 1.3.0. Update your Buddy to use this feature.");
   assert.doesNotMatch(appSource, /S\.form\.needsNewer\((release|firstStocks|firstCoins)\.version\)/);
+});
+
+test("the note about stocks 2-5 sits in their fold-out's title, visible while closed", () => {
+  assert.match(appSource, /h\("summary", \{ class: "advanced__summary" \}, title, hint\)/);
+  assert.match(appSource, /const slotsNote = h\("span", \{ class: "advanced__hint" \}\);/);
+  assert.match(appSource, /`stockslot\.\$\{r\.i\}`\), slotsNote\);/);
 });

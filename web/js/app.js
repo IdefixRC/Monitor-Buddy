@@ -851,10 +851,10 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   // title lists what's inside. It opens by itself while a slot inside shows an
   // error, and its open/closed state lives in the form state (f.folds), so a
   // redraw keeps it.
-  function foldOut(name, rows, label, summaryOf, errorKeys) {
+  function foldOut(name, rows, label, summaryOf, errorKeys, hint = null) {
     const title = h("span", { class: "advanced__title" }, label);
     const fold = h("details", { class: "advanced slots__more", open: !!f.folds[name] },
-      h("summary", { class: "advanced__summary" }, title),
+      h("summary", { class: "advanced__summary" }, title, hint),
       h("div", { class: "advanced__body slots" }, rows));
     const hasError = () => errorKeys.some((k) => slots.get(k) && !slots.get(k).error.hidden);
     const retitle = () => { title.textContent = (!fold.open && summaryOf()) || label; };
@@ -1223,15 +1223,16 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       focusTargets[key] = () => [input, ...(moved > 0 ? [down, up] : [up, down]), check];
       return { el, input, onBox, up, down, check, i };
     });
+    // In the fold-out's title, so it shows closed and says what it is about: slots 2-5.
+    const slotsNote = h("span", { class: "advanced__hint" });
     const moreStocks = foldOut("stock", slotRows.slice(1).map((r) => r.el), S.form.moreStocks, () => {
       const filled = f.stockSlots.slice(1).filter((s) => s.symbol);
       return filled.length ? S.form.moreStocksList(filled.map((s) => s.symbol), filled.filter((s) => !s.on).length) : "";
-    }, slotRows.slice(1).map((r) => `stockslot.${r.i}`));
-    const slotsNote = note("", "note--info");
+    }, slotRows.slice(1).map((r) => `stockslot.${r.i}`), slotsNote);
     const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
     const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
     const slotsBlock = h("div", { class: "slots" }, slotRows[0].el, moreStocks);
-    form.append(section(S.form.sections.stock, tickerBlock, slotsBlock, slotsNote));
+    form.append(section(S.form.sections.stock, tickerBlock, slotsBlock));
     refreshers.push(() => {
       const st = fieldState(f, "stocks");
       const firstStocks = firstWith("stocks");
