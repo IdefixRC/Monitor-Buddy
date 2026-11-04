@@ -313,6 +313,8 @@ export const S = {
     tz_rule: "Advanced: the exact rule my clock uses, including daylight saving. It's filled in from the time zone; you only need to change it in rare cases.",
     coins: "Up to five coins, each from Coinbase or Finnhub. A tap on the Buddy's coin page shows the next one; switched-off slots keep their coin.",
     stocks: "Up to five stocks. A tap on the Buddy's stock page shows the next one; switched-off slots keep their ticker.",
+    clock_format: "Show the time as 00-23 (24-hour) or as 1-12 with AM or PM.",
+    night: "Dim my screen between the hours you pick, and give my face a sleepy look. A touch brings the normal brightness back for a moment. I only do this once my clock has the right time.",
     temp_unit: "Celsius or Fahrenheit, for the weather page.",
     wind_unit: "km/h or mph, for the weather page.",
     pages: "Choose which pages I show and cycle through. If you turn them all off, I keep the face on so the screen is never empty.",

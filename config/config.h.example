@@ -97,6 +97,21 @@
 #define SHOW_STOCK    true   // stock ticker (needs Wi-Fi + Finnhub key)
 #define SHOW_GITHUB   true   // GitHub follower/repo stats (needs Wi-Fi)
 
+// ── Clock and night mode ────────────────────────────────────
+// Defaults for a board with no saved settings; the web flasher changes them
+// afterwards. Both are off.
+// CLOCK_12H: true shows 1-12 with AM/PM, false shows 00-23.
+// NIGHT_MODE: true dims the backlight from NIGHT_START_HOUR until
+// NIGHT_END_HOUR (local time, 0-23, the span may cross midnight) to
+// NIGHT_BRIGHTNESS (8-255). The two hours must differ.
+// NIGHT_WAKE_MS: how long a touch brings the normal brightness back.
+#define CLOCK_12H        false
+#define NIGHT_MODE       false
+#define NIGHT_START_HOUR 23
+#define NIGHT_END_HOUR   7
+#define NIGHT_BRIGHTNESS 8
+#define NIGHT_WAKE_MS    30000UL
+
 // ── Setup hotspot (optional, source builds only) ────────────
 // The Wi-Fi network the Buddy opens for setup. Its password is shown on the
 // Buddy's screen while the hotspot is open, so a random one costs nothing.

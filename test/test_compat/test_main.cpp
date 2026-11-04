@@ -48,10 +48,14 @@ static void test_k1_k2_a_1_2_0_file_loads_and_gains_stocks() {
   defaults.coins[0].on = true;
   defaults.coinCount = 1;
   defaults.pages[7] = true;
+  defaults.clockFormat = CLOCK_24H;
+  defaults.night = {false, 23, 7, 8};
   AddedKeys added;
   JsonDocument inv;
   settingsLoad(defaults, doc.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
-  TEST_ASSERT_EQUAL(2, added.count);
+  TEST_ASSERT_EQUAL(4, added.count);   // #24 adds clock_format and night on purpose
+  TEST_ASSERT_TRUE(added.has("clock_format"));
+  TEST_ASSERT_TRUE(added.has("night"));
   TEST_ASSERT_TRUE(added.has("coins"));
   TEST_ASSERT_TRUE(added.has("pages.coin"));
   TEST_ASSERT_EQUAL(0, inv.size());

@@ -23,8 +23,10 @@ export const DEFAULTS = Object.freeze({
   coins: Object.freeze([Object.freeze({ pair: "BTC-USD", source: "coinbase", on: true })]),
   lat: "1.3119",
   lon: "103.8149",
+  clock_format: "24h",
   temp_unit: "celsius",
   wind_unit: "kmh",
+  night: Object.freeze({ enabled: false, start: 23, end: 7, brightness: 8 }),
   pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }),
 });
 
@@ -69,6 +71,9 @@ export function fromBoard(config) {
   // strips both again for a target without them.
   if (!Object.hasOwn(out, "coins")) out.coins = structuredClone(DEFAULTS.coins);
   if (!out.pages || !Object.hasOwn(out.pages, "coin")) out.pages = { ...out.pages, coin: DEFAULTS.pages.coin };
+  // Likewise the clock format and night mode (both off) that 1.3 added.
+  if (!Object.hasOwn(out, "clock_format")) out.clock_format = DEFAULTS.clock_format;
+  if (!Object.hasOwn(out, "night")) out.night = { ...DEFAULTS.night };
   return out;
 }
 
@@ -490,7 +495,7 @@ export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
-    case "tz_name": case "tz_rule": return "clock";
+    case "tz_name": case "tz_rule": case "clock_format": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
     case "check.coin": return "coin";
     case "github_user": case "check.github": return "github";
@@ -501,6 +506,7 @@ export function previewPageFor(key, config) {
     }
     default: break;
   }
+  if (typeof key === "string" && key.startsWith("night")) return "clock";
   if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
   if (typeof key === "string" && key.startsWith("coinslot.")) return "coin";
   if (typeof key === "string" && key.startsWith("pages.")) {

@@ -163,6 +163,37 @@ static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <
 static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 #define AWM_HOSTNAME "Monitor-Buddy"
 
+// ── Personal-build options (config.h) ───────────────────────
+// The defaults for what the web flasher can change on the board.
+// CLOCK_12H       true shows 1-12 with AM/PM instead of 00-23.
+// NIGHT_MODE      true dims the backlight and gives the face a sleepy look
+//                 from NIGHT_START_HOUR until NIGHT_END_HOUR (local time).
+//                 A touch brings the normal brightness back for
+//                 NIGHT_WAKE_MS. Off until the clock has synced over NTP.
+// NIGHT_BRIGHTNESS backlight level at night, 8-255.
+#ifndef CLOCK_12H
+  #define CLOCK_12H false
+#endif
+#ifndef NIGHT_MODE
+  #define NIGHT_MODE false
+#endif
+#ifndef NIGHT_START_HOUR
+  #define NIGHT_START_HOUR 23
+#endif
+#ifndef NIGHT_END_HOUR
+  #define NIGHT_END_HOUR 7
+#endif
+#ifndef NIGHT_BRIGHTNESS
+  #define NIGHT_BRIGHTNESS 8
+#endif
+#ifndef NIGHT_WAKE_MS
+  #define NIGHT_WAKE_MS 30000UL
+#endif
+static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
+static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
+static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
+static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_END_HOUR must differ");
+
 // How long the portal stays open with nobody using it, in seconds.
 // The timer is reset by any connected AP client and by every HTTP
 // request, so it will not close while you are actually using it.
@@ -2298,6 +2329,8 @@ Settings defaultsFromConfig() {
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
+  d.clockFormat = CLOCK_12H ? CLOCK_12H_FORMAT : CLOCK_24H;
+  d.night = {NIGHT_MODE, NIGHT_START_HOUR, NIGHT_END_HOUR, NIGHT_BRIGHTNESS};
   d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
   d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,

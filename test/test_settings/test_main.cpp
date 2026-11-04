@@ -20,8 +20,10 @@ static Settings makeDefaults() {
   strcpy(s.coins[0].pair, "BTC-USD"); s.coins[0].source = COIN_COINBASE; s.coins[0].on = true; s.coinCount = 1;
   strcpy(s.lat, "1.3119");
   strcpy(s.lon, "103.8149");
+  s.clockFormat = CLOCK_24H;
   s.tempUnit = TEMP_CELSIUS;
   s.windUnit = WIND_KMH;
+  s.night = {false, 23, 7, 8};
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) s.pages[i] = true;
   return s;
 }
@@ -85,7 +87,8 @@ static void test_load_applies_every_key() {
     "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"github_user\":\"octo-cat\","
     "\"tz_name\":\"Europe/Berlin\",\"tz_rule\":\"CET-1CEST,M3.5.0,M10.5.0/3\","
     "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"coins\":[{\"pair\":\"BTC-USD\",\"source\":\"coinbase\",\"on\":true}],\"lat\":\"48.1374\",\"lon\":\"11.5755\","
-    "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
+    "\"clock_format\":\"12h\",\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
+    "\"night\":{\"enabled\":true,\"start\":22,\"end\":6,\"brightness\":40},"
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
     "\"moon\":false,\"stock\":true,\"github\":true,\"coin\":true}}");
   Settings out; AddedKeys added; JsonDocument inv;
@@ -101,6 +104,11 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL_STRING("11.5755", out.lon);
   TEST_ASSERT_EQUAL(TEMP_FAHRENHEIT, out.tempUnit);
   TEST_ASSERT_EQUAL(WIND_MPH, out.windUnit);
+  TEST_ASSERT_EQUAL(CLOCK_12H_FORMAT, out.clockFormat);
+  TEST_ASSERT_TRUE(out.night.enabled);
+  TEST_ASSERT_EQUAL(22, out.night.start);
+  TEST_ASSERT_EQUAL(6, out.night.end);
+  TEST_ASSERT_EQUAL(40, out.night.brightness);
   TEST_ASSERT_FALSE(out.pages[1]);
   TEST_ASSERT_FALSE(out.pages[4]);
   TEST_ASSERT_TRUE(out.pages[5]);
@@ -358,9 +366,9 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
 // maximum, five stocks and five coins. A key missing from a file holds its
 // short default, so "every field at max" and "every path added" cannot happen
 // together; after a 1.2 -> 1.3 update only the new keys are reported, which
-// are "coins" and "pages.coin". The reserve covers #24's keys: about 90 bytes
-// of config (clock_format, night with four fields) and about 50 bytes of added
-// paths. The line must fit the 2,048-byte reply buffer with a quarter to spare.
+// are "clock_format", "night", "coins" and "pages.coin" (the paths #24 added
+// are in the line, with no reserve). The line must fit the 2,048-byte reply
+// buffer with a quarter to spare.
 static void test_largest_get_reply_fits_with_room() {
   Settings s = makeDefaults();
   s.mount = MOUNT_RIGHT; s.theme = 4;
@@ -379,15 +387,17 @@ static void test_largest_get_reply_fits_with_room() {
   strcpy(s.lat, "-12.34567890123");
   strcpy(s.lon, "-123.4567890123");
   s.tempUnit = TEMP_FAHRENHEIT;
+  s.clockFormat = CLOCK_12H_FORMAT;
+  s.night = {true, 23, 22, 255};
   JsonDocument d;
   d["ok"] = true; d["cmd"] = "GET"; d["id"] = 4294967295UL;
   d["v"] = CONFIG_VERSION; d["stored"] = true;
   settingsToJson(s, d["config"].to<JsonObject>());
   JsonArray added = d["added"].to<JsonArray>();
-  const char *all[] = {"coins", "pages.coin"};
+  const char *all[] = {"clock_format", "night", "coins", "pages.coin"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 90 + 50);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line);
 }
 
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
@@ -404,13 +414,15 @@ static void test_largest_set_line_fits_with_room() {
     s.coins[i].source = COIN_FINNHUB; s.coins[i].on = true;
   }
   s.coinCount = SETTINGS_COIN_MAX;
+  s.clockFormat = CLOCK_12H_FORMAT;
+  s.night = {true, 23, 22, 255};
   JsonDocument d;
   d["id"] = 4294967295UL;
   settingsToJson(s, d["config"].to<JsonObject>());
   d["wifi"]["ssid"] = std::string(32, 's');
   d["wifi"]["password"] = std::string(63, 'p');
   size_t line = 8 + measureJson(d) + 1;   // "@MB SET " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 150);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line);
 }
 
 int main(int, char **) {
