@@ -295,7 +295,8 @@ async function probeAndRoute() {
   }
 }
 
-async function probeAndRouteOnce() {
+// afterCheck: the second look, once the board check has restarted the board.
+async function probeAndRouteOnce({ afterCheck = false } = {}) {
   const bp = app.bp;
   let g;
   screen(S.titles.connecting, (m) => {
@@ -306,6 +307,7 @@ async function probeAndRouteOnce() {
     await bp.refind(); // the board check restarts it, and it may come back as a new port
     await bp.open();
   } catch (e) {
+    if (afterCheck) return showPathB(); // still coming back: "Check again" is on that screen
     const busyPort = e && (e.name === "NetworkError" || e.name === "InvalidStateError");
     return showProblem(busyPort ? S.connecting.portBusy : S.connecting.openFailed, e, { retry: probeAndRoute });
   }
@@ -317,13 +319,14 @@ async function probeAndRouteOnce() {
   if (app.trouble) {
     log(`no firmware running (${app.trouble}): nothing sent`, "* ");
     app.info = null;
-    return checkThenPathB();
+    return afterCheck ? closeThenPathB() : checkThenPathB();
   }
   let info = null;
   app.rx.status = false;
   try {
     info = await probe(bp, app.rx, { onBooting: () => g.say(S.connecting.booting) });
   } catch (e) {
+    if (afterCheck) return closeThenPathB();
     return showProblem(S.connecting.lost, e, { retry: connect, retryLabel: S.connect });
   }
   // The board check read a MAC (path B, "Check again"): another board's
@@ -332,13 +335,22 @@ async function probeAndRouteOnce() {
   app.info = info;
   if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
   if (info) showHome();
-  else await checkThenPathB();
+  else if (afterCheck) await closeThenPathB();
+  else await checkThenPathB({ askAgain: true });
+}
+
+async function closeThenPathB() {
+  try { await app.bp.close(); } catch { /* already closed */ }
+  showPathB();
 }
 
 // Path B: nothing answered INFO, so nothing yet says this is a Buddy. Check
 // the board (boardcheck.js) before offering to install, so nobody fills in
 // the form for a board that will be refused. The board restarts once.
-async function checkThenPathB() {
+// askAgain: a Buddy left running for a long time can miss the first INFO, and
+// the restart clears that, so a working Buddy isn't called new or older: ask
+// once more first (Eric, COM12 and COM4, 2026-11-04).
+async function checkThenPathB({ askAgain = false } = {}) {
   screen(S.titles.connecting, (m) => {
     guide(m, { mood: "curious", say: S.connecting.checking });
     m.append(spinner());
@@ -359,6 +371,7 @@ async function checkThenPathB() {
     return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
   }
   app.expectDrop = false;
+  if (askAgain) return probeAndRouteOnce({ afterCheck: true });
   showPathB();
 }
 

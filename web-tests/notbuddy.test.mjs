@@ -44,8 +44,11 @@ test("a refused flash shows the matching screen, not the replug advice", () => {
 test("a board that doesn't answer INFO is checked before path B is offered", () => {
   const route = app.slice(app.indexOf("async function probeAndRouteOnce("), app.indexOf("async function checkThenPathB("));
   assert.ok(route.length > 500, "probeAndRouteOnce not found before checkThenPathB");
-  assert.doesNotMatch(route, /showPathB\(\)/, "path B is shown without the check");
-  assert.equal((route.match(/checkThenPathB\(\)/g) || []).length, 2, "both ways into path B go through the check");
+  // Path B directly only on the second look, which comes after the check.
+  const direct = route.slice(0, route.indexOf("async function closeThenPathB(")).split(/\r?\n/).filter((l) => /(showPathB|closeThenPathB)\(\)/.test(l));
+  assert.equal(direct.length, 4);
+  for (const line of direct) assert.match(line, /afterCheck/, "path B is shown without the check");
+  assert.equal((route.match(/checkThenPathB\(/g) || []).length, 2, "both ways into path B go through the check");
   const check = app.slice(app.indexOf("async function checkThenPathB("));
   assert.match(check.slice(0, 1500), /dev\.checkBuddy\(port,[\s\S]*showNotBuddy\(e\.cause\.kind\)[\s\S]*showPathB\(\)/);
 });

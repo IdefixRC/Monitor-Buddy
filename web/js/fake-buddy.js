@@ -8,6 +8,7 @@
 //   cancel           the port picker is cancelled
 //   busy             opening the port fails as if another program held it
 //   boot             the Buddy prints boot lines for a few seconds before it answers
+//   stalled          the Buddy answers nothing until the board check restarts it
 //   flashfail=connect|erase|write   the first flash fails at that stage
 //   noreturn=SET|DEFAULTS   after that command the Buddy doesn't come back on the first reconnect
 //   added=key,key    keys the new firmware reports in GET's "added"
@@ -32,7 +33,7 @@ export function fakeDevice(params) {
   const refusal = kind === "c" ? new NotABuddy("parts", "motion sensor at 0x6b: no answer")
     : kind === "d" ? new NotABuddy("chip", "the chip is ESP32-S3, not ESP32-C6") : null;
   const board = {
-    answers,
+    answers: answers && !params.has("stalled"),
     fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
     cfg_v: params.get("keys") === "1.2.0" ? 1 : 2,
     config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755", stocks: [{ symbol: "AAPL", on: true }, { symbol: "MSFT", on: false }], coins: [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }], pages: { coin: true } }),
@@ -181,6 +182,7 @@ export function fakeDevice(params) {
     if (refusal) { say(`Board check: ${refusal.message}`); throw new FlashError("connect", refusal); }
     say("Board check: motion sensor and touch controller found");
     say("Restarting the board");
+    if (params.has("stalled")) board.answers = true;
     return { mac: "b0:a6:04:00:00:01" };
   }
 
