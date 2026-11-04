@@ -39,6 +39,7 @@ using schema::Field;
 const char *const MOUNT_WORDS[] = {"left", "right"};
 const char *const TEMP_WORDS[]  = {"celsius", "fahrenheit"};
 const char *const WIND_WORDS[]  = {"kmh", "mph"};
+const char *const CLOCK_WORDS[] = {"24h", "12h"};
 const char *const MSG_PAGE = "must be true or false";
 
 // Names come from SETTINGS_PAGE_KEYS, so they are written once.
@@ -79,12 +80,24 @@ const Field COIN_FIELDS[] = {
   schema::boolField("on", offsetof(Coin, on), "must be true or false"),
 };
 
+const Field NIGHT_FIELDS[] = {
+  schema::boolField("enabled", offsetof(Night, enabled), "must be true or false"),
+  schema::intField("start", offsetof(Night, start), 1, 0, 23, "a whole hour 0-23"),
+  schema::intField("end", offsetof(Night, end), 1, 0, 23, "a whole hour 0-23"),
+  schema::intField("brightness", offsetof(Night, brightness), 1, 8, 255, "a number from 8 to 255"),
+};
+bool nightHoursDiffer(const uint8_t *g) {
+  const Night *n = reinterpret_cast<const Night *>(g);
+  return n->start != n->end;
+}
+
 // Every setting, in 1.2.0's key order (GET and /config.json follow it).
 // The messages are 1.2.0's, word for word: web/js/settings.js and
 // test/fixtures/settings-cases.json depend on them.
 const Field SETTINGS_FIELDS[] = {
   schema::choiceField("mount", AT(mount), MOUNT_WORDS, 2, "must be \"left\" or \"right\""),
   schema::intField("theme", AT(theme), 1, 0, 4, "must be a whole number 0-4"),
+  schema::intField("brightness", AT(brightness), 1, 8, 255, "a number from 8 to 255"),
   schema::textField("github_user", AT(githubUser), sizeof(Settings::githubUser), 0,
                     ALNUM_ "-", "0-39 characters: letters, digits and -"),
   schema::textField("tz_name", AT(tzName), sizeof(Settings::tzName), 1,
@@ -101,8 +114,10 @@ const Field SETTINGS_FIELDS[] = {
                     COIN_FIELDS, 3, MSG_SLOTS, &COIN_DEFAULT, firstCoinOn),
   schema::coordField("lat", AT(lat), sizeof(Settings::lat), 90, "a number from -90 to 90"),
   schema::coordField("lon", AT(lon), sizeof(Settings::lon), 180, "a number from -180 to 180"),
+  schema::choiceField("clock_format", AT(clockFormat), CLOCK_WORDS, 2, "must be \"24h\" or \"12h\""),
   schema::choiceField("temp_unit", AT(tempUnit), TEMP_WORDS, 2, "must be \"celsius\" or \"fahrenheit\""),
   schema::choiceField("wind_unit", AT(windUnit), WIND_WORDS, 2, "must be \"kmh\" or \"mph\""),
+  schema::groupField("night", AT(night), sizeof(Night), NIGHT_FIELDS, 4, "start and end must differ", nightHoursDiffer),
   schema::groupField("pages", AT(pages), sizeof(Settings::pages), PAGE_FIELDS, SETTINGS_PAGE_COUNT),
 };
 const uint8_t SETTINGS_FIELD_COUNT = sizeof(SETTINGS_FIELDS) / sizeof(SETTINGS_FIELDS[0]);

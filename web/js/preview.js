@@ -63,22 +63,21 @@ export function themeColors(n) {
 // PAGE_SHOW_ORDER in src/main.cpp. KEEP IN SYNC.
 export const SHOWN_ORDER = ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"];
 
-// The coins that are on and usable, in slot order, each with its slot: Coinbase
-// needs nothing, Finnhub needs the stock key (buildCoinList / coinConfigured).
+// The coins that are on, in slot order, each with its slot. A Finnhub coin needs
+// the key on the Buddy, but the preview shows it anyway (see pageList).
 export const usableCoins = (config) => (Array.isArray(config && config.coins) ? config.coins : [])
   .map((c, slot) => ({ ...c, slot }))
-  .filter((c) => c && c.pair && c.on !== false && (c.source === "finnhub" ? !!config.stock_key : true));
+  .filter((c) => c && c.pair && c.on !== false);
 
-// The enabled pages in display order, as buildPageList() builds them: an empty
-// github_user hides GitHub, an empty stock_key hides the stock page, no usable
-// coin hides the coin page, and with nothing left the face is shown.
+// The enabled pages in display order. Unlike buildPageList(), a missing Finnhub key
+// or GitHub user doesn't hide a page: the page switches come before those fields,
+// so the preview shows sample values and the form says what the Buddy will do.
+// No coin hides the coin page, and with nothing left the face is shown.
 export function pageList(config) {
   const pages = (config && config.pages) || {};
   const list = SHOWN_ORDER.filter((key) => {
     if (!pages[key]) return false;
     if (key === "coin" && !usableCoins(config).length) return false;
-    if (key === "github" && !config.github_user) return false;
-    if (key === "stock" && !config.stock_key) return false;
     return true;
   });
   return list.length ? list : ["face"];
@@ -172,12 +171,15 @@ function digit(x, y, n, w, h, t, color) {
 
 const two = (n) => String(n).padStart(2, "0");
 
-function drawClock(c, now, blinkColon) {
-  const hh = now.getHours();
+export function drawClock(c, now, blinkColon, h12 = false) {
+  const hh24 = now.getHours();
+  const hh = h12 ? (hh24 % 12 || 12) : hh24;
   const mm = now.getMinutes();
   const ss = now.getSeconds();
   const W = 54, H = 100, T = 10, Y = 18;
-  let s = digit(8, Y, Math.floor(hh / 10), W, H, T, c.time) + digit(70, Y, hh % 10, W, H, T, c.time);
+  // 12-hour: no leading zero, AM/PM above the seconds (ports PR #22).
+  let s = (!h12 || hh >= 10 ? digit(8, Y, Math.floor(hh / 10), W, H, T, c.time) : "") + digit(70, Y, hh % 10, W, H, T, c.time);
+  if (h12) s += txt(hh24 < 12 ? "AM" : "PM", 282, Y + 4, 2, c.sec);
   if (!blinkColon || ss % 2 === 0) {
     s += rrect(134, Y + 28, 11, 11, 5, c.time) + rrect(134, Y + 62, 11, 11, 5, c.time);
   }
@@ -278,18 +280,24 @@ const tickerOf = (config, entry) =>
   String(entry ? entry.symbol : config.ticker || "").toUpperCase().slice(0, 10);
 const priceOf = (live, ticker) => (live.prices ? live.prices[ticker] : undefined);
 
-function drawStock(c, config, live, entry) {
+// Shown until a Check brings real numbers (the caption says "sample values").
+const SAMPLE_STOCK = { price: 182.34, open: 180.12, high: 184.05, low: 179.4, ref: 180.1 };
+const SAMPLE_GITHUB = { followers: 128, repos: 42 };
+
+export function drawStock(c, config, live, entry) {
   const ticker = tickerOf(config, entry);
   const p = priceOf(live, ticker);
-  const price = isNum(p) ? `$${p.toFixed(2)}` : `$${DASH}`;
+  const q = isNum(p) ? { price: p, ...((live.stockStats && live.stockStats[ticker]) || {}) } : SAMPLE_STOCK;
+  const money = (v) => (v > 0 ? v.toFixed(2) : DASH);
+  const col = !(q.ref > 0) || q.price >= q.ref ? c.priceUp : c.priceDown;
   let tsize = 4;
   while (tsize > 1 && ticker.length * 6 * tsize > 132) tsize--;
-  // Without open/high/low the colour is the "up" one (price >= open).
-  return centred(price, 26, 6, c.priceUp)
-    + txt(ticker, 14, 124 - 4 * tsize, tsize, c.ticker)
-    + txt(`OPEN  ${DASH}`, 150, 92, 2, c.value)
-    + txt(`HIGH  ${DASH}`, 150, 116, 2, c.value)
-    + txt(`LOW   ${DASH}`, 150, 140, 2, c.value);
+  return centred(`$${q.price.toFixed(2)}`, 26, 6, col)
+    + txt(ticker, 14, (q.ref > 0 ? 112 : 124) - 4 * tsize, tsize, c.ticker)
+    + (q.ref > 0 ? txt(signed(((q.price - q.ref) / q.ref) * 100), 14, 132, 2, col) : "")
+    + txt(`OPEN  ${money(q.open)}`, 150, 92, 2, c.value)
+    + txt(`HIGH  ${money(q.high)}`, 150, 116, 2, c.value)
+    + txt(`LOW   ${money(q.low)}`, 150, 140, 2, c.value);
 }
 
 // ── Coin page ─────────────────────────────────────────────
@@ -351,11 +359,11 @@ function coinData(entry, live) {
   const chart = Array.isArray(liveChart) ? liveChart : sampleChart(price);
   const hi = Math.max(...chart);
   const lo = Math.min(...chart);
-  return {
-    pair, base, price, chart,
-    ref: havePrice ? 0 : chart[0], open: havePrice ? 0 : chart[0] * 1.003,
-    high: havePrice ? 0 : hi * 1.002, low: havePrice ? 0 : lo * 0.998,
-  };
+  const stats = (live.coinStats && live.coinStats[coinPriceKey(entry.source, pair)]) || {};
+  if (havePrice) {
+    return { pair, base, price, chart, ref: stats.ref || 0, open: stats.open || 0, high: stats.high || 0, low: stats.low || 0 };
+  }
+  return { pair, base, price, chart, ref: chart[0], open: chart[0] * 1.003, high: hi * 1.002, low: lo * 0.998 };
 }
 
 const signed = (v) => `${v < 0 ? "-" : "+"}${Math.abs(v).toFixed(2)}%`;
@@ -455,8 +463,8 @@ export function followerTextSize(formatted) {
 }
 
 function drawGithub(c, live) {
-  const followers = isNum(live.followers) ? formatCount(live.followers) : DASH;
-  const repos = isNum(live.repos) ? formatCount(live.repos) : DASH;
+  const followers = formatCount(isNum(live.followers) ? live.followers : SAMPLE_GITHUB.followers);
+  const repos = formatCount(isNum(live.repos) ? live.repos : SAMPLE_GITHUB.repos);
   const rx = 150;
   return `<path fill="${c.ghLogo}" shape-rendering="crispEdges" transform="translate(14 ${(SCREEN_H - 112) / 2}) scale(2)" d="${GITHUB_D}"/>`
     + txt(followers, rx, 22, followerTextSize(followers), c.ghNum)
@@ -670,7 +678,7 @@ export function createPreview(container) {
     } else {
       if (face) { face.destroy(); face = null; }
       const blink = !reduced();
-      page.innerHTML = key === "clock" ? drawClock(c, now, blink)
+      page.innerHTML = key === "clock" ? drawClock(c, now, blink, config.clock_format === "12h")
         : key === "date" ? drawDate(c, now)
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)
@@ -694,7 +702,7 @@ export function createPreview(container) {
     const shownTicker = tickerOf(config, entry);
     if (key === "stock" && shownTicker) text += ` · ${shownTicker}`;
     if (key === "coin" && coinEntry) text += ` · ${String(coinEntry.pair).toUpperCase()}`;
-    if (key === "github") text += ` · ${config.github_user}`;
+    if (key === "github" && config.github_user) text += ` · ${config.github_user}`;
     const sample = (key === "weather")
       || (key === "stock" && !isNum(priceOf(live, shownTicker)))
       || (key === "github" && !isNum(live.followers))

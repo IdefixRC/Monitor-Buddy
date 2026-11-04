@@ -17,6 +17,10 @@ const DIRECT = {
 };
 // Defines that feed another setting rather than mapping to one.
 const HELPERS = ["TZ_RULE", "TZ_OFFSET_HOURS"];
+// The 1.3 defines: night.* key for each, in the order the form shows them.
+const NIGHT_DEFINES = {
+  NIGHT_MODE: "enabled", NIGHT_START_HOUR: "start", NIGHT_END_HOUR: "end", NIGHT_BRIGHTNESS: "brightness",
+};
 
 // "..." with \" and \ escapes, or a bare token up to whitespace or "//".
 function readValue(rest) {
@@ -49,7 +53,7 @@ export function parseConfigH(text, table) {
     if (!m) continue;
     const [, name, rest] = m;
     const known = name === "MOUNTING_LOCATION" || name === "STOCKKEY" ||
-      name in DIRECT || name in PAGE_DEFINES || HELPERS.includes(name);
+      name in DIRECT || name in PAGE_DEFINES || name in NIGHT_DEFINES || name === "CLOCK_12H" || HELPERS.includes(name);
     if (!known) { skipped.push(name); continue; }
     defines.set(name, readValue(rest));
   }
@@ -80,7 +84,17 @@ export function parseConfigH(text, table) {
   }
   if (Object.keys(pages).length) config.pages = pages;
 
-  const imported = KEY_ORDER.filter((k) => k in config);
+  if (typeof defines.get("CLOCK_12H") === "boolean") config.clock_format = defines.get("CLOCK_12H") ? "12h" : "24h";
+  const night = {};
+  for (const [name, key] of Object.entries(NIGHT_DEFINES)) {
+    const v = defines.get(name);
+    if (typeof v === (key === "enabled" ? "boolean" : "number")) night[key] = v;
+  }
+  if (Object.keys(night).length) config.night = night;
+
+  // The 1.3 keys count as imported when present, but are not "defaulted" when
+  // absent: a config.h from before 1.3 never had them.
+  const imported = [...KEY_ORDER, "clock_format", "night"].filter((k) => k in config);
   const defaulted = KEY_ORDER.filter((k) => !(k in config));
   return { config, imported, skipped, defaulted };
 }

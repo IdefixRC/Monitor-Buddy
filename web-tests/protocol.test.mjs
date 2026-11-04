@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble, watchForTrouble, sameMac } from "../web/js/protocol.js";
+import { PREFIX, MAX_ID, makeIdSource, requestLine, LineSplitter, parseReply, answers, romTrouble, watchForTrouble, heardBuddy, sameMac } from "../web/js/protocol.js";
 
 test("ids start at the given value, increase and wrap", () => {
   const next = makeIdSource(MAX_ID - 1);
@@ -113,4 +113,14 @@ test("watchForTrouble() listens the full time when nothing is wrong", async () =
   const t0 = Date.now();
   assert.equal(await watchForTrouble(["app=4 mood=0 wifi=up up=40s rst=11"], 60, { step: 5 }), null);
   assert.ok(Date.now() - t0 >= 55);
+});
+
+test("heardBuddy() trusts only lines firmware 1.2+ prints", () => {
+  assert.equal(heardBuddy(["ESP32-C6 Monitor-Buddy 1.2.0 starting"]), true);
+  assert.equal(heardBuddy(["junk", "ESP32-C6 Monitor-Buddy dev starting"]), true);
+  assert.equal(heardBuddy(["settings: from /config.json (cfg_v 2)"]), true);
+  assert.equal(heardBuddy(["ESP32-C6 Monitor-Buddy starting"]), false);
+  assert.equal(heardBuddy(["app=0 mood=0 wifi=up up=812s rst=1"]), false);
+  assert.equal(heardBuddy([]), false);
+  assert.equal(heardBuddy(["Hello from the Waveshare demo", "LVGL ready", "settings from nowhere"]), false);
 });

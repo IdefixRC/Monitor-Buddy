@@ -1009,6 +1009,14 @@ main > :not(.form-layout) {
   margin: 0;
 }
 
+.section__title--sub {
+  font-size: 1rem;
+}
+
+.pages-block {
+  margin-top: 1.25rem;
+}
+
 .tools {
   margin: 0 0 1rem;
 }
@@ -2111,4 +2119,26 @@ select.input {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Look and pages box: the brightness sliders (day here, night in Clock). */
+.level__range {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.4rem 0 0;
+  accent-color: var(--accent, currentColor);
+}
+
+.level__value {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.level--off .field__head,
+.level--off .level__range {
+  opacity: 0.5;
+}
+
+.night .switch-row:first-child {
+  margin-top: 0.6rem;
 }

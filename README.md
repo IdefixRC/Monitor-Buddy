@@ -1,11 +1,11 @@
 # Monitor-Buddy
 
-[![Version](https://img.shields.io/badge/version-1.2.0-4361ee)](https://github.com/IdefixRC/Monitor-Buddy/releases)
+[![Version](https://img.shields.io/badge/version-1.3.0-4361ee)](https://github.com/IdefixRC/Monitor-Buddy/releases)
 [![Platform](https://img.shields.io/badge/platform-ESP32--C6-2ec27e?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-c6)
 [![Arduino](https://img.shields.io/badge/framework-Arduino-00979d?logo=arduino)](https://www.arduino.cc/)
 [![License](https://img.shields.io/badge/license-MIT-6c757d)](LICENSE)
 
-**A tiny friend for the side of your monitor.** It pulls faces at you, follows your movements with its eyes, and in its spare time tells you the weather, the date, the moon phase, your stock ticker, and your GitHub stats.
+**A tiny friend for the side of your monitor.** It pulls faces at you, follows your movements with its eyes, and in its spare time tells you the weather, the date, the moon phase, your stocks, your crypto coins, and your GitHub stats.
 
 <!-- SHOT: hero.jpg - Monitor-Buddy clipped to the right edge of a monitor, screen showing the animated face, taken slightly from the side so you can see the printed holder -->
 
@@ -22,16 +22,18 @@ It is a small touchscreen that clips onto the edge of your screen and keeps you 
 It is also genuinely useful when you swipe past the face:
 
 - **Animated face** with several expressions, driven by the on-board QMI8658 motion sensor
-- **Clock** and **weekday / date**, kept accurate over NTP
+- **Clock** and **weekday / date**, kept accurate over NTP, in 24-hour or 12-hour format
 - **Weather** for your location (temperature, conditions, humidity, wind)
 - **Moon phase** with illumination percentage
-- **Stock ticker** for any US symbol, via a free Finnhub account
+- **Stocks**: up to five US symbols, via a free Finnhub account. Tap the page to go to the next one.
+- **Coins**: up to five crypto pairs in your currency, from Coinbase (no account needed, with a 24-hour chart) or Finnhub. Tap to go to the next one.
+- **Night mode**: dims the screen between two hours and gives the face a sleepy look
 - **GitHub stats** for your username
 - **5 colour themes**, from plain white-on-black to a green-up / red-down semantic theme
 - **Toggle any page on or off** so your Buddy only shows what you care about
 - **Left or right side** of your monitor: one setting turns the screen, touch and eye movement around for a right-side mount
-- **Swipe** left and right to move between pages, up and down to adjust brightness (remembered across restarts), **double-tap** to stop the auto-scroll, **tap the face** to change expression (all controls in [4.10](#410-everyday-controls))
-- **Stays smooth on bad Wi-Fi**: weather, stock and GitHub data load in the background, so the face and touch never wait for the network
+- **Swipe** left and right to move between pages, up and down to adjust brightness (remembered across restarts, and also a slider in the web flasher), **double-tap** to stop the auto-scroll, **tap the face** to change expression (all controls in [4.10](#410-everyday-controls))
+- **Stays smooth on bad Wi-Fi**: weather, stock, coin and GitHub data load in the background, so the face and touch never wait for the network
 - **Set up from your browser**: the [web flasher](https://idefixrc.github.io/Monitor-Buddy/) installs the firmware over USB and writes your settings straight onto the board, with a live preview of your Buddy. No software to install, no code to edit.
 - **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done. The setup page follows your phone's language (English, Spanish or German).
 
@@ -103,12 +105,12 @@ You need **Chrome or Edge on a computer** (Windows, macOS, Linux or ChromeOS). T
 1. Plug the Buddy into the computer with a USB-C cable that carries data.
 2. Open <https://idefixrc.github.io/Monitor-Buddy/>, click **Connect your Buddy** and pick the Buddy from the list (on Windows it has a COM port number).
 3. Choose what to do:
-   - **A new Buddy:** **Fresh install**. Tell it where it is with the city search, which fills in the latitude, longitude and time zone (daylight saving included). Add your Wi-Fi, pick the pages, the theme and the mounting side, then **Install**.
+   - **A new Buddy:** **Fresh install**. Tell it where it is with the city search, which fills in the latitude, longitude and time zone (daylight saving included). Add your Wi-Fi, pick the pages, the theme, the brightness and the mounting side, then **Install**.
    - **A Buddy you built yourself with 1.1.0 or older:** **Upgrade from 1.1 or older**, then **Import config.h** to bring your old settings across. Your Wi-Fi stays as it is.
    - **A Buddy on 1.2.0 or newer:** **Change settings**, **Update firmware**, **Back up settings** to a file (and import it again later), **Fresh install** or **Reset to defaults**. Nothing needs rebuilding, ever.
 4. While you change things, the preview on the page shows how your Buddy will look. When you save or install, the Buddy restarts with your settings.
 
-Your settings go straight to the Buddy. The page stores nothing in your browser, and the only requests that leave your computer are the city search (Open-Meteo) and the **Check** buttons, which ask Finnhub and GitHub whether your stock key and username work.
+Your settings go straight to the Buddy. The page stores nothing in your browser, and the only requests that leave your computer are the coin lists (Coinbase, and Finnhub if you entered a key), the city search (Open-Meteo) and the **Check** buttons, which ask Finnhub, Coinbase and GitHub whether your key, coins and username work.
 
 If an install gets interrupted, say the cable came out halfway, the Buddy can't start any more. That sounds worse than it is: connect it again and the page notices, offers **Install the firmware again**, and keeps the settings that were already on the board. If the page ever says it couldn't get ready for the install, unplug the Buddy, plug it back in and click **Try again**. The web flasher never needs the BOOT or RESET buttons.
 
@@ -189,12 +191,17 @@ Open `config/config.h` and change these `#define` lines:
 | `TEMP` / `WIND`                | `"celsius"` or `"fahrenheit"`, `"kmh"` or `"mph"`                                                                             |
 | `SHOW_FACE`, `SHOW_CLOCK`, ... | `true` or `false` to enable or disable each page                                                                              |
 | `TZ_RULE`                      | optional, a POSIX time zone rule with daylight saving; `""` uses `TZ_OFFSET_HOURS`                                            |
+| `CLOCK_12H`                    | `true` for a 12-hour clock with AM/PM; `false` (the default) for 24 hours                                                     |
+| `NIGHT_MODE`                   | `true` to dim the screen between `NIGHT_START_HOUR` and `NIGHT_END_HOUR` (whole hours 0-23, they must differ)                 |
+| `NIGHT_BRIGHTNESS`             | the night level, 8-255                                                                                                        |
 
 Save the file (`Ctrl+S`).
 
 Don't care about stocks? Leave `STOCKKEY` as `""` and the stock page stays hidden. Enter your key to show it. The same goes for `GITHUB_USER`: empty hides the GitHub page. You can also switch the page off with `SHOW_STOCK false`. If you skip creating `config/config.h` entirely, the build falls back to the defaults in `config.h.example`.
 
 **Settings saved on the board win.** From firmware 1.2.0 on, the Buddy can also keep its settings on the board itself, in `/config.json`. The web flasher saves them there, and so does `tools/mb_serial.py`. Once they're saved, `config/config.h` only fills in settings the board doesn't have, so editing it and uploading again changes nothing that's already saved. To change a saved setting, use the web flasher's **Change settings**, or the tool, for example `python tools/mb_serial.py COM4 set ticker=AVGO` (use your board's port instead of `COM4`; `get` shows what is saved). To delete the saved settings, run `python tools/mb_serial.py COM4 defaults`: the Buddy restarts on your `config.h` values and keeps its Wi-Fi and brightness. The tool needs Python 3 and one package: `pip install pyserial`. The setup page's erase also deletes the saved settings, and the Buddy goes back to your `config.h` values, but it clears the Wi-Fi and brightness too.
+
+**A night swipe saves too.** Swiping up or down during night mode saves the night level on the board. On a Buddy with no `/config.json` yet, that first swipe creates one, and from then on your `config.h` edits are ignored for the settings it holds, as after any save from the web flasher. A normal daytime brightness swipe doesn't do this.
 
 Want daylight saving? Set `TZ_RULE` to a POSIX time zone rule, for example `"CET-1CEST,M3.5.0,M10.5.0/3"` for Central Europe. Left empty, the clock uses the fixed `TZ_OFFSET_HOURS`.
 
@@ -251,9 +258,13 @@ To change the Wi-Fi later, **press and hold anywhere on the touchscreen for abou
 | Swipe left / right                              | Next / previous page                                                                             |
 | Swipe up / down                                 | Brighter / dimmer. Keep dragging for bigger steps. The level is remembered across restarts.      |
 | Tap the face                                    | Change the expression                                                                            |
+| Tap the stock or coin page                      | Next stock or coin, when you have more than one. The dots on the right edge show which one.      |
 | Double-tap                                      | Stop or restart the automatic page scrolling                                                     |
 | Tilt or move the Buddy                          | The eyes follow the motion                                                                       |
 | Hold the screen still for about 3 seconds       | Open the Wi-Fi setup hotspot. Hold again for 3 seconds to close it.                              |
+| During night mode: tap                          | Normal brightness for 30 seconds. The tap does nothing else.                                     |
+| During night mode: swipe left / right           | Same as a tap: normal brightness for 30 seconds, no page change.                                 |
+| During night mode: swipe up / down              | Brighter / dimmer **night** level, saved on the board. The banner says `NIGHT 20%`. The daytime brightness can only be changed outside night hours. |
 | **Factory reset**: open the Wi-Fi setup page (hold the screen for 3 seconds) and press **erase** | Erases Wi-Fi, brightness and board settings. Restarts into Wi-Fi setup on its built-in values.    |
 
 The board also has a **BOOT** button, next to **RESET**. Check the labels, because RESET just restarts the Buddy. BOOT only counts in a short window while the Buddy starts up, not while it is running. Unplug and plug back in, and as soon as the screen shows **CONNECTING** (or **WIFI SETUP**), press BOOT within 2 seconds:
@@ -277,8 +288,9 @@ The built-in values are the release defaults, or your `config/config.h` settings
 | Upload starts then fails                          | Close any serial monitor on the port, unplug the Buddy, plug it back in and click Upload again. If it no longer starts, reinstall it with the web flasher; your saved settings stay.                                                                                                                                                          |
 | Clock or weather never updates                    | Wi-Fi did not connect. Set it in the web flasher's **Change settings**, or hold the screen for 3 seconds and redo the setup. Then check the location and time zone there too. Built it yourself without saved settings? Check `TZ_OFFSET_HOURS` and `TZ_RULE` in `config/config.h` and flash again.                                           |
 | Screen is upside down                             | Your Buddy is mounted on the other side. Change the **Mounting side** in the web flasher's **Change settings**. Built it yourself? Set `MOUNTING_LOCATION` to `LEFT` or `RIGHT` in `config/config.h` and flash again; settings saved on the board win, so change those in the web flasher or with the tool (`set mount=right`).               |
-| Screen too dark to read                           | Swipe up a few times to raise the brightness, or press **erase** on the setup page (clears the board settings too; see [4.10](#410-everyday-controls)).                                                                                                                                                                                       |
+| Screen too dark to read                           | Swipe up a few times to raise the brightness, or set it under **Look and pages** in the web flasher's **Change settings**. During night hours a swipe changes the night level. Still too dark? Press **erase** on the setup page (clears the board settings too; see [4.10](#410-everyday-controls)).                                                                                                                                                                                       |
 | Stock page is missing or blank                    | No stock page: an empty Finnhub key hides it, so enter your key in the web flasher's **Change settings** and press **Check** (built it yourself: `STOCKKEY` in `config/config.h`). Blank page: wrong key, or not a US stock (the free Finnhub tier is US only).                                                                               |
+| Coin page says NOT FOUND                          | That pair doesn't exist on the source you chose, or (Finnhub) your plan doesn't cover it. Pick the coin again in the web flasher, under **Coins**, and press **Check**. If you use Finnhub, try Coinbase. |
 | Build fails mentioning `ArduinoJson`              | Deprecation _warnings_ from `ArduinoJson` are expected and harmless. Only a red `error` is a real problem.                                                                                                                                                                                                                                    |
 
 ---
@@ -297,6 +309,7 @@ Monitor-Buddy builds on the work of others:
 Contributors:
 
 - **[AmyJoT](https://github.com/AmyJoT)** for the brightness swipe, a sturdier touch read and the first network changes that keep the UI responsive ([#3](https://github.com/IdefixRC/Monitor-Buddy/pull/3)).
+- **[Killo1988](https://github.com/Killo1988)** for the Coinbase chart, the 12-hour clock and night mode ([#22](https://github.com/IdefixRC/Monitor-Buddy/pull/22), [#24](https://github.com/IdefixRC/Monitor-Buddy/issues/24)), and a batch of fixes ([#25](https://github.com/IdefixRC/Monitor-Buddy/pull/25)).
 
 ## License
 

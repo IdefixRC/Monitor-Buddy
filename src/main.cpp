@@ -102,6 +102,7 @@
 #include <AyresWiFiManager.h>
 #include <esp_mac.h>
 #include "settings.h"
+#include "nightmode.h"
 #include "protocol.h"
 #include "display_fmt.h"
 #include "coin.h"
@@ -162,6 +163,37 @@ static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <
               "AP_PASS must be empty or 8-26 characters");
 static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 #define AWM_HOSTNAME "Monitor-Buddy"
+
+// ── Personal-build options (config.h) ───────────────────────
+// The defaults for what the web flasher can change on the board.
+// CLOCK_12H       true shows 1-12 with AM/PM instead of 00-23.
+// NIGHT_MODE      true dims the backlight and gives the face a sleepy look
+//                 from NIGHT_START_HOUR until NIGHT_END_HOUR (local time).
+//                 A tap brings the normal brightness back for
+//                 NIGHT_WAKE_MS. Off until the clock has synced over NTP.
+// NIGHT_BRIGHTNESS backlight level at night, 8-255.
+#ifndef CLOCK_12H
+  #define CLOCK_12H false
+#endif
+#ifndef NIGHT_MODE
+  #define NIGHT_MODE false
+#endif
+#ifndef NIGHT_START_HOUR
+  #define NIGHT_START_HOUR 23
+#endif
+#ifndef NIGHT_END_HOUR
+  #define NIGHT_END_HOUR 7
+#endif
+#ifndef NIGHT_BRIGHTNESS
+  #define NIGHT_BRIGHTNESS 26
+#endif
+#ifndef NIGHT_WAKE_MS
+  #define NIGHT_WAKE_MS 30000UL
+#endif
+static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
+static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
+static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
+static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_END_HOUR must differ");
 
 // How long the portal stays open with nobody using it, in seconds.
 // The timer is reset by any connected AP client and by every HTTP
@@ -342,6 +374,13 @@ void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
+void writeBacklight(uint8_t level);
+uint8_t backlightTarget();
+bool nightDimming();
+void nightWake();
+void updateNightMode();
+void setNightBrightness(uint8_t level);
+void flushNightSave(bool now);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -634,12 +673,16 @@ float   tiltSign       = 1.0f;
 
 // ── Settings ──────────────────────────────────────────────
 // Loaded once in setup() from /config.json, with the config.h values as the
-// defaults. Never changed while running: every save restarts the board, so
-// netTask may read them without a lock.
+// defaults. Only night.brightness changes while running, written from the
+// loop by a night swipe, and netTask never reads it. The rest stays as loaded:
+// every other save restarts the board, so netTask may read them without a lock.
+// settings.brightness is only a copy of brightnessLevel for GET and for the
+// file: /display.json is the one truth, so a swipe never creates /config.json
+// and the copy in the file is ignored at boot. Refresh it before using it.
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
-bool settingsStored = false;   // booted from a readable /config.json; GET "stored"
+bool settingsStored = false;   // /config.json was readable at boot, or a self-save wrote it; GET "stored"
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
@@ -683,6 +726,9 @@ uint32_t touchStartMs    = 0;
 uint8_t  touchMissFrames  = 0;
 bool     touchMoved       = false;
 bool     touchSwipeDone   = false;  // page swipe fired; ignore this press until release
+bool     touchDark        = false;  // this press began on a dimmed screen. Decided once,
+                                    // so a window edge can't split a press in two
+bool     touchNightStepped = false; // this press changed the night level, so it doesn't wake
 uint8_t  tapCount        = 0;
 uint32_t lastTapMs        = 0;
 uint32_t autoPageBannerUntil = 0;
@@ -695,6 +741,15 @@ uint32_t brightnessBannerUntil = 0;
 uint8_t  savedBrightness       = BRIGHTNESS_DEFAULT;  // level in /display.json
 bool     brightnessSavePending = false;
 uint32_t brightnessChangedMs   = 0;
+bool     nightActive     = false;   // inside the night window (needs a trusted clock)
+bool     nightWoken      = false;   // a tap at night lifts the dimming...
+uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
+uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
+bool     nightBanner      = false;  // the brightness banner shows the night level
+bool     nightSavePending = false;  // a swiped night level is waiting for flushNightSave()
+uint8_t  savedNightBrightness = 0;  // night level in /config.json, or the default if none
+bool     configReplaced   = false;  // a SET or DEFAULTS replaced /config.json: `settings`
+                                    // no longer matches it, so no self-save before a restart
 uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
@@ -1823,12 +1878,23 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 
 void drawClock() {
   const LocalNow now = localNow();
-  const uint8_t hh = now.hour, mm = now.min, ss = now.sec;
+  uint8_t hh = now.hour;
+  const uint8_t mm = now.min, ss = now.sec;
+  const bool h12 = settings.clockFormat == CLOCK_12H_FORMAT;
+  const bool pm = hh >= 12;
+  if (h12) hh = hour12(hh);
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
-  drawDigit(8,   Y, hh/10, W, H, T, COL_TIME);
+  // 12-hour: no leading zero (" 9:41", not "09:41").
+  if (!h12 || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
   drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
+  if (h12) {
+    // AM/PM above the seconds, top-aligned with the digits.
+    gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
+    gfx->setCursor(282, Y + 4);
+    gfx->print(pm ? "PM" : "AM");
+  }
   if ((ss%2)==0) {
     gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
     gfx->fillRoundRect(134, Y+62, 11, 11, 5, COL_TIME);
@@ -2298,6 +2364,9 @@ Settings defaultsFromConfig() {
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
+  d.clockFormat = CLOCK_12H ? CLOCK_12H_FORMAT : CLOCK_24H;
+  d.brightness = BRIGHTNESS_DEFAULT;
+  d.night = {NIGHT_MODE, NIGHT_START_HOUR, NIGHT_END_HOUR, NIGHT_BRIGHTNESS};
   d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
   d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
@@ -2456,6 +2525,7 @@ void mbGet() {
   JsonDocument doc;
   doc["v"]      = CONFIG_VERSION;
   doc["stored"] = settingsStored;
+  settings.brightness = brightnessLevel;   // it may have been swiped since boot
   settingsToJson(settings, doc["config"].to<JsonObject>());
   JsonArray added = doc["added"].to<JsonArray>();
   for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
@@ -2470,6 +2540,7 @@ void mbSet(JsonDocument &req) {
   JsonVariantConst cfg  = req["config"];
   JsonVariantConst wifi = req["wifi"];
 
+  settings.brightness = brightnessLevel;   // a partial SET keeps it
   JsonDocument res;
   JsonObject errors = res["errors"].to<JsonObject>();
   Settings next = settings;
@@ -2483,6 +2554,11 @@ void mbSet(JsonDocument &req) {
     JsonDocument file;
     settingsToJson(next, file.to<JsonObject>());
     if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
+    configReplaced = true;                // `next` went out with the swiped level in it
+    if (next.brightness != brightnessLevel) {   // /display.json holds it, written by the restart's flush
+      brightnessLevel = next.brightness;
+      brightnessSavePending = true;
+    }
   }
   if (!wifi.isNull()) {
     JsonDocument file;                    // AWM's plain format
@@ -2506,6 +2582,7 @@ void mbDefaults() {
     mbError("could not reset settings");
     return;
   }
+  configReplaced = true;
   mbOk();
   Serial.println("settings: reset to config.h values, restarting");
   scheduleRestart();
@@ -2547,6 +2624,7 @@ void serviceProtocol() {
   }
   if (restartAtMs != 0 && (int32_t)(millis() - restartAtMs) >= 0) {
     flushBrightnessSave(true);            // don't lose a just-swiped brightness
+    flushNightSave(true);
     ESP.restart();
   }
 }
@@ -2574,7 +2652,7 @@ void loadDisplaySettings() {
 
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
-  ledcWrite(LCD_BL, brightnessLevel);
+  nightBanner = false;
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
@@ -2659,6 +2737,8 @@ void readTouch() {
   bsp_touch_read();
   if (bsp_touch_get_coordinates(&x, &y)) {
     uint32_t now = millis();
+    const bool dimming = nightDimming();  // first: this retires a wake that has run out
+    if (nightWoken) nightWokenAt = now;   // still in use: keep the night wake going
     touchLastX = x; touchLastY = y;
     touchMissFrames = 0;
     if (!touchWasDown) {
@@ -2666,7 +2746,9 @@ void readTouch() {
       touchMoved = false;
       touchSwipeDone = false;
       touchWasDown = true;
-      touchPortalArmed = true;   // this press is eligible to open the portal
+      touchDark = dimming;
+      touchNightStepped = false;
+      touchPortalArmed = !dimming;   // this press is eligible to open the portal
       return;
     }
     // A page swipe already fired for this press: the rest of the contact is
@@ -2678,7 +2760,7 @@ void readTouch() {
 
     // Touch-and-hold (still, ~2.5 s) → open the Wi-Fi setup portal.
     // Fires once per press; a swipe cancels it.
-    if (touchPortalArmed && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
+    if (touchPortalArmed && !dimming && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
       touchPortalArmed = false;
       openSetupPortal("touch hold");
       return;
@@ -2688,12 +2770,21 @@ void readTouch() {
     // moved, so holding still afterwards can't open the portal and lifting
     // can't count as a tap. The press ends only when the finger lifts.
     if (abs(dx) > 55 && abs(dx) > abs(dy)+18) {
-      switchApp(dx < 0 ? 1 : -1);
+      if (touchDark) nightWake();                 // the dark: wake, don't flip the page
+      else switchApp(dx < 0 ? 1 : -1);
       touchSwipeDone = true;     // one page per swipe
       touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
-      setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      if (settings.night.enabled && nightActive) {
+        // The whole night window, woken or not: back to the night level, so
+        // the swipe shows what it changes.
+        nightWoken = false;
+        setNightBrightness(nightStep(settings.night.brightness, dy < 0));
+        touchNightStepped = true;
+      } else {
+        setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      }
       // Re-base so a continued drag steps brightness again every 55 px.
       touchStartX = x; touchStartY = y;
       touchMoved = true;
@@ -2707,7 +2798,17 @@ void readTouch() {
     uint32_t pressMs = millis() - touchStartMs;
     int16_t dx = (int16_t)touchLastX-(int16_t)touchStartX;
     int16_t dy = (int16_t)touchLastY-(int16_t)touchStartY;
-    if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
+    if (touchDark) {
+      // The dark: a press wakes, however long, and never counts as half a
+      // double tap. A short up or down drag doesn't: it was a swipe that fell
+      // short of a step, not a request to wake.
+      const bool shortDrag = touchMoved && abs(dy) > abs(dx);
+      if (pressMs >= 35 && !touchSwipeDone && !touchNightStepped && !shortDrag) {
+        nightWake();
+        tapCount = 0;
+        lastTapMs = 0;
+      }
+    } else if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
       triggerFaceTap();
     }
     touchWasDown = false;
@@ -2716,6 +2817,78 @@ void readTouch() {
     touchSwipeDone = false;
     touchPortalArmed = false;
   }
+}
+
+// ── Night mode ────────────────────────────────────────────
+// The only place that writes the backlight, so backlightOut stays true.
+void writeBacklight(uint8_t level) {
+  if (level == backlightOut) return;
+  ledcWrite(LCD_BL, level);
+  backlightOut = level;
+}
+
+// True while night mode has the screen dimmed. A tap lifts it for NIGHT_WAKE_MS.
+bool nightDimming() {
+  if (nightWoken && millis() - nightWokenAt >= NIGHT_WAKE_MS) nightWoken = false;
+  return settings.night.enabled && nightActive && !nightWoken;
+}
+
+// The backlight level right now: the night level as the user set it (it may be
+// above the day brightness), or the day brightness.
+uint8_t backlightTarget() {
+  return nightDimming() ? settings.night.brightness : brightnessLevel;
+}
+
+void nightWake() {
+  if (!settings.night.enabled || !nightActive) return;
+  nightWoken   = true;
+  nightWokenAt = millis();
+}
+
+// A swipe at night: changes the level now, saved once the swipes settle.
+void setNightBrightness(uint8_t level) {
+  settings.night.brightness = level;
+  nightSavePending = true;
+  brightnessChangedMs = millis();
+  brightnessBannerUntil = (millis() + 1200) | 1;
+  nightBanner = true;
+  Serial.printf("Night brightness: %u/255\n", (unsigned)level);
+}
+
+// Writes a pending night level once the swipes have settled: one write, never
+// one per swipe, and none while the finger is down. Skips the write when the
+// level ended where it started. settingsToJson writes every setting, so unknown
+// keys in the file are dropped, as by a SET.
+void flushNightSave(bool now) {
+  if (!now && touchWasDown) return;
+  if (!nightSavePending) return;
+  if (configReplaced) { nightSavePending = false; return; }
+  if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
+  nightSavePending = false;
+  if (settings.night.brightness == savedNightBrightness) return;
+  settings.brightness = brightnessLevel;
+  JsonDocument file;
+  settingsToJson(settings, file.to<JsonObject>());
+  if (file.overflowed()) { Serial.println("night: could not save"); return; }
+  if (!writeJsonAtomic(CONFIG_PATH, file)) { Serial.println("night: could not save"); return; }
+  savedNightBrightness = settings.night.brightness;
+  settingsStored = true;                  // a source build now has a file
+  settingsAdded.count = 0;                // the file has every key now
+  Serial.printf("Night brightness saved: %u/255\n", (unsigned)settings.night.brightness);
+}
+
+void updateNightMode() {
+  if (settings.night.enabled && clockTrusted) {
+    const bool inWindow = inNightWindow(currentClockHour(), settings.night.start, settings.night.end);
+    if (inWindow != nightActive) {
+      nightActive = inWindow;
+      nightWoken  = false;                                  // a wake ends with its night
+      if (inWindow) faceMood = MOOD_SLEEPY;                 // a tap still changes it
+      else if (faceMood == MOOD_SLEEPY) faceMood = MOOD_NORMAL;
+      Serial.printf("Night mode: %s\n", inWindow ? "on" : "off");
+    }
+  }
+  writeBacklight(backlightTarget());
 }
 
 void updateFaceTimers() {
@@ -2887,6 +3060,7 @@ void setup() {
   // begin() mounts LittleFS again later; that is a no-op once mounted.
   if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed - using config.h values");
   loadSettings();
+  savedNightBrightness = settings.night.brightness;
   screenRotation = settings.mount == MOUNT_RIGHT ? 3 : 1;
   tiltSign       = settings.mount == MOUNT_RIGHT ? -1.0f : 1.0f;
   setenv("TZ", settings.tzRule, 1);
@@ -2897,7 +3071,7 @@ void setup() {
   lcdRegInit();
   display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -2969,7 +3143,8 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
-  ledcWrite(LCD_BL, brightnessLevel);
+  settings.brightness = brightnessLevel;
+  writeBacklight(brightnessLevel);
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to
   // LittleFS. AWM serves those in preference to its built-in, multilingual
@@ -3022,6 +3197,8 @@ void loop() {
     // Save now, long before anyone can press "erase" in the portal, so a
     // factory reset still removes /display.json.
     flushBrightnessSave(true);
+    flushNightSave(true);
+    writeBacklight(brightnessLevel);      // never run setup at night brightness
     servicePortal();
     return;
   }
@@ -3034,12 +3211,14 @@ void loop() {
   readSensors();
   readTouch();
   flushBrightnessSave(false);
+  flushNightSave(false);
 
   // A touch-hold inside readTouch() may have just opened the portal.
   if (wifiManager.isPortalActive()) return;
 
   updateAutoPage();
   updateFaceTimers();
+  updateNightMode();
 
   // Retry NTP if Wi-Fi came up after boot, and resync every 6 h to
   // correct drift and to undo any UTC-only resync done by AWM.
@@ -3075,7 +3254,8 @@ void loop() {
   if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
   if (brightnessBannerUntil) {
     char msg[20];
-    snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
+    if (nightBanner) snprintf(msg, sizeof(msg), "NIGHT %u%%", (unsigned)levelPercent(settings.night.brightness));
+    else             snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)levelPercent(brightnessLevel));
     uint16_t bannerColor = rgb(0,200,255);
     gfx->setTextSize(1);
     gfx->setTextColor(bannerColor);

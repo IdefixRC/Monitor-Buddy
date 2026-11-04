@@ -14,6 +14,7 @@ import { pageList } from "./preview.js";
 export const DEFAULTS = Object.freeze({
   mount: "left",
   theme: 2,
+  brightness: 180,
   github_user: "",
   tz_name: "Asia/Singapore",
   tz_rule: "<+08>-8",
@@ -23,8 +24,10 @@ export const DEFAULTS = Object.freeze({
   coins: Object.freeze([Object.freeze({ pair: "BTC-USD", source: "coinbase", on: true })]),
   lat: "1.3119",
   lon: "103.8149",
+  clock_format: "24h",
   temp_unit: "celsius",
   wind_unit: "kmh",
+  night: Object.freeze({ enabled: false, start: 23, end: 7, brightness: 26 }),
   pages: Object.freeze({ face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }),
 });
 
@@ -69,6 +72,19 @@ export function fromBoard(config) {
   // strips both again for a target without them.
   if (!Object.hasOwn(out, "coins")) out.coins = structuredClone(DEFAULTS.coins);
   if (!out.pages || !Object.hasOwn(out.pages, "coin")) out.pages = { ...out.pages, coin: DEFAULTS.pages.coin };
+  // Likewise the clock format and night mode (both off) that 1.3 added.
+  if (!Object.hasOwn(out, "clock_format")) out.clock_format = DEFAULTS.clock_format;
+  if (!Object.hasOwn(out, "night")) out.night = { ...DEFAULTS.night };
+  // And the brightness, which a 1.2 board keeps in /display.json without showing it.
+  if (!Object.hasOwn(out, "brightness")) out.brightness = DEFAULTS.brightness;
+  return out;
+}
+
+// A board's GET config as a backup keeps it. fromBoard seeds the brightness of
+// a board too old to report one; a backup must not carry that made-up value.
+export function backupConfig(boardConfig) {
+  const out = fromBoard(boardConfig);
+  if (!boardConfig || !Object.hasOwn(boardConfig, "brightness")) delete out.brightness;
   return out;
 }
 
@@ -303,6 +319,17 @@ export function applyAfterFlash(f, boardConfig, now) {
   const fresh = newlyOffered(f.supported, now);
   f.supported = now;
   f.config = filterSupported(mergeConfig(fromBoard(boardConfig), f.config), now);
+  // The Clock box reads night even where it only shows its note; formToRequest strips it.
+  if (!f.config.night) f.config.night = { ...DEFAULTS.night };
+  // A flash that doesn't erase keeps /display.json, and a board too old to report
+  // its level left only fromBoard's default in the form: the Buddy's own level
+  // stands unless the user chose one. After an erase the form's value is the
+  // one to keep: the board only has its default.
+  const chosen = (f.touched && f.touched.has("brightness")) || (f.imported || []).includes("brightness");
+  const flow = FLOWS[f.flow];
+  if (!chosen && !(flow && flow.erase) && now.has("brightness") && boardConfig && Number.isInteger(boardConfig.brightness)) {
+    f.config.brightness = boardConfig.brightness;
+  }
   rederiveSlots(f);
   return fresh;
 }
@@ -431,6 +458,13 @@ export function formErrors(state, zones) {
     out.tz_name = S.errors.tzUnknown;
   }
   if (locationMissing(state)) out.location = S.errors.location;
+  // Not offered by the deciding firmware: the Clock box is hidden, so its errors must not block Save.
+  if (fieldState(state, "night.enabled") !== "on") {
+    for (const key of Object.keys(out)) {
+      if (key === "night" || key.startsWith("night.") || key === "clock_format") delete out[key];
+    }
+  }
+  if (fieldState(state, "brightness") !== "on") delete out.brightness;
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") {
     for (const [key, raw] of Object.entries(validateWifi({ ssid: w.ssid, password: w.password }).errors)) {
@@ -480,27 +514,38 @@ export function locationSummary(config, placeLabel = "") {
 // them (Eric, 2026-10-12): the face never uses the theme.
 export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github"]);
 
+// Night mode's hours are stored 0-23; the labels follow the clock format.
+export const hourLabel = (h, format) => {
+  if (format !== "12h") return `${String(h).padStart(2, "0")}:00`;
+  return `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
+};
+// The brightness sliders show percent; the board stores 8-255.
+export const levelToPercent = (l) => Math.round((l * 100) / 255);
+export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
+
 // The preview page a changed setting belongs to, so the preview can jump
 // there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
 // page without jumping), or null (no jump and no hold: Wi-Fi, or a page
 // switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
 // the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
-// shown (an empty key or user hides stock and GitHub), or stays when there is
+// shown, or stays when there is
 // none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
-    case "tz_name": case "tz_rule": return "clock";
+    case "tz_name": case "tz_rule": case "clock_format": return "clock";
     case "ticker": case "stock_key": case "check.stock": return "stock";
     case "check.coin": return "coin";
     case "github_user": case "check.github": return "github";
     case "mount": return "face";
+    case "brightness": return "stay"; // the preview doesn't simulate brightness
     case "theme": {
       const shown = pageList(config);
       return THEMED_PAGES.find((p) => shown.includes(p)) || "stay";
     }
     default: break;
   }
+  if (typeof key === "string" && (key === "night" || key.startsWith("night."))) return "clock";
   if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
   if (typeof key === "string" && key.startsWith("coinslot.")) return "coin";
   if (typeof key === "string" && key.startsWith("pages.")) {

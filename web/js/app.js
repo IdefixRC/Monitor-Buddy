@@ -2,8 +2,8 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS } from "./serial.js";
-import { sameMac, watchForTrouble } from "./protocol.js";
+import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS, LOOK_PROOF_MS } from "./serial.js";
+import { sameMac, watchForTrouble, heardBuddy } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, pathsForCfg, installablePaths } from "./settings.js";
@@ -20,8 +20,9 @@ import {
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, previewConfig, locationSummary, locationMissing, afterRecovery,
   moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
-  remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
+  remapStockErrors, dropSlotErrors, backupConfig, rederiveSlots, applyAfterFlash,
   applyCoinSlots, coinIndexOfSlot, COIN_SLOTS, COIN_SOURCES, coinListId, coinRowState,
+  hourLabel, levelToPercent, percentToLevel,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -300,7 +301,10 @@ const probeAndRoute = () => oneAtATime(probeAndRouteOnce);
 
 // Path B's "Check again". After a second look nobody answered, a board that
 // doesn't read still holds those INFOs, and a first look's would overfill it
-// (PROBE_WRITES). The board check resets it, so that comes first.
+// (PROBE_WRITES). The board check resets it, so that comes first. The second
+// look writes only after proof of a 1.2+ Buddy, so it leaves nothing behind
+// when it finds none (unproven); silentAfterCheck is for a Buddy that proved
+// itself and still did not answer.
 const checkAgain = () => oneAtATime(() => (app.silentAfterCheck ? checkThenPathB({ askAgain: true }) : probeAndRouteOnce()));
 
 async function probeAndRouteOnce() {
@@ -364,6 +368,17 @@ async function secondLook() {
       app.trouble = await watchForTrouble(app.rx.recent, LISTEN_MS);
       return app.trouble;
     },
+    // Writes only after a line that only firmware 1.2+ prints. listen() filled
+    // app.rx.recent (kept to the last 100 lines, so the banner is still there),
+    // and a board still booting may print it a moment later.
+    proof: async () => {
+      const end = Date.now() + LOOK_PROOF_MS;
+      for (;;) {
+        if (heardBuddy(app.rx.recent)) return true;
+        if (Date.now() >= end || !bp.isOpen || bp.lost) return false;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    },
     ask: () => {
       app.rx.status = false;
       return probe(bp, app.rx, { firstWaitMs: LOOK_FIRST_WAIT_MS, onBooting: () => g.say(S.connecting.booting) });
@@ -376,6 +391,7 @@ async function secondLook() {
     bp.mac = seen.info.mac || bp.mac;
     return showHome();
   }
+  if (seen.unproven) log("no line from a Buddy that reads USB: nothing sent", "* ");
   if (seen.trouble) log(`no firmware running (${seen.trouble}): nothing sent`, "* ");
   if (seen.otherBoard) log("only another board answered: path B, where a flash still refuses it", "* ");
   await closeThenPathB();
@@ -391,7 +407,7 @@ async function closeThenPathB() {
 // the form for a board that will be refused. The board restarts once.
 // askAgain: a Buddy left running for a long time can miss the first INFO, and
 // the restart clears that, so a working Buddy isn't called new or older: ask
-// once more first (Eric, COM12 and COM4, 2026-11-04).
+// once more first, but only a board that proved it reads USB (secondLook) (Eric, COM12 and COM4, 2026-11-04).
 async function checkThenPathB({ askAgain = false } = {}) {
   screen(S.titles.connecting, (m) => {
     guide(m, { mood: "curious", say: S.connecting.checking });
@@ -530,7 +546,7 @@ async function startRecovery() {
 async function startBackup() {
   const got = await readGet();
   if (!got) return;
-  const name = downloadBackup(fromBoard(got.config));
+  const name = downloadBackup(backupConfig(got.config));
   showHome();
   G.add(S.backup.saved(escapeRich(name)));
 }
@@ -577,7 +593,7 @@ async function startFresh() {
   if (!got) return;
   showBackupOffer({
     say: S.backup.freshSay,
-    config: fromBoard(got.config),
+    config: backupConfig(got.config),
     choice: true,
     next: (empty) => {
       app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
@@ -591,7 +607,7 @@ async function startFresh() {
 async function startReset() {
   const got = await readGet();
   if (!got) return;
-  showBackupOffer({ say: S.backup.resetSay, config: fromBoard(got.config), choice: false, next: showResetConfirm });
+  showBackupOffer({ say: S.backup.resetSay, config: backupConfig(got.config), choice: false, next: showResetConfirm });
 }
 
 function showResetConfirm() {
@@ -772,6 +788,15 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 // the currency is already there.
 const coinPrice = formatCoinPrice;
 
+// A stock Check's numbers, so the preview draws the real page.
+function keepStockQuote(symbol, { price, open, high, low, ref }) {
+  app.live = {
+    ...app.live,
+    prices: { ...(app.live.prices || {}), [symbol]: price },
+    stockStats: { ...(app.live.stockStats || {}), [symbol]: { open, high, low, ref } },
+  };
+}
+
 // checkCoin's result as a sentence.
 function coinMessage(res, pair) {
   if (res.status === "ok") return S.check.coin.ok(pair, coinPrice(res.price));
@@ -883,6 +908,26 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     input.addEventListener("change", () => { set(input.checked); changed(errorKey); });
     const error = errorKey ? errorSlot(errorKey, [input]) : null;
     return { input, el: h("div", { class: "switch-row" }, head(h("label", { for: id }, label), label, help, badgeKey), input, error) };
+  }
+
+  // A brightness slider: percent on screen, 8-255 on the board. `set` runs only
+  // on the slider's own input, so drawing the form never rounds a stored level.
+  function levelSlider({ key, label, level, hint, set, help = null }) {
+    const id = uid("f");
+    const hintEl = h("p", { class: "field__hint", id: uid("hint") }, hint);
+    const input = h("input", { id, type: "range", class: "level__range", min: "3", max: "100", step: "1", "aria-describedby": hintEl.id });
+    const value = h("span", { class: "level__value", "aria-hidden": "true" });
+    const show = () => {
+      value.textContent = S.form.nightLevel(Number(input.value));
+      input.setAttribute("aria-valuetext", value.textContent);
+    };
+    input.value = String(levelToPercent(level));
+    show();
+    input.addEventListener("input", () => { set(percentToLevel(Number(input.value))); show(); changed(key); });
+    const error = errorSlot(key, [input]);
+    const top = head(h("label", { for: id }, label), label, help, key);
+    top.append(value);
+    return { input, hintEl, error, el: h("div", { class: "field level" }, top, input, hintEl, error) };
   }
 
   const section = (title, ...kids) => h("section", { class: "section" }, h("h2", { class: "section__title" }, title), kids);
@@ -1013,7 +1058,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const offSaved = !flow.erase && (app.info ? !!(app.info.wifi && app.info.wifi.saved) : f.flow === "upgrade");
     const offNote = note(offSaved ? S.form.offKeep : S.form.offHotspot);
     const onBox = h("div", { class: "wifi-on" }, choiceGroup, creds);
-    form.append(section(S.form.sections.wifi, configure.el, onBox, offNote));
+    const wifiSection = section(S.form.sections.wifi, configure.el, onBox, offNote);
     refreshers.push(() => {
       onBox.hidden = !f.wifi.configure;
       offNote.hidden = f.wifi.configure;
@@ -1101,7 +1146,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     advanced.addEventListener("toggle", () => {
       if (!advanced.open && advancedError()) advanced.open = true; // keep the error in sight
     });
-    form.append(section(S.form.sections.location, cityField, summaryLine, advanced));
+    const locationSection = section(S.form.sections.location, cityField, summaryLine, advanced);
     refreshers.push(() => {
       // While a fresh install still needs a place, the built-in one must not
       // look chosen, so the line stays empty until the user gives one.
@@ -1111,12 +1156,63 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       if (advancedError()) advanced.open = true;
     });
 
-    // 3. Units.
-    form.append(section(S.form.sections.units, h("div", { class: "grid-2" },
+    // 3. Clock: the 12/24-hour format and night mode (both new in 1.3). Below
+    // 1.3 only the heading and the note show, as in Coins.
+    const clockFormat = radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
+      options: [["24h", S.form.hours24], ["12h", S.form.hours12]], set: (v) => { f.config.clock_format = v; } });
+    const nightSwitch = switchRow({ label: S.form.nightOn, checked: f.config.night.enabled === true, help: "night",
+      set: (v) => { f.config.night.enabled = v; jumpFor("night.enabled"); } });
+    const hourSelect = (label, field) => {
+      const id = uid("f");
+      const select = h("select", { id, class: "input" }, Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) })));
+      select.value = String(f.config.night[field]);
+      select.addEventListener("change", () => { f.config.night[field] = Number(select.value); changed("night"); });
+      return { select, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, null, null), select) };
+    };
+    const nightStart = hourSelect(S.form.nightStart, "start");
+    const nightEnd = hourSelect(S.form.nightEnd, "end");
+    const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
+    // The night brightness (new in 1.3) sits back under From and Until.
+    const nightLevel = levelSlider({ key: "night.brightness", label: S.form.nightBrightness, hint: S.form.nightAboveDay,
+      level: f.config.night?.brightness ?? DEFAULTS.night.brightness, set: (l) => { f.config.night.brightness = l; } });
+    const nightRows = [
+      nightSwitch.el,
+      h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
+      nightLevel.el,
+    ];
+    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night", "night.start", "night.end", "night.enabled", "night.brightness"],
+      h("span", { class: "advanced__hint" }, S.form.nightHint));
+    nightFold.classList.add("night");
+    const clockNote = note("", "note--info");
+    const clockFields = h("div", {}, clockFormat, nightFold);
+    const clockSection = section(S.form.sections.clock, clockFields, clockNote);
+    refreshers.push(() => {
+      const st = fieldState(f, "clock_format");
+      const first = firstWith("clock_format");
+      clockSection.hidden = st === "hidden";
+      clockFields.hidden = st !== "on"; // new in 1.3: an older target shows only the note
+      clockNote.hidden = st !== "greyed";
+      clockNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+      for (const sel of [nightStart.select, nightEnd.select]) {
+        [...sel.options].forEach((o, i) => { o.textContent = hourLabel(i, f.config.clock_format); });
+      }
+      const off = st !== "on" || !f.config.night.enabled;
+      const broken = !nightError.hidden; // keep the hours reachable so the error can be fixed
+      nightStart.select.disabled = off && !broken;
+      nightEnd.select.disabled = off && !broken;
+      nightSwitch.input.disabled = st !== "on";
+      // The level's value stays, ready for when night mode is on. Keep the
+      // slider reachable while its own error shows, as for the hours.
+      nightLevel.input.disabled = off && nightLevel.error.hidden;
+      nightLevel.el.classList.toggle("level--off", off);
+    });
+
+    // 3b. Units.
+    const unitsSection = section(S.form.sections.units, h("div", { class: "grid-2" },
       radioGroup({ key: "temp_unit", legend: S.form.temp, help: "temp_unit", value: f.config.temp_unit,
         options: [["celsius", S.form.celsius], ["fahrenheit", S.form.fahrenheit]], set: (v) => { f.config.temp_unit = v; } }),
       radioGroup({ key: "wind_unit", legend: S.form.wind, help: "wind_unit", value: f.config.wind_unit,
-        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } }))));
+        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } })));
 
     // 4. Pages.
     // Every switch is built; the refresher hides or greys each one for the
@@ -1136,12 +1232,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
     // The legend is the section's title, so the help button sits next to it.
-    form.append(h("section", { class: "section" },
+    // It goes into the Look and pages box, below the day brightness.
+    const pagesBlock = h("div", { class: "pages-block" },
       h("fieldset", { class: "field pages" },
-        h("legend", { class: "section__legend" }, head(h("h2", { class: "section__title" }, S.form.pages), S.form.pages, "pages", "pages")),
+        h("legend", { class: "section__legend" }, head(h("h3", { class: "section__title section__title--sub" }, S.form.pages), S.form.pages, "pages", "pages")),
         h("div", { class: "pages__grid" }, pageRows.map((r) => r.el)),
         errorSlot("pages", [])),
-      allOff, stockHidden, githubHidden));
+      allOff, stockHidden, githubHidden);
     refreshers.push(() => {
       for (const { p, el, input, newer } of pageRows) {
         const st = fieldState(f, `pages.${p}`);
@@ -1190,14 +1287,16 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
       const states = Object.fromEntries(Object.entries(app.live.coinStates || {})
         .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
-      app.live = { ...app.live, coinPrices: prices, coinStates: states };
+      const stats = Object.fromEntries(Object.entries(app.live.coinStats || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      app.live = { ...app.live, coinPrices: prices, coinStates: states, coinStats: stats };
     };
     // The Finnhub key has two boxes, here and in Coins: typing in one sets the
     // key and mirrors it into the other (never into the box being typed in).
     const keyBoxes = [];
     const setKey = (v, from) => {
       f.config.stock_key = v.trim();
-      app.live = { ...app.live, prices: {} };
+      app.live = { ...app.live, prices: {}, stockStats: {} };
       clearChecks();
       for (const box of keyBoxes) if (box !== from) box.value = v;
     };
@@ -1218,7 +1317,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       tickerCheck.disabled = false;
       tickerResult.textContent = stockMessage(res, f.config.ticker);
       tickerResult.dataset.state = res.status === "ok" ? "ok" : "bad";
-      if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [asked[0]]: res.price } };
+      if (res.status === "ok") keepStockQuote(asked[0], res);
       refresh();
       preview.showEntry("stock", 0);
     });
@@ -1268,7 +1367,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         check.disabled = false;
         result.textContent = stockMessage(res, sym);
         result.dataset.state = res.status === "ok" ? "ok" : "bad";
-        if (res.status === "ok") app.live = { ...app.live, prices: { ...(app.live.prices || {}), [sym]: res.price } };
+        if (res.status === "ok") keepStockQuote(sym, res);
         refresh();
         { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
       }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${name}` });
@@ -1291,7 +1390,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
     const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
     const slotsBlock = h("div", { class: "slots" }, slotRows[0].el, moreStocks);
-    form.append(section(S.form.sections.stock, tickerBlock, slotsBlock));
+    const stockSection = section(S.form.sections.stock, tickerBlock, slotsBlock);
     refreshers.push(() => {
       const st = fieldState(f, "stocks");
       const firstStocks = firstWith("stocks");
@@ -1493,7 +1592,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         const states = { ...(app.live.coinStates || {}) };
         if (res.status === "not_found") states[askedKey] = "notfound"; else delete states[askedKey];
         app.live = { ...app.live, coinStates: states };
-        if (res.status === "ok") app.live = { ...app.live, coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price } };
+        if (res.status === "ok") {
+          app.live = {
+            ...app.live,
+            coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price },
+            coinStats: { ...(app.live.coinStats || {}), [askedKey]: { open: res.open, high: res.high, low: res.low, ref: res.ref } },
+          };
+        }
         refresh();
         { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
       }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${slotName}` });
@@ -1545,7 +1650,6 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const coinFields = h("div", {}, coinKeyField.el,
       h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey);
     const coinSection = section(S.form.sections.coin, coinFields, coinsNote);
-    form.append(coinSection);
     refreshers.push(() => {
       const st = fieldState(f, "coins");
       const firstCoins = firstWith("coins");
@@ -1584,13 +1688,13 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         ghResult.textContent = "";
       },
     });
-    form.append(section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult)));
+    const githubSection = section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult));
     refreshers.push(() => {
       ghCheck.disabled = !f.config.github_user;
       ghOff.hidden = !!f.config.github_user;
     });
 
-    // 8. Look.
+    // 8. Look and pages.
     const swatch = (i) => {
       const t = THEMES[i];
       const dots = [...new Set([t.sec, t.temp, t.priceUp, t.priceDown, t.ghNum])].slice(0, 4);
@@ -1599,12 +1703,30 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         h("span", { class: "swatch__dots" }, dots.map((c) => h("i", { style: `background:${c}` }))));
     };
     const mountIcon = (side) => h("span", { class: `mount-icon mount-icon--${side}`, "aria-hidden": "true" }, h("i"), h("b"));
-    form.append(section(S.form.sections.look,
+    const lookSection = section(S.form.sections.look,
       radioGroup({ key: "theme", legend: S.form.theme, help: "theme", value: f.config.theme, cls: "radios--swatches",
         options: S.themeNames.map((name, i) => [i, name, swatch(i)]), set: (v) => { f.config.theme = v; } }),
       radioGroup({ key: "mount", legend: S.form.mount, help: "mount", value: f.config.mount, cls: "radios--mount",
         options: [["left", S.form.left, mountIcon("left")], ["right", S.form.right, mountIcon("right")]],
-        set: (v) => { f.config.mount = v; } })));
+        set: (v) => { f.config.mount = v; } }));
+    // The day brightness (new in 1.3). Below 1.3 a note stands in for it; the night level lives in Clock.
+    const dayLevel = levelSlider({ key: "brightness", label: S.form.dayBrightness, help: "brightness", hint: S.form.dayBrightnessHint,
+      level: f.config.brightness ?? DEFAULTS.brightness, set: (l) => { f.config.brightness = l; } });
+    const levelRows = h("div", {}, dayLevel.el);
+    const levelNote = note("", "note--info");
+    lookSection.append(levelRows, levelNote, pagesBlock);
+    refreshers.push(() => {
+      const st = fieldState(f, "brightness");
+      const first = firstWith("brightness");
+      levelRows.hidden = st !== "on";
+      levelNote.hidden = st !== "greyed";
+      levelNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+    });
+
+    // The boxes go in on the page in the setup flow's order. They were built
+    // in the order above, since they share the Finnhub key boxes, the
+    // refreshers and the pages notes that read the stock state.
+    form.append(wifiSection, lookSection, unitsSection, locationSection, clockSection, stockSection, coinSection, githubSection);
 
     // Firmware version, for the flows that flash.
     let cfgNote = null;

@@ -13,9 +13,9 @@ test("C4: a 1.2.0 backup imports exactly as today", () => {
   const cfg = readBackup(backup);
   assert.deepEqual(cfg, backup.config);
   assert.equal(validateConfig(cfg).ok, true);
-  // A 1.2 backup has no coins and no coin page: they come from the defaults.
+  // A 1.2 backup has no coins, coin page, clock format or night mode: they come from the defaults.
   assert.deepEqual(mergeConfig(DEFAULTS, cfg),
-    { ...withStocks(backup.config), coins: DEFAULTS.coins, pages: { ...backup.config.pages, coin: true } });
+    { ...withStocks(backup.config), brightness: DEFAULTS.brightness, coins: DEFAULTS.coins, clock_format: DEFAULTS.clock_format, night: DEFAULTS.night, pages: { ...backup.config.pages, coin: true } });
 });
 
 test("C5: importing to a board without a key leaves only that key out", () => {

@@ -34,10 +34,21 @@ struct Coin {
 enum : uint8_t { MOUNT_LEFT = 0, MOUNT_RIGHT = 1 };
 enum : uint8_t { TEMP_CELSIUS = 0, TEMP_FAHRENHEIT = 1 };
 enum : uint8_t { WIND_KMH = 0, WIND_MPH = 1 };
+enum : uint8_t { CLOCK_24H = 0, CLOCK_12H_FORMAT = 1 };
+
+// Night mode: from `start` until `end` (local hours, 0-23, they differ; the
+// span may cross midnight) the backlight drops to `brightness` (8-255).
+struct Night {
+  bool    enabled;
+  uint8_t start;
+  uint8_t end;
+  uint8_t brightness;
+};
 
 struct Settings {
   uint8_t mount;              // MOUNT_*
   uint8_t theme;              // 0-4
+  uint8_t brightness;         // 8-255: a copy of /display.json's level, which wins at boot
   char    githubUser[40];     // "" hides the GitHub page
   char    tzName[65];         // IANA name, for the weather request
   char    tzRule[65];         // POSIX TZ rule, for the clock
@@ -49,8 +60,10 @@ struct Settings {
   uint8_t coinCount;   // 1-5; coins[0] is always on
   char    lat[16];
   char    lon[16];
+  uint8_t clockFormat;        // CLOCK_24H or CLOCK_12H_FORMAT
   uint8_t tempUnit;           // TEMP_*
   uint8_t windUnit;           // WIND_*
+  Night   night;
   bool    pages[SETTINGS_PAGE_COUNT];
 };
 

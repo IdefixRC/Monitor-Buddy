@@ -16,7 +16,7 @@ void setUp() {}
 void tearDown() {}
 
 struct DemoCoin  { char pair[22]; uint8_t style; };
-struct Night { bool enabled; uint8_t start, end, brightness; };
+// Night comes from settings.h: the demo group is the real one.
 struct Demo {
   uint8_t theme;
   bool    flags[2];

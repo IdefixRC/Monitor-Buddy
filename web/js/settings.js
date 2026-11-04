@@ -22,6 +22,7 @@ const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArr
 export const SCHEMA = Object.freeze([
   { name: "mount", kind: "choice", words: ["left", "right"], error: 'must be "left" or "right"' },
   { name: "theme", kind: "int", min: 0, max: 4, error: "must be a whole number 0-4" },
+  { name: "brightness", kind: "int", min: 8, max: 255, error: "a number from 8 to 255" },
   { name: "github_user", kind: "text", min: 0, max: 39, chars: ALNUM + "-", error: "0-39 characters: letters, digits and -" },
   { name: "tz_name", kind: "text", min: 1, max: 64, chars: ALNUM + "/_+-", error: "1-64 characters: letters, digits and / _ + -" },
   { name: "tz_rule", kind: "text", min: 1, max: 64, chars: ALNUM + "<>+-:,./", error: "1-64 characters of a POSIX TZ rule" },
@@ -44,8 +45,15 @@ export const SCHEMA = Object.freeze([
     ] },
   { name: "lat", kind: "coord", max: 90, error: "a number from -90 to 90" },
   { name: "lon", kind: "coord", max: 180, error: "a number from -180 to 180" },
+  { name: "clock_format", kind: "choice", words: ["24h", "12h"], error: 'must be "24h" or "12h"' },
   { name: "temp_unit", kind: "choice", words: ["celsius", "fahrenheit"], error: 'must be "celsius" or "fahrenheit"' },
   { name: "wind_unit", kind: "choice", words: ["kmh", "mph"], error: 'must be "kmh" or "mph"' },
+  { name: "night", kind: "group", check: (n) => n.start !== n.end, error: "start and end must differ", children: [
+    { name: "enabled", kind: "bool", error: MSG_PAGE },
+    { name: "start", kind: "int", min: 0, max: 23, error: "a whole hour 0-23" },
+    { name: "end", kind: "int", min: 0, max: 23, error: "a whole hour 0-23" },
+    { name: "brightness", kind: "int", min: 8, max: 255, error: "a number from 8 to 255" },
+  ] },
   { name: "pages", kind: "group", children: ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]
     .map((name) => ({ name, kind: "bool", error: MSG_PAGE })) },
 ]);
@@ -278,7 +286,9 @@ export const BASELINE_PATHS = Object.freeze(["mount", "theme", "github_user", "t
 export const PATHS_BY_CFG = Object.freeze({
   1: BASELINE_PATHS,
   2: Object.freeze([...BASELINE_PATHS, "stocks", "stocks.symbol", "stocks.on",
-    "coins", "coins.pair", "coins.source", "coins.on", "pages.coin"]),
+    "coins", "coins.pair", "coins.source", "coins.on", "pages.coin",
+    "clock_format", "night.enabled", "night.start", "night.end", "night.brightness",
+    "brightness"]),
 });
 const KNOWN_CFG = Object.keys(PATHS_BY_CFG).map(Number).sort((a, b) => a - b);
 

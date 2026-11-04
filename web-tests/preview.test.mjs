@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, drawStock, textPath, SHOWN_ORDER, GLYPHS, drawClock } from "../web/js/preview.js";
 import { previewPageFor, previewConfig, newFormState, DEFAULTS } from "../web/js/form.js";
 import { BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
 
@@ -11,11 +11,11 @@ const all = { face: true, clock: true, date: true, weather: true, moon: true, st
 test("page list mirrors buildPageList", () => {
   const c = { github_user: "octocat", stock_key: "k", pages: all };
   assert.deepEqual(pageList(c), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
-  assert.deepEqual(pageList({ ...c, stock_key: "" }), ["face", "clock", "date", "weather", "moon", "github"]);
-  assert.deepEqual(pageList({ ...c, github_user: "" }), ["face", "clock", "date", "weather", "moon", "stock"]);
+  assert.deepEqual(pageList({ ...c, stock_key: "" }), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
+  assert.deepEqual(pageList({ ...c, github_user: "" }), ["face", "clock", "date", "weather", "moon", "stock", "github"]);
   assert.deepEqual(pageList({ ...c, pages: { clock: true, moon: true } }), ["clock", "moon"]);
   // Nothing left: the face, so the screen is never blank.
-  assert.deepEqual(pageList({ github_user: "", stock_key: "", pages: { stock: true, github: true } }), ["face"]);
+  assert.deepEqual(pageList({ github_user: "", stock_key: "", pages: { stock: true, github: true } }), ["stock", "github"]);
   assert.deepEqual(pageList({ pages: {} }), ["face"]);
   assert.deepEqual(pageList(undefined), ["face"]);
 });
@@ -169,8 +169,8 @@ test("a theme change jumps to a page that shows the theme", () => {
   assert.equal(previewPageFor("theme", cfg({ clock: false, date: false, weather: false })), "moon");
   // Hidden pages are skipped: stock without a key, GitHub without a user.
   const onlyHidden = { clock: false, date: false, weather: false, moon: false };
-  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "" })), "github");
-  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "", github_user: "" })), "stay");
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "" })), "stock", "the preview shows it before the key is in");
+  assert.equal(previewPageFor("theme", cfg(onlyHidden, { stock_key: "", github_user: "" })), "stock");
   // Only the face: nothing themed to show, so it stays.
   assert.equal(previewPageFor("theme", { pages: { face: true } }), "stay");
 });
@@ -235,18 +235,18 @@ test("pageList follows the device's shown order (coin after stock)", () => {
   assert.deepEqual(pageList(cfg), ["face", "clock", "date", "weather", "moon", "stock", "coin", "github"]);
 });
 
-test("the coin page shows only with a coin that is on and usable", () => {
+test("the coin page shows with a coin that is on, even before the Finnhub key is in", () => {
   const base = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "coinbase", on: true }] };
   assert.deepEqual(pageList(base), ["coin"]);
   assert.deepEqual(pageList({ ...base, pages: { coin: false, clock: true } }), ["clock"]);
   assert.deepEqual(pageList({ ...base, coins: [{ pair: "BTC-USD", source: "coinbase", on: false }] }), ["face"]);
   assert.deepEqual(pageList({ ...base, coins: [] }), ["face"]);
   assert.deepEqual(pageList({ ...base, coins: undefined }), ["face"]);
-  // Finnhub needs the stock key.
+  // The Buddy needs the key for Finnhub; the preview shows the page anyway.
   const fh = { pages: { coin: true }, coins: [{ pair: "BTC-USD", source: "finnhub", on: true }] };
-  assert.deepEqual(pageList(fh), ["face"]);
+  assert.deepEqual(pageList(fh), ["coin"]);
   assert.deepEqual(pageList({ ...fh, stock_key: "k" }), ["coin"]);
-  assert.equal(usableCoins({ ...fh, coins: [...fh.coins, { pair: "ETH-USD", source: "coinbase", on: true }] }).length, 1);
+  assert.equal(usableCoins({ ...fh, coins: [...fh.coins, { pair: "ETH-USD", source: "coinbase", on: true }] }).length, 2);
 });
 
 test("formatCoinPrice and currencyOf mirror the firmware", () => {
@@ -340,4 +340,44 @@ test("the preview's pound and euro glyphs equal the firmware's rows", () => {
   const draw = (bytes) => bytes.map((b) => [4, 3, 2, 1, 0].map((bit) => ((b >> bit) & 1 ? "#" : ".")).join("")).join("|");
   assert.equal(GLYPHS["£"], draw(rows("GLYPH_POUND")));
   assert.equal(GLYPHS["€"], draw(rows("GLYPH_EURO")));
+});
+
+test("drawClock shows AM/PM in a 12-hour config and nothing extra in 24-hour", () => {
+  const c = themeColors(0);
+  const am = `<path fill="${c.sec}" d="${textPath("AM", 282, 22, 2)}"/>`;
+  const pm = `<path fill="${c.sec}" d="${textPath("PM", 282, 22, 2)}"/>`;
+  const morning = new Date(2026, 0, 5, 9, 41, 7);
+  const evening = new Date(2026, 0, 5, 21, 41, 7);
+  assert.ok(drawClock(c, morning, false, true).includes(am));
+  assert.ok(!drawClock(c, morning, false, true).includes(pm));
+  assert.ok(drawClock(c, evening, false, true).includes(pm));
+  assert.ok(!drawClock(c, evening, false, false).includes(pm));
+  assert.ok(!drawClock(c, morning, false, false).includes(am));
+  // No leading zero: 9 o'clock draws one hour digit fewer than 24-hour "09".
+  const rects = (svg) => (svg.match(/<rect/g) || []).length;
+  assert.ok(rects(drawClock(c, morning, false, true)) < rects(drawClock(c, morning, false, false)));
+});
+
+test("a checked coin keeps its change and high/low on the page", () => {
+  const c = THEMES[2];
+  const coin = { pair: "BTC-USD", source: "coinbase", on: true, slot: 0 };
+  const live = { coinPrices: { "coinbase:BTC-USD": 110 }, coinStats: { "coinbase:BTC-USD": { open: 100, high: 120, low: 90, ref: 100 } } };
+  const svg = drawCoin(c, coin, live);
+  assert.ok(svg.includes(textPath("+10.00%", 14, 120, 2)), "the change");
+  assert.ok(svg.includes(textPath("H 120.00  L 90.00", 14, 144, 1)), "high and low");
+});
+
+test("a checked stock keeps its change and open, high, low on the page", () => {
+  const c = THEMES[2];
+  const cfg = { stocks: [{ symbol: "AAPL", on: true }] };
+  const entry = { symbol: "AAPL" };
+  const live = { prices: { AAPL: 110 }, stockStats: { AAPL: { open: 105, high: 120, low: 90, ref: 100 } } };
+  const svg = drawStock(c, cfg, live, entry);
+  assert.ok(svg.includes(textPath("+10.00%", 14, 132, 2)), "the change");
+  assert.ok(svg.includes(textPath("OPEN  105.00", 150, 92, 2)), "open");
+  // Down: the price colour follows the change.
+  const down = drawStock(c, cfg, { prices: { AAPL: 90 }, stockStats: live.stockStats }, entry);
+  assert.ok(down.includes(c.priceDown));
+  // Sample values before any Check.
+  assert.ok(drawStock(c, cfg, {}, entry).includes(textPath("+1.24%", 14, 132, 2)));
 });

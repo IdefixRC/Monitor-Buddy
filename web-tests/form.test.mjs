@@ -9,7 +9,7 @@ import {
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
   COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
-  applyAfterFlash, rederiveSlots, coinListId, coinRowState,
+  applyAfterFlash, rederiveSlots, coinListId, coinRowState, hourLabel, percentToLevel, levelToPercent, backupConfig,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG, filterSupported, supportedPaths, validateConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -995,4 +995,197 @@ test("a silent board gets a second look after the board check, once", () => {
   assert.match(appSource, /if \(askAgain\) return await secondLook\(\);/);
   // Trouble seen before writing (a boot loop, download mode) doesn't ask again.
   assert.match(appSource, /app\.info = null;\s*return checkThenPathB\(\);/);
+});
+
+test("hour labels follow the clock format and store 0-23", () => {
+  assert.equal(hourLabel(23, "24h"), "23:00");
+  assert.equal(hourLabel(23, "12h"), "11 PM");
+  assert.equal(hourLabel(0, "12h"), "12 AM");
+  assert.equal(hourLabel(12, "12h"), "12 PM");
+  assert.equal(hourLabel(7, "24h"), "07:00");
+});
+
+test("the night slider shows percent and stores 8-255", () => {
+  assert.equal(levelToPercent(8), 3);
+  assert.equal(levelToPercent(255), 100);
+  assert.equal(percentToLevel(100), 255);
+  assert.equal(percentToLevel(3), 8);
+  assert.equal(percentToLevel(1), 8);
+});
+
+// A 1.2 board's config: none of the 1.3 keys.
+const config120 = () => filterSupported(DEFAULTS, new Set(PATHS_BY_CFG[1]));
+
+test("a 1.2 board on the way to 1.3 starts with the defaults in the form", () => {
+  const board = config120();
+  assert.equal(Object.hasOwn(board, "clock_format"), false);
+  assert.equal(Object.hasOwn(board, "night"), false);
+  const f = newFormState(fromBoard(board), { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  assert.equal(f.config.clock_format, "24h");
+  assert.deepEqual({ ...f.config.night }, { enabled: false, start: 23, end: 7, brightness: 26 });
+});
+
+test("fromBoard keeps a 1.3 board's own clock format and night mode", () => {
+  const night = { enabled: true, start: 22, end: 6, brightness: 40 };
+  const out = fromBoard({ ...config120(), clock_format: "12h", night });
+  assert.equal(out.clock_format, "12h");
+  assert.deepEqual(out.night, night);
+});
+
+test("a 1.2 target's request has neither clock_format nor night", () => {
+  const f = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS] });
+  const cfg = formToRequest(f).config;
+  assert.equal(Object.hasOwn(cfg, "clock_format"), false);
+  assert.equal(Object.hasOwn(cfg, "night"), false);
+});
+
+test("a 1.3 target's request carries the clock format and night mode", () => {
+  const f = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] });
+  const cfg = formToRequest(f).config;
+  assert.equal(cfg.clock_format, "24h");
+  assert.deepEqual({ ...cfg.night }, { enabled: false, start: 23, end: 7, brightness: 26 });
+});
+
+test("previewPageFor sends clock_format and night.* to the clock page, and only those", () => {
+  const cfg = { ...DEFAULTS };
+  for (const k of ["clock_format", "night", "night.enabled", "night.start", "night.end", "night.brightness"]) {
+    assert.equal(previewPageFor(k, cfg), "clock", k);
+  }
+  assert.notEqual(previewPageFor("nightly", cfg), "clock");
+});
+
+test("the Clock box sits right after Location; below 1.3 only its note shows", () => {
+  const appSource = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.match(appSource, /locationSection, clockSection,/);
+  assert.match(appSource, /clockFields\.hidden = st !== "on";/);
+  assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED }), "clock_format"), "hidden");
+  assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] }), "clock_format"), "on");
+});
+
+test("the settings page follows the setup flow: the boxes are appended in this order", () => {
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  const calls = src.match(/form\.append\(([^;]*)\);/g).map((c) => c.replace(/\s+/g, " "));
+  const order = calls.find((c) => c.includes("wifiSection"));
+  assert.equal(order, "form.append(wifiSection, lookSection, unitsSection, locationSection, clockSection, stockSection, coinSection, githubSection);");
+  // Every box is built from its own section title, and the ones that only
+  // pages joined (not a box of their own) are not appended by themselves.
+  for (const k of ["wifi", "look", "units", "location", "clock", "stock", "coin", "github"]) {
+    assert.ok(src.includes(`section(S.form.sections.${k},`), k);
+  }
+  assert.equal(S.form.sections.look, "Look and pages");
+  // The pages ride inside the Look box, after the day slider.
+  assert.match(src, /lookSection\.append\(levelRows, levelNote, pagesBlock\);/);
+  assert.doesNotMatch(src, /form\.append\(section\(S\.form\.sections\.(?!firmware)/);
+});
+
+test("night errors only count where night mode is offered", () => {
+  const bad = { ...DEFAULTS, night: { ...DEFAULTS.night, start: 5, end: 5 } };
+  const old = newFormState(bad, { flow: "update", supported: [...BASELINE_PATHS] });
+  const e120 = formErrors(old, zones);
+  assert.deepEqual(Object.keys(e120).filter((k) => k === "night" || k.startsWith("night.") || k === "clock_format"), []);
+  const now = newFormState(bad, { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  assert.ok(formErrors(now, zones).night);
+});
+
+test("the default brightness is 1.2's 180 by day and 10 % at night", () => {
+  assert.equal(DEFAULTS.brightness, 180);
+  assert.equal(levelToPercent(DEFAULTS.brightness), 71);
+  assert.equal(levelToPercent(DEFAULTS.night.brightness), 10);
+  assert.equal(percentToLevel(10), DEFAULTS.night.brightness);
+});
+
+test("the day slider's percent survives a reload, and drawing it keeps the level", () => {
+  for (let p = 3; p <= 100; p++) {
+    const f = newFormState({ ...DEFAULTS, brightness: percentToLevel(p) }, { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] });
+    assert.equal(levelToPercent(formToRequest(f).config.brightness), p, String(p));
+  }
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.equal((src.match(/config\.brightness = /g) || []).length, 1);
+});
+
+test("fromBoard seeds the brightness when absent and keeps a board's value", () => {
+  assert.equal(fromBoard(config120()).brightness, DEFAULTS.brightness);
+  assert.equal(fromBoard({ ...config120(), brightness: 120 }).brightness, 120);
+});
+
+test("a 1.2 target's request has no brightness; a 1.3 target's does", () => {
+  const old = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS] });
+  assert.equal(Object.hasOwn(formToRequest(old).config, "brightness"), false);
+  const now = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] });
+  assert.equal(formToRequest(now).config.brightness, DEFAULTS.brightness);
+});
+
+test("a brightness error only counts where it is offered", () => {
+  const bad = { ...DEFAULTS, brightness: 7 };
+  assert.equal(formErrors(newFormState(bad, { flow: "update", supported: [...BASELINE_PATHS] }), zones).brightness, undefined);
+  assert.ok(formErrors(newFormState(bad, { flow: "update", supported: [...PATHS_BY_CFG[2]] }), zones).brightness);
+});
+
+test("the preview holds its page for the brightness", () => {
+  assert.equal(previewPageFor("brightness", { ...DEFAULTS }), "stay");
+});
+
+test("updating a 1.2 board keeps the level it has, not the form's default", () => {
+  const now = new Set(PATHS_BY_CFG[2]);
+  const board = { ...DEFAULTS, brightness: 120 };
+  const untouched = newFormState(fromBoard(config120()), { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  applyAfterFlash(untouched, board, now);
+  assert.equal(formToRequest(untouched).config.brightness, 120);
+  const moved = newFormState(fromBoard(config120()), { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  moved.touched = new Set(["brightness"]);
+  moved.config.brightness = 60;
+  applyAfterFlash(moved, board, now);
+  assert.equal(formToRequest(moved).config.brightness, 60);
+  const imported = newFormState({ ...fromBoard(config120()), brightness: 70 }, { flow: "update", imported: ["brightness"], supported: [...PATHS_BY_CFG[2]] });
+  applyAfterFlash(imported, board, now);
+  assert.equal(formToRequest(imported).config.brightness, 70);
+});
+
+test("an erasing flash keeps the form's brightness: the board only has its default", () => {
+  const f = newFormState({ ...DEFAULTS, brightness: 120 }, { flow: "fresh", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] });
+  applyAfterFlash(f, { ...DEFAULTS }, new Set(PATHS_BY_CFG[2]));
+  assert.equal(formToRequest(f).config.brightness, 120);
+});
+
+test("the day slider is in Look and pages; the night slider is in the Night mode fold-out", () => {
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.ok(src.indexOf("S.form.sections.look") < src.indexOf("S.form.dayBrightness"));
+  assert.match(src, /const levelRows = h\("div", \{\}, dayLevel\.el\);/);
+  assert.match(src, /nightRows = \[\s*nightSwitch\.el,\s*h\("div", \{ class: "grid-2" \}, nightStart\.el, nightEnd\.el\), nightError,\s*nightLevel\.el,\s*\];/);
+  assert.match(src, /"night\.end", "night\.enabled", "night\.brightness"\]/);
+  assert.match(src, /nightLevel\.input\.disabled = off && nightLevel\.error\.hidden;/);
+  assert.doesNotMatch(src, /nightNeedsSwitch/);
+  assert.match(src, /newerNote\(first\.version\)/);
+});
+
+test("the board copies its level into settings before every read and write", () => {
+  const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
+  assert.equal((main.match(/settings\.brightness = brightnessLevel;/g) || []).length, 4);
+  assert.match(main, /brightnessLevel = next\.brightness;\s+brightnessSavePending = true;/);
+});
+
+test("every night percent 3-100 survives a reload, and an untouched slider keeps the level", () => {
+  for (let p = 3; p <= 100; p++) assert.equal(levelToPercent(percentToLevel(p)), p, String(p));
+  assert.equal(levelToPercent(8), 3);
+  assert.equal(levelToPercent(255), 100);
+  // The stored level is written only by the slider's own input handler, so
+  // drawing the form (which shows the rounded percent) never changes it.
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.equal((src.match(/night\.brightness = /g) || []).length, 1);
+});
+
+test("after a flash to a 1.2 target the form still has night (the Clock box reads it)", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", supported: BASELINE_PATHS });
+  applyAfterFlash(f, mergeConfig(DEFAULTS, {}), new Set(BASELINE_PATHS));
+  assert.ok(f.config.night);
+  assert.equal(f.config.night.enabled, false);
+  const req = formToRequest(f);
+  assert.equal("night" in req.config, false);
+  assert.equal("brightness" in req.config, false);
+});
+
+test("a backup of a board that reports no brightness carries none", () => {
+  assert.equal("brightness" in backupConfig({ mount: "left" }), false);
+  assert.equal(backupConfig({ mount: "left", brightness: 90 }).brightness, 90);
+  assert.ok(backupConfig({ mount: "left" }).night);
 });
