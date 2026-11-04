@@ -186,6 +186,7 @@ export const S = {
     moveUp: "Move up",
     moveDown: "Move down",
     needsNewer: (version) => `Available from firmware ${version}. Update your Buddy, or pick ${version} or newer below when updating.`,
+    needsUpdate: (version) => `Available from firmware ${version}. Update your Buddy to use this feature.`,
     say: {
       change: "Here's how I'm set up. Change what you like and I'll show it on my screen.",
       update: "Want to change anything while I update? Pick the version at the bottom.",

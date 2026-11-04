@@ -460,7 +460,7 @@ test("the page switches follow the picked firmware", () => {
   // What phase 1 pinned: a page the firmware doesn't have isn't shown (hidden), and
   // one only a newer release has is greyed with that release named.
   assert.match(appSource, /const st = fieldState\(f, `pages\.\$\{p\}`\);\s*el\.hidden = st === "hidden";\s*input\.disabled = st === "greyed";/);
-  assert.match(appSource, /firstWith\(`pages\.\$\{p\}`\)[\s\S]{0,120}S\.form\.needsNewer\(release\.version\)/);
+  assert.match(appSource, /firstWith\(`pages\.\$\{p\}`\)[\s\S]{0,120}newerNote\(release\.version\)/);
 });
 
 test("the backup import leaves out what the board doesn't support", () => {
@@ -837,4 +837,10 @@ test("compact rows: the pick, then the tools in the brief's order", () => {
 test("firmware without coins shows only the note in the Coins section", () => {
   assert.match(appSource, /coinFields\.hidden = st !== "on";/);
   assert.match(appSource, /section\(S\.form\.sections\.coin, coinFields, coinsNote\)/);
+});
+
+test("the greyed note offers the picker only where there is one", () => {
+  assert.match(appSource, /flow\.flash \? S\.form\.needsNewer\(version\) : S\.form\.needsUpdate\(version\)/);
+  assert.equal(S.form.needsUpdate("1.3.0"), "Available from firmware 1.3.0. Update your Buddy to use this feature.");
+  assert.doesNotMatch(appSource, /S\.form\.needsNewer\((release|firstStocks|firstCoins)\.version\)/);
 });

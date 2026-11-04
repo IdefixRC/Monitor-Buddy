@@ -751,6 +751,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   const focusTargets = {}; // focus key -> () => the elements to try, in order
   // The oldest installable release that has `path` (the greyed note names it).
   const firstWith = (path) => app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes(path));
+  // Only a flow that flashes has a release to pick at the bottom of the form.
+  const newerNote = (version) => (flow.flash ? S.form.needsNewer(version) : S.form.needsUpdate(version));
   // False once this drawing of the form is gone (redrawn or left), so a check
   // or an import that finishes late doesn't touch a destroyed preview.
   let alive = true;
@@ -1088,7 +1090,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         input.disabled = st === "greyed";
         const release = st === "greyed" ? firstWith(`pages.${p}`) : null;
         newer.hidden = !release;
-        newer.textContent = release ? S.form.needsNewer(release.version) : "";
+        newer.textContent = release ? newerNote(release.version) : "";
       }
       const pages = f.config.pages || {};
       // A page counts when it is on and the firmware has it; the coin page also
@@ -1242,7 +1244,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       tickerOff.hidden = !tickerNone;
       slotsBlock.hidden = st === "hidden";
       slotsNote.hidden = st !== "greyed";
-      slotsNote.textContent = st === "greyed" && firstStocks ? S.form.needsNewer(firstStocks.version) : "";
+      slotsNote.textContent = st === "greyed" && firstStocks ? newerNote(firstStocks.version) : "";
       for (const r of slotRows) {
         const greyed = st === "greyed";
         r.el.hidden = greyed && r.i === 0;   // slot 1 is the ticker field while greyed
@@ -1504,7 +1506,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
       coinFields.hidden = st !== "on"; // all new in 1.3: an older target shows only the note (Eric)
       coinsNote.hidden = st !== "greyed";
-      coinsNote.textContent = st === "greyed" && firstCoins ? S.form.needsNewer(firstCoins.version) : "";
+      coinsNote.textContent = st === "greyed" && firstCoins ? newerNote(firstCoins.version) : "";
       coinKeyField.input.disabled = st !== "on";
       for (const r of coinRows) r.sync(st);
     });
