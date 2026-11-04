@@ -2766,7 +2766,10 @@ void readTouch() {
       touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
-      if (touchDark) {
+      if (settings.night.enabled && nightActive) {
+        // The whole night window, woken or not: back to the night level, so
+        // the swipe shows what it changes.
+        nightWoken = false;
         setNightBrightness(nightStep(settings.night.brightness, dy < 0));
         touchNightStepped = true;
       } else {
@@ -2786,9 +2789,11 @@ void readTouch() {
     int16_t dx = (int16_t)touchLastX-(int16_t)touchStartX;
     int16_t dy = (int16_t)touchLastY-(int16_t)touchStartY;
     if (touchDark) {
-      // The dark: any press that wasn't a gesture wakes, however long, and
-      // never counts as half a double tap.
-      if (pressMs >= 35 && !touchSwipeDone && !touchNightStepped) {
+      // The dark: a press wakes, however long, and never counts as half a
+      // double tap. A short up or down drag doesn't: it was a swipe that fell
+      // short of a step, not a request to wake.
+      const bool shortDrag = touchMoved && abs(dy) > abs(dx);
+      if (pressMs >= 35 && !touchSwipeDone && !touchNightStepped && !shortDrag) {
         nightWake();
         tapCount = 0;
         lastTapMs = 0;
