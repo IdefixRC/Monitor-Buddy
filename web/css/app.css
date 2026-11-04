@@ -2112,3 +2112,20 @@ select.input {
     transition: none !important;
   }
 }
+
+/* Clock box: night mode's brightness slider. */
+.night__range {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.4rem 0 0;
+  accent-color: var(--accent, currentColor);
+}
+
+.night__value {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.slots__more .switch-row:first-child {
+  margin-top: 0.6rem;
+}

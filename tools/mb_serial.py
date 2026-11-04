@@ -304,7 +304,8 @@ def change(s, port, cmd, body=None, wait_restart=False):
 
 REDACTED = "<redacted>"
 CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-               "stock_key", "lat", "lon", "temp_unit", "wind_unit"]
+               "stock_key", "lat", "lon", "temp_unit", "wind_unit", "clock_format"]
+NIGHT_FIELDS = ["enabled", "start", "end", "brightness"]
 
 
 def expected_keys(version):
@@ -312,7 +313,7 @@ def expected_keys(version):
     keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
             "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
     if version >= 2:
-        keys |= {"stocks", "coins"}
+        keys |= {"stocks", "coins", "clock_format", "night"}
     return keys
 
 
@@ -369,6 +370,19 @@ def parse_set_args(args):
             if value.lower() not in ("true", "false"):
                 raise ValueError(f"{key} must be true or false")
             config.setdefault("pages", {})[page] = value.lower() == "true"
+        elif key.startswith("night."):
+            field = key[len("night."):]
+            if field not in NIGHT_FIELDS:
+                raise ValueError(f"unknown night setting '{field}' (use one of: {', '.join(NIGHT_FIELDS)})")
+            if field == "enabled":
+                if value.lower() not in ("true", "false"):
+                    raise ValueError(f"{key} must be true or false")
+                config.setdefault("night", {})[field] = value.lower() == "true"
+            else:
+                try:
+                    config.setdefault("night", {})[field] = int(value)
+                except ValueError:
+                    raise ValueError(f"{key} must be a whole number") from None
         elif key == "theme":
             try:
                 config[key] = int(value)
@@ -387,7 +401,7 @@ def parse_set_args(args):
             config[key] = value
         else:
             raise ValueError(f"unknown setting '{key}' (use one of: "
-                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>; coins via @file)")
+                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>, night.<field>; coins via @file)")
     return {"config": config}
 
 

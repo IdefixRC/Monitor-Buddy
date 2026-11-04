@@ -172,12 +172,15 @@ function digit(x, y, n, w, h, t, color) {
 
 const two = (n) => String(n).padStart(2, "0");
 
-function drawClock(c, now, blinkColon) {
-  const hh = now.getHours();
+export function drawClock(c, now, blinkColon, h12 = false) {
+  const hh24 = now.getHours();
+  const hh = h12 ? (hh24 % 12 || 12) : hh24;
   const mm = now.getMinutes();
   const ss = now.getSeconds();
   const W = 54, H = 100, T = 10, Y = 18;
-  let s = digit(8, Y, Math.floor(hh / 10), W, H, T, c.time) + digit(70, Y, hh % 10, W, H, T, c.time);
+  // 12-hour: no leading zero, AM/PM above the seconds (ports PR #22).
+  let s = (!h12 || hh >= 10 ? digit(8, Y, Math.floor(hh / 10), W, H, T, c.time) : "") + digit(70, Y, hh % 10, W, H, T, c.time);
+  if (h12) s += txt(hh24 < 12 ? "AM" : "PM", 282, Y + 4, 2, c.sec);
   if (!blinkColon || ss % 2 === 0) {
     s += rrect(134, Y + 28, 11, 11, 5, c.time) + rrect(134, Y + 62, 11, 11, 5, c.time);
   }
@@ -670,7 +673,7 @@ export function createPreview(container) {
     } else {
       if (face) { face.destroy(); face = null; }
       const blink = !reduced();
-      page.innerHTML = key === "clock" ? drawClock(c, now, blink)
+      page.innerHTML = key === "clock" ? drawClock(c, now, blink, config.clock_format === "12h")
         : key === "date" ? drawDate(c, now)
         : key === "weather" ? drawWeather(c, config)
         : key === "moon" ? drawMoon(c, now)

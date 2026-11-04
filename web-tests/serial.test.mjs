@@ -422,3 +422,13 @@ test("verifyChange compares a list whole", async () => {
   assert.deepEqual(await verifyChange(bp, "SET", { config: { later: ["A"] } }),
     { ok: false, detail: "later is not the requested value on the board" });
 });
+
+test("the simulated 1.2.0 board reports neither clock_format nor night; a 1.3 one reports both", async () => {
+  for (const [q, has] of [["fake=a&keys=1.2.0", false], ["fake=a", true]]) {
+    const bp = await fakeDevice(new URLSearchParams(q)).BuddyPort.pick();
+    await bp.open();
+    const got = await bp.command("GET");
+    assert.equal(Object.hasOwn(got.config, "clock_format"), has, q);
+    assert.equal(Object.hasOwn(got.config, "night"), has, q);
+  }
+});

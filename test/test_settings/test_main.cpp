@@ -388,7 +388,7 @@ static void test_largest_get_reply_fits_with_room() {
   strcpy(s.lon, "-123.4567890123");
   s.tempUnit = TEMP_FAHRENHEIT;
   s.clockFormat = CLOCK_12H_FORMAT;
-  s.night = {true, 23, 22, 255};
+  s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["ok"] = true; d["cmd"] = "GET"; d["id"] = 4294967295UL;
   d["v"] = CONFIG_VERSION; d["stored"] = true;
@@ -415,7 +415,7 @@ static void test_largest_set_line_fits_with_room() {
   }
   s.coinCount = SETTINGS_COIN_MAX;
   s.clockFormat = CLOCK_12H_FORMAT;
-  s.night = {true, 23, 22, 255};
+  s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["id"] = 4294967295UL;
   settingsToJson(s, d["config"].to<JsonObject>());

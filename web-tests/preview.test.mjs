@@ -1,7 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS } from "../web/js/preview.js";
+import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS, drawClock } from "../web/js/preview.js";
 import { previewPageFor, previewConfig, newFormState, DEFAULTS } from "../web/js/form.js";
 import { BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
 
@@ -340,4 +340,20 @@ test("the preview's pound and euro glyphs equal the firmware's rows", () => {
   const draw = (bytes) => bytes.map((b) => [4, 3, 2, 1, 0].map((bit) => ((b >> bit) & 1 ? "#" : ".")).join("")).join("|");
   assert.equal(GLYPHS["£"], draw(rows("GLYPH_POUND")));
   assert.equal(GLYPHS["€"], draw(rows("GLYPH_EURO")));
+});
+
+test("drawClock shows AM/PM in a 12-hour config and nothing extra in 24-hour", () => {
+  const c = themeColors(0);
+  const am = `<path fill="${c.sec}" d="${textPath("AM", 282, 22, 2)}"/>`;
+  const pm = `<path fill="${c.sec}" d="${textPath("PM", 282, 22, 2)}"/>`;
+  const morning = new Date(2026, 0, 5, 9, 41, 7);
+  const evening = new Date(2026, 0, 5, 21, 41, 7);
+  assert.ok(drawClock(c, morning, false, true).includes(am));
+  assert.ok(!drawClock(c, morning, false, true).includes(pm));
+  assert.ok(drawClock(c, evening, false, true).includes(pm));
+  assert.ok(!drawClock(c, evening, false, false).includes(pm));
+  assert.ok(!drawClock(c, morning, false, false).includes(am));
+  // No leading zero: 9 o'clock draws one hour digit fewer than 24-hour "09".
+  const rects = (svg) => (svg.match(/<rect/g) || []).length;
+  assert.ok(rects(drawClock(c, morning, false, true)) < rects(drawClock(c, morning, false, false)));
 });

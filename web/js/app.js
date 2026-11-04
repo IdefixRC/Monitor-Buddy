@@ -22,6 +22,7 @@ import {
   moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
   applyCoinSlots, coinIndexOfSlot, COIN_SLOTS, COIN_SOURCES, coinListId, coinRowState,
+  hourLabel, levelToPercent, percentToLevel,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
@@ -1111,7 +1112,64 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       if (advancedError()) advanced.open = true;
     });
 
-    // 3. Units.
+    // 3. Clock: the 12/24-hour format and night mode (both new in 1.3). Below
+    // 1.3 only the heading and the note show, as in Coins.
+    const clockFormat = radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
+      options: [["24h", S.form.hours24], ["12h", S.form.hours12]], set: (v) => { f.config.clock_format = v; } });
+    const nightSwitch = switchRow({ label: S.form.nightOn, checked: f.config.night.enabled === true, help: "night",
+      set: (v) => { f.config.night.enabled = v; } });
+    const hourSelect = (label, field) => {
+      const id = uid("f");
+      const select = h("select", { id, class: "input" }, Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) })));
+      select.value = String(f.config.night[field]);
+      select.addEventListener("change", () => { f.config.night[field] = Number(select.value); changed("night"); });
+      return { select, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, null, null), select) };
+    };
+    const nightStart = hourSelect(S.form.nightStart, "start");
+    const nightEnd = hourSelect(S.form.nightEnd, "end");
+    const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
+    const levelId = uid("f");
+    const levelValue = h("span", { class: "night__value", "aria-hidden": "true" });
+    const nightLevel = h("input", { id: levelId, type: "range", class: "night__range", min: "3", max: "100", step: "1" });
+    nightLevel.value = String(levelToPercent(f.config.night.brightness));
+    nightLevel.setAttribute("aria-valuetext", S.form.nightLevel(Number(nightLevel.value)));
+    const showLevel = () => {
+      levelValue.textContent = S.form.nightLevel(Number(nightLevel.value));
+      nightLevel.setAttribute("aria-valuetext", levelValue.textContent);
+    };
+    nightLevel.addEventListener("input", () => { f.config.night.brightness = percentToLevel(Number(nightLevel.value)); showLevel(); changed("night.brightness"); });
+    const nightRows = [
+      nightSwitch.el,
+      h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
+      h("div", { class: "field" },
+        h("div", { class: "field__head" }, h("label", { for: levelId }, S.form.nightBrightness), levelValue), nightLevel),
+      h("p", { class: "field__hint" }, S.form.nightAboveDay),
+    ];
+    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night"],
+      h("span", { class: "advanced__hint" }, S.form.nightHint));
+    const clockNote = note("", "note--info");
+    const clockFields = h("div", {}, clockFormat, nightFold);
+    const clockSection = section(S.form.sections.clock, clockFields, clockNote);
+    form.append(clockSection);
+    refreshers.push(() => {
+      const st = fieldState(f, "clock_format");
+      const first = firstWith("clock_format");
+      clockSection.hidden = st === "hidden";
+      clockFields.hidden = st !== "on"; // new in 1.3: an older target shows only the note
+      clockNote.hidden = st !== "greyed";
+      clockNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+      for (const sel of [nightStart.select, nightEnd.select]) {
+        [...sel.options].forEach((o, i) => { o.textContent = hourLabel(i, f.config.clock_format); });
+      }
+      const off = st !== "on" || !f.config.night.enabled;
+      nightStart.select.disabled = off;
+      nightEnd.select.disabled = off;
+      nightLevel.disabled = off;
+      nightSwitch.input.disabled = st !== "on";
+      showLevel();
+    });
+
+    // 3b. Units.
     form.append(section(S.form.sections.units, h("div", { class: "grid-2" },
       radioGroup({ key: "temp_unit", legend: S.form.temp, help: "temp_unit", value: f.config.temp_unit,
         options: [["celsius", S.form.celsius], ["fahrenheit", S.form.fahrenheit]], set: (v) => { f.config.temp_unit = v; } }),

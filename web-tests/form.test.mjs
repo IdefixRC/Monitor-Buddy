@@ -9,7 +9,7 @@ import {
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
   COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
-  applyAfterFlash, rederiveSlots, coinListId, coinRowState,
+  applyAfterFlash, rederiveSlots, coinListId, coinRowState, hourLabel, percentToLevel, levelToPercent,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG, filterSupported, supportedPaths, validateConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -995,4 +995,70 @@ test("a silent board gets a second look after the board check, once", () => {
   assert.match(appSource, /if \(askAgain\) return await secondLook\(\);/);
   // Trouble seen before writing (a boot loop, download mode) doesn't ask again.
   assert.match(appSource, /app\.info = null;\s*return checkThenPathB\(\);/);
+});
+
+test("hour labels follow the clock format and store 0-23", () => {
+  assert.equal(hourLabel(23, "24h"), "23:00");
+  assert.equal(hourLabel(23, "12h"), "11 PM");
+  assert.equal(hourLabel(0, "12h"), "12 AM");
+  assert.equal(hourLabel(12, "12h"), "12 PM");
+  assert.equal(hourLabel(7, "24h"), "07:00");
+});
+
+test("the night slider shows percent and stores 8-255", () => {
+  assert.equal(levelToPercent(8), 3);
+  assert.equal(levelToPercent(255), 100);
+  assert.equal(percentToLevel(100), 255);
+  assert.equal(percentToLevel(3), 8);
+  assert.equal(percentToLevel(1), 8);
+});
+
+// A 1.2 board's config: none of the 1.3 keys.
+const config120 = () => filterSupported(DEFAULTS, new Set(PATHS_BY_CFG[1]));
+
+test("a 1.2 board on the way to 1.3 starts with the defaults in the form", () => {
+  const board = config120();
+  assert.equal(Object.hasOwn(board, "clock_format"), false);
+  assert.equal(Object.hasOwn(board, "night"), false);
+  const f = newFormState(fromBoard(board), { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  assert.equal(f.config.clock_format, "24h");
+  assert.deepEqual({ ...f.config.night }, { enabled: false, start: 23, end: 7, brightness: 8 });
+});
+
+test("fromBoard keeps a 1.3 board's own clock format and night mode", () => {
+  const night = { enabled: true, start: 22, end: 6, brightness: 40 };
+  const out = fromBoard({ ...config120(), clock_format: "12h", night });
+  assert.equal(out.clock_format, "12h");
+  assert.deepEqual(out.night, night);
+});
+
+test("a 1.2 target's request has neither clock_format nor night", () => {
+  const f = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...BASELINE_PATHS] });
+  const cfg = formToRequest(f).config;
+  assert.equal(Object.hasOwn(cfg, "clock_format"), false);
+  assert.equal(Object.hasOwn(cfg, "night"), false);
+});
+
+test("a 1.3 target's request carries the clock format and night mode", () => {
+  const f = newFormState(fromBoard(config120()), { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] });
+  const cfg = formToRequest(f).config;
+  assert.equal(cfg.clock_format, "24h");
+  assert.deepEqual({ ...cfg.night }, { enabled: false, start: 23, end: 7, brightness: 8 });
+});
+
+test("previewPageFor sends clock_format and night.* to the clock page, and only those", () => {
+  const cfg = { ...DEFAULTS };
+  for (const k of ["clock_format", "night", "night.enabled", "night.start", "night.end", "night.brightness"]) {
+    assert.equal(previewPageFor(k, cfg), "clock", k);
+  }
+  assert.notEqual(previewPageFor("nightly", cfg), "clock");
+});
+
+test("the Clock box sits between Location and Units; below 1.3 only its note shows", () => {
+  const appSource = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.ok(appSource.indexOf("S.form.sections.location") < appSource.indexOf("S.form.sections.clock"));
+  assert.ok(appSource.indexOf("S.form.sections.clock") < appSource.indexOf("S.form.sections.units"));
+  assert.match(appSource, /clockFields\.hidden = st !== "on";/);
+  assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED }), "clock_format"), "hidden");
+  assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] }), "clock_format"), "on");
 });

@@ -25,6 +25,18 @@ class ParseSetArgs(unittest.TestCase):
         self.assertIn("stocks", mb_serial.expected_keys(2))
         self.assertNotIn("coins", mb_serial.expected_keys(1))
         self.assertIn("coins", mb_serial.expected_keys(2))
+        for key in ("clock_format", "night"):
+            self.assertNotIn(key, mb_serial.expected_keys(1))
+            self.assertIn(key, mb_serial.expected_keys(2))
+
+    def test_set_clock_format_and_night_fields(self):
+        self.assertEqual(mb_serial.parse_set_args(["clock_format=12h"]), {"config": {"clock_format": "12h"}})
+        self.assertEqual(mb_serial.parse_set_args(["night.start=22", "night.enabled=true"]),
+                         {"config": {"night": {"start": 22, "enabled": True}}})
+        with self.assertRaises(ValueError):
+            mb_serial.parse_set_args(["night.start=late"])
+        with self.assertRaises(ValueError):
+            mb_serial.parse_set_args(["night.colour=1"])
 
     def test_coins_points_at_the_file_form(self):
         for arg in ("coins=BTC-USD", "coins="):

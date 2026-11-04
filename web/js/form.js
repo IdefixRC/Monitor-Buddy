@@ -492,6 +492,15 @@ export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "
 // the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
 // shown (an empty key or user hides stock and GitHub), or stays when there is
 // none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
+// Night mode's hours are stored 0-23; the labels follow the clock format.
+export const hourLabel = (h, format) => {
+  if (format !== "12h") return `${String(h).padStart(2, "0")}:00`;
+  return `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
+};
+// The night slider shows percent; the board stores 8-255.
+export const levelToPercent = (l) => Math.floor((l * 100) / 255);
+export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
+
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";
@@ -506,7 +515,7 @@ export function previewPageFor(key, config) {
     }
     default: break;
   }
-  if (typeof key === "string" && key.startsWith("night")) return "clock";
+  if (typeof key === "string" && (key === "night" || key.startsWith("night."))) return "clock";
   if (typeof key === "string" && key.startsWith("stockslot.")) return "stock";
   if (typeof key === "string" && key.startsWith("coinslot.")) return "coin";
   if (typeof key === "string" && key.startsWith("pages.")) {
