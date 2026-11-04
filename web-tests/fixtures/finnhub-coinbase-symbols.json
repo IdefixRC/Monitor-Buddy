@@ -1,0 +1,32 @@
+[
+  {
+    "description": "Coinbase Pro BTC/USD",
+    "displaySymbol": "BTC/USD",
+    "symbol": "COINBASE:BTC-USD"
+  },
+  {
+    "description": "Coinbase Pro BTC/EUR",
+    "displaySymbol": "BTC/EUR",
+    "symbol": "COINBASE:BTC-EUR"
+  },
+  {
+    "description": "Coinbase Pro ETH/USD",
+    "displaySymbol": "ETH/USD",
+    "symbol": "COINBASE:ETH-USD"
+  },
+  {
+    "description": "Coinbase Pro 1INCH/BTC",
+    "displaySymbol": "1INCH/BTC",
+    "symbol": "COINBASE:1INCH-BTC"
+  },
+  {
+    "description": "Coinbase Pro ADA/USDC",
+    "displaySymbol": "ADA/USDC",
+    "symbol": "COINBASE:ADA-USDC"
+  },
+  {
+    "description": "Coinbase Pro USDC/USD",
+    "displaySymbol": "USDC/USD",
+    "symbol": "COINBASE:USDC-USD"
+  }
+]

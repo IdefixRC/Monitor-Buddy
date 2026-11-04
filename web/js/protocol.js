@@ -78,6 +78,14 @@ export async function watchForTrouble(lines, ms, { step = 50 } = {}) {
   }
 }
 
+// Whether these lines prove a Buddy running firmware 1.2 or newer, the first
+// that reads USB: its banner carries a version, and only 1.2+ prints
+// "settings: ". Firmware 1.1 prints a banner without a version, and the status
+// line ("app=... up=...s rst=...") comes from both, so those prove nothing.
+export function heardBuddy(lines) {
+  return lines.some((l) => /^ESP32-C6 Monitor-Buddy \S+ starting/.test(l) || /^settings: /.test(l));
+}
+
 // Whether two MAC strings name the same board (review, 2026-10-13). INFO
 // reports the base MAC; esptool can print it as an EUI-64 with ff:fe in the
 // middle. Web Serial shows only VID/PID, the same for every Buddy, so with two

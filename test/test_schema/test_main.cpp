@@ -15,15 +15,15 @@ using namespace schema;
 void setUp() {}
 void tearDown() {}
 
-struct Coin  { char pair[22]; uint8_t style; };
-struct Night { bool enabled; uint8_t start, end, brightness; };
+struct DemoCoin  { char pair[22]; uint8_t style; };
+// Night comes from settings.h: the demo group is the real one.
 struct Demo {
   uint8_t theme;
   bool    flags[2];
   Night   night;
   char    names[5][11];
   uint8_t nameCount;
-  Coin    coins[5];
+  DemoCoin    coins[5];
   uint8_t coinCount;
 };
 
@@ -39,7 +39,7 @@ static bool pairCheck(const uint8_t *v) {
 }
 
 static const char *const STYLE_WORDS[] = {"finnhub", "coinbase"};
-static const Coin COIN_DEFAULT = {"BTC-USD", 1};
+static const DemoCoin COIN_DEFAULT = {"BTC-USD", 1};
 
 static const Field FLAG_FIELDS[] = {
   boolField("a", 0, "must be true or false"),
@@ -55,9 +55,9 @@ static const Field NAME_FIELD[] = {
   textField(nullptr, 0, 11, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-", "1-10 characters: A-Z, 0-9, . and -"),
 };
 static const Field COIN_FIELDS[] = {
-  textField("pair", offsetof(Coin, pair), 22, 3, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
+  textField("pair", offsetof(DemoCoin, pair), 22, 3, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
             "3-21 characters: A-Z, 0-9 and one -", pairCheck),
-  choiceField("style", offsetof(Coin, style), STYLE_WORDS, 2, "must be \"finnhub\" or \"coinbase\""),
+  choiceField("style", offsetof(DemoCoin, style), STYLE_WORDS, 2, "must be \"finnhub\" or \"coinbase\""),
 };
 static const Field DEMO[] = {
   intField("theme", offsetof(Demo, theme), 1, 0, 4, "must be a whole number 0-4"),
@@ -66,7 +66,7 @@ static const Field DEMO[] = {
              "start and end must differ", nightCheck),
   listField("names", offsetof(Demo, names), offsetof(Demo, nameCount), sizeof(Demo::names[0]), 1, 5,
             NAME_FIELD, 1, "1-5 entries"),
-  listField("coins", offsetof(Demo, coins), offsetof(Demo, coinCount), sizeof(Coin), 1, 5,
+  listField("coins", offsetof(Demo, coins), offsetof(Demo, coinCount), sizeof(DemoCoin), 1, 5,
             COIN_FIELDS, 2, "1-5 entries", &COIN_DEFAULT),
 };
 static const uint8_t DEMO_N = sizeof(DEMO) / sizeof(DEMO[0]);
@@ -378,6 +378,68 @@ static void test_shared_cases() {
   TEST_ASSERT_GREATER_THAN(20, ran);
 }
 
+// ── List checks (stocks/coins: "the first entry is on") ───
+
+struct Pick  { char n[6]; bool on; };
+struct Picks { Pick items[3]; uint8_t count; };
+
+static bool firstOn(const uint8_t *entries) { return reinterpret_cast<const Pick *>(entries)[0].on; }
+static const Pick PICK_DEFAULT = {"A", true};
+static const Field PICK_FIELDS[] = {
+  textField("n", offsetof(Pick, n), 6, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "1-5 letters"),
+  boolField("on", offsetof(Pick, on), "must be true or false"),
+};
+static const Field PICKS[] = {
+  listField("picks", offsetof(Picks, items), offsetof(Picks, count), sizeof(Pick), 1, 3,
+            PICK_FIELDS, 2, "1-3 entries; the first is always on", &PICK_DEFAULT, firstOn),
+};
+
+static Picks picksDefault() { Picks p{}; p.items[0] = PICK_DEFAULT; p.count = 1; return p; }
+
+static void test_list_check_rejects_a_first_entry_that_is_off() {
+  Picks cur = picksDefault(), out; JsonDocument p, e;
+  deserializeJson(p, "{\"picks\":[{\"n\":\"B\",\"on\":false},{\"n\":\"C\",\"on\":true}]}");
+  TEST_ASSERT_FALSE(merge(PICKS, 1, &cur, p.as<JsonVariantConst>(), &out, sizeof(Picks), e.to<JsonObject>()));
+  TEST_ASSERT_EQUAL_STRING("1-3 entries; the first is always on", e["picks"]);
+}
+
+static void test_list_check_passes_and_keeps_entries_that_are_off() {
+  Picks cur = picksDefault(), out; JsonDocument p, e;
+  deserializeJson(p, "{\"picks\":[{\"n\":\"B\",\"on\":true},{\"n\":\"C\",\"on\":false}]}");
+  TEST_ASSERT_TRUE(merge(PICKS, 1, &cur, p.as<JsonVariantConst>(), &out, sizeof(Picks), e.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(2, out.count);
+  TEST_ASSERT_FALSE(out.items[1].on);
+  TEST_ASSERT_EQUAL_STRING("C", out.items[1].n);
+}
+
+static void test_list_check_skipped_when_an_entry_is_invalid() {
+  Picks cur = picksDefault(), out; JsonDocument p, e;
+  deserializeJson(p, "{\"picks\":[{\"n\":\"b\",\"on\":false}]}");
+  TEST_ASSERT_FALSE(merge(PICKS, 1, &cur, p.as<JsonVariantConst>(), &out, sizeof(Picks), e.to<JsonObject>()));
+  TEST_ASSERT_EQUAL_STRING("1-5 letters", e["picks[0].n"]);
+  TEST_ASSERT_TRUE(e["picks"].isNull());
+}
+
+static void test_list_check_failure_on_load_restores_the_default() {
+  Picks d = picksDefault(), out; Paths added; JsonDocument f, inv;
+  deserializeJson(f, "{\"picks\":[{\"n\":\"B\",\"on\":false}]}");
+  load(PICKS, 1, &d, f.as<JsonVariantConst>(), &out, sizeof(Picks), added, inv.to<JsonObject>());
+  TEST_ASSERT_EQUAL(1, out.count);
+  TEST_ASSERT_EQUAL_STRING("A", out.items[0].n);
+  TEST_ASSERT_EQUAL_STRING("1-3 entries; the first is always on", inv["picks"]);
+}
+
+static void test_paths_remove() {
+  Paths p;
+  p.add("a"); p.add("b"); p.add("c");
+  p.remove("b");
+  TEST_ASSERT_EQUAL(2, p.count);
+  TEST_ASSERT_EQUAL_STRING("a", p.keys[0]);
+  TEST_ASSERT_EQUAL_STRING("c", p.keys[1]);
+  p.remove("zz");
+  TEST_ASSERT_EQUAL(2, p.count);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_to_json_writes_every_kind_in_table_order);
@@ -402,5 +464,10 @@ int main() {
   RUN_TEST(test_load_null_and_non_object_file_add_nothing);
   RUN_TEST(test_paths_ignore_duplicates_and_overflow);
   RUN_TEST(test_shared_cases);
+  RUN_TEST(test_list_check_rejects_a_first_entry_that_is_off);
+  RUN_TEST(test_list_check_passes_and_keeps_entries_that_are_off);
+  RUN_TEST(test_list_check_skipped_when_an_entry_is_invalid);
+  RUN_TEST(test_list_check_failure_on_load_restores_the_default);
+  RUN_TEST(test_paths_remove);
   return UNITY_END();
 }

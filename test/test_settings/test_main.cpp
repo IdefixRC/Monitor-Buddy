@@ -11,15 +11,20 @@ static Settings makeDefaults() {
   Settings s{};
   s.mount = MOUNT_LEFT;
   s.theme = 2;
+  s.brightness = 180;
   strcpy(s.githubUser, "IdefixRC");
   strcpy(s.tzName, "Asia/Singapore");
   strcpy(s.tzRule, "<+08>-8");
   strcpy(s.ticker, "AAPL");
+  strcpy(s.stocks[0].symbol, "AAPL"); s.stocks[0].on = true; s.stockCount = 1;
   strcpy(s.stockKey, "");
+  strcpy(s.coins[0].pair, "BTC-USD"); s.coins[0].source = COIN_COINBASE; s.coins[0].on = true; s.coinCount = 1;
   strcpy(s.lat, "1.3119");
   strcpy(s.lon, "103.8149");
+  s.clockFormat = CLOCK_24H;
   s.tempUnit = TEMP_CELSIUS;
   s.windUnit = WIND_KMH;
+  s.night = {false, 23, 7, 26};
   for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) s.pages[i] = true;
   return s;
 }
@@ -51,10 +56,14 @@ static void test_to_json_writes_every_key() {
   TEST_ASSERT_EQUAL(CONFIG_VERSION, d["v"].as<int>());
   TEST_ASSERT_EQUAL_STRING("left", d["mount"]);
   TEST_ASSERT_EQUAL(2, d["theme"].as<int>());
+  TEST_ASSERT_EQUAL(180, d["brightness"].as<int>());
   TEST_ASSERT_EQUAL_STRING("IdefixRC", d["github_user"]);
   TEST_ASSERT_EQUAL_STRING("Asia/Singapore", d["tz_name"]);
   TEST_ASSERT_EQUAL_STRING("<+08>-8", d["tz_rule"]);
   TEST_ASSERT_EQUAL_STRING("AAPL", d["ticker"]);
+  TEST_ASSERT_EQUAL_STRING("AAPL", d["stocks"][0]["symbol"]);
+  TEST_ASSERT_TRUE(d["stocks"][0]["on"].as<bool>());
+  TEST_ASSERT_EQUAL(1, d["stocks"].size());
   TEST_ASSERT_EQUAL_STRING("", d["stock_key"]);
   TEST_ASSERT_EQUAL_STRING("1.3119", d["lat"]);
   TEST_ASSERT_EQUAL_STRING("103.8149", d["lon"]);
@@ -77,12 +86,13 @@ static void test_load_without_file_keeps_defaults_and_adds_nothing() {
 static void test_load_applies_every_key() {
   JsonDocument file;
   deserializeJson(file,
-    "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"github_user\":\"octo-cat\","
+    "{\"v\":1,\"mount\":\"right\",\"theme\":4,\"brightness\":99,\"github_user\":\"octo-cat\","
     "\"tz_name\":\"Europe/Berlin\",\"tz_rule\":\"CET-1CEST,M3.5.0,M10.5.0/3\","
-    "\"ticker\":\"AVGO\",\"stock_key\":\"abc123\",\"lat\":\"48.1374\",\"lon\":\"11.5755\","
-    "\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
+    "\"ticker\":\"AVGO\",\"stocks\":[{\"symbol\":\"AVGO\",\"on\":true}],\"stock_key\":\"abc123\",\"coins\":[{\"pair\":\"BTC-USD\",\"source\":\"coinbase\",\"on\":true}],\"lat\":\"48.1374\",\"lon\":\"11.5755\","
+    "\"clock_format\":\"12h\",\"temp_unit\":\"fahrenheit\",\"wind_unit\":\"mph\","
+    "\"night\":{\"enabled\":true,\"start\":22,\"end\":6,\"brightness\":40},"
     "\"pages\":{\"face\":true,\"clock\":false,\"date\":true,\"weather\":true,"
-    "\"moon\":false,\"stock\":true,\"github\":true}}");
+    "\"moon\":false,\"stock\":true,\"github\":true,\"coin\":true}}");
   Settings out; AddedKeys added; JsonDocument inv;
   settingsLoad(makeDefaults(), file.as<JsonVariantConst>(), out, added, inv.to<JsonObject>());
   TEST_ASSERT_EQUAL(MOUNT_RIGHT, out.mount);
@@ -96,6 +106,11 @@ static void test_load_applies_every_key() {
   TEST_ASSERT_EQUAL_STRING("11.5755", out.lon);
   TEST_ASSERT_EQUAL(TEMP_FAHRENHEIT, out.tempUnit);
   TEST_ASSERT_EQUAL(WIND_MPH, out.windUnit);
+  TEST_ASSERT_EQUAL(CLOCK_12H_FORMAT, out.clockFormat);
+  TEST_ASSERT_TRUE(out.night.enabled);
+  TEST_ASSERT_EQUAL(22, out.night.start);
+  TEST_ASSERT_EQUAL(6, out.night.end);
+  TEST_ASSERT_EQUAL(40, out.night.brightness);
   TEST_ASSERT_FALSE(out.pages[1]);
   TEST_ASSERT_FALSE(out.pages[4]);
   TEST_ASSERT_TRUE(out.pages[5]);
@@ -160,6 +175,7 @@ static void test_merge_partial_changes_only_that_key() {
   TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
   Settings expected = makeDefaults();
   strcpy(expected.ticker, "AVGO");
+  strcpy(expected.stocks[0].symbol, "AVGO");
   TEST_ASSERT_EQUAL_STRING(dump(expected).c_str(), dump(out).c_str());
 }
 
@@ -346,11 +362,35 @@ static void test_tz_rule_rejects_out_of_range_and_small_buffer() {
   TEST_ASSERT_FALSE(tzRuleFromOffset(8, tiny, sizeof tiny));
 }
 
+// The firmware copies its level into `current` first, so a SET without the key
+// leaves it alone (src/main.cpp, mbSet).
+static void test_merge_keeps_brightness_when_the_key_is_absent() {
+  Settings current = makeDefaults(), out{};
+  current.brightness = 120;
+  JsonDocument patch, errs;
+  deserializeJson(patch, "{\"theme\":1}");
+  TEST_ASSERT_TRUE(settingsMerge(current, patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(120, out.brightness);
+  TEST_ASSERT_EQUAL(1, out.theme);
+}
+
+static void test_merge_takes_a_new_brightness() {
+  Settings out{};
+  JsonDocument patch, errs;
+  deserializeJson(patch, "{\"brightness\":200}");
+  TEST_ASSERT_TRUE(settingsMerge(makeDefaults(), patch.as<JsonVariantConst>(), out, errs.to<JsonObject>()));
+  TEST_ASSERT_EQUAL(200, out.brightness);
+}
+
 // ── The @MB line budget (spec §4.6) ───────────────────────
 
-// The largest GET reply today, plus room for the keys spec §8 plans (about
-// 400 bytes of config at their largest, about 150 of added paths), must fit
-// the 2,048-byte reply buffer with a quarter to spare.
+// The largest GET reply a board can really send: every text field at its
+// maximum, five stocks and five coins. A key missing from a file holds its
+// short default, so "every field at max" and "every path added" cannot happen
+// together; after a 1.2 -> 1.3 update only the new keys are reported, which
+// are "brightness", "clock_format", "night", "coins" and "pages.coin" (the paths #24 added
+// are in the line, with no reserve). The line must fit the 2,048-byte reply
+// buffer with a quarter to spare.
 static void test_largest_get_reply_fits_with_room() {
   Settings s = makeDefaults();
   s.mount = MOUNT_RIGHT; s.theme = 4;
@@ -358,41 +398,66 @@ static void test_largest_get_reply_fits_with_room() {
   memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
   memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
   memset(s.ticker, 'A', 10);     s.ticker[10] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
+  s.stockCount = SETTINGS_STOCK_MAX;
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
+    memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
+    s.coins[i].source = COIN_COINBASE; s.coins[i].on = true;   // the longer word
+  }
+  s.coinCount = SETTINGS_COIN_MAX;
   strcpy(s.lat, "-12.34567890123");
   strcpy(s.lon, "-123.4567890123");
   s.tempUnit = TEMP_FAHRENHEIT;
+  s.clockFormat = CLOCK_12H_FORMAT;
+  s.brightness = 255;
+  s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["ok"] = true; d["cmd"] = "GET"; d["id"] = 4294967295UL;
   d["v"] = CONFIG_VERSION; d["stored"] = true;
   settingsToJson(s, d["config"].to<JsonObject>());
   JsonArray added = d["added"].to<JsonArray>();
-  const char *all[] = {"mount", "theme", "github_user", "tz_name", "tz_rule", "ticker", "stock_key",
-                       "lat", "lon", "temp_unit", "wind_unit", "pages.face", "pages.clock", "pages.date",
-                       "pages.weather", "pages.moon", "pages.stock", "pages.github"};
+  const char *all[] = {"brightness", "clock_format", "night", "coins", "pages.coin"};
   for (const char *k : all) added.add(k);
   size_t line = 4 + measureJson(d) + 1;   // "@MB " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400 + 150);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line);
 }
 
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
 static void test_largest_set_line_fits_with_room() {
   Settings s = makeDefaults();
+  s.mount = MOUNT_RIGHT; s.theme = 4;
   memset(s.githubUser, 'a', 39); s.githubUser[39] = '\0';
   memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
   memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
+  s.stockCount = SETTINGS_STOCK_MAX;
+  memset(s.ticker, 'A', 10);     s.ticker[10] = ' ';
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
+  for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
+    memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
+    s.coins[i].source = COIN_COINBASE; s.coins[i].on = true;   // the longer word
+  }
+  s.coinCount = SETTINGS_COIN_MAX;
+  strcpy(s.lat, "-12.34567890123");
+  strcpy(s.lon, "-123.4567890123");
+  s.tempUnit = TEMP_FAHRENHEIT;
+  s.clockFormat = CLOCK_12H_FORMAT;
+  s.brightness = 255;
+  s.night = {false, 23, 22, 255};
   JsonDocument d;
   d["id"] = 4294967295UL;
   settingsToJson(s, d["config"].to<JsonObject>());
   d["wifi"]["ssid"] = std::string(32, 's');
   d["wifi"]["password"] = std::string(63, 'p');
   size_t line = 8 + measureJson(d) + 1;   // "@MB SET " + JSON + "\n"
-  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line + 400);
+  TEST_ASSERT_LESS_OR_EQUAL(2048 * 3 / 4, line);
 }
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_merge_keeps_brightness_when_the_key_is_absent);
+  RUN_TEST(test_merge_takes_a_new_brightness);
   RUN_TEST(test_tz_rule_whole_hours_east);
   RUN_TEST(test_tz_rule_whole_hours_west);
   RUN_TEST(test_tz_rule_half_and_quarter_hours);

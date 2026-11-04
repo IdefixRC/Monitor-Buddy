@@ -61,6 +61,14 @@ void test_follower_text_size() {
   TEST_ASSERT_EQUAL_UINT8(6, followerTextSize("123M"));
 }
 
+static void test_sub_dot_y() {
+  TEST_ASSERT_EQUAL(86, subDotY(0, 1, 172));                    // a single dot sits in the middle
+  TEST_ASSERT_EQUAL(79, subDotY(0, 2, 172));
+  TEST_ASSERT_EQUAL(93, subDotY(1, 2, 172));
+  TEST_ASSERT_EQUAL(58, subDotY(0, 5, 172));
+  TEST_ASSERT_EQUAL(114, subDotY(4, 5, 172));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_small_counts_are_digits);
@@ -71,5 +79,6 @@ int main(int, char **) {
   RUN_TEST(test_negative_is_zero);
   RUN_TEST(test_small_buffer_is_terminated);
   RUN_TEST(test_follower_text_size);
+  RUN_TEST(test_sub_dot_y);
   return UNITY_END();
 }

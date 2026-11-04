@@ -20,6 +20,15 @@ void Paths::add(const char *path) {
   count++;
 }
 
+void Paths::remove(const char *path) {
+  for (uint8_t i = 0; i < count; i++) {
+    if (strcmp(keys[i], path) != 0) continue;
+    for (uint8_t j = i + 1; j < count; j++) memcpy(keys[j - 1], keys[j], LEN);
+    count--;
+    return;
+  }
+}
+
 namespace {
 
 // "parent.name", or "name" at the top.
@@ -179,6 +188,8 @@ bool readList(const Field &f, JsonVariantConst v, uint8_t *base, JsonObject erro
     i++;
   }
   base[f.countOffset] = (uint8_t)a.size();
+  // A list-wide rule (stocks/coins: the first entry is on), once every entry is valid.
+  if (ok && f.check && !f.check(base + f.offset)) { put(errors, f.name, f.error); ok = false; }
   return ok;
 }
 

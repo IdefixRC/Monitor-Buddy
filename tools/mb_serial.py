@@ -5,6 +5,7 @@
     python tools/mb_serial.py COM4 get
     python tools/mb_serial.py COM4 get --show-key   also prints stock_key
     python tools/mb_serial.py COM4 set ticker=AVGO theme=3 pages.stock=false
+    python tools/mb_serial.py COM4 set stocks=AAPL,MSFT       firmware 1.3 and newer
     python tools/mb_serial.py COM4 set '{"config":{"ticker":"AVGO"}}'
     python tools/mb_serial.py COM4 set @settings.json
     python tools/mb_serial.py COM4 wifi        asks for the SSID and password
@@ -16,8 +17,9 @@
     python tools/mb_serial.py COM4 selftest    protocol checks; restarts the
                                                Buddy five times
 
-set takes key=value pairs (theme becomes a number; true/false become
-booleans for pages.*; everything else is text), a JSON body, or @file.json.
+set takes key=value pairs (theme, brightness and the night hours and
+level become numbers; true/false become booleans for pages.* and
+night.enabled; everything else is text), a JSON body, or @file.json.
 Prefer key=value in PowerShell and cmd, which strip the quotes from JSON.
 
 wifi asks for the password with getpass, which can hang in Git Bash (mintty).
@@ -239,10 +241,14 @@ def verify_change(s, cmd, body):
             return False, "GET did not answer"
         have = got.get("config") or {}
         for key, value in want.items():
-            if key == "pages" and isinstance(value, dict):
-                for page, on in value.items():
-                    if (have.get("pages") or {}).get(page) is not on:
-                        return False, f"pages.{page} is not {str(on).lower()} on the board"
+            if isinstance(value, dict):   # pages, night: field by field
+                sub = have.get(key)
+                sub = sub if isinstance(sub, dict) else {}
+                for field, want_field in value.items():
+                    ok = sub.get(field) is want_field if isinstance(want_field, bool) else _same(want_field, sub.get(field))
+                    if not ok:
+                        shown = str(want_field).lower() if isinstance(want_field, bool) else want_field
+                        return False, f"{key}.{field} is not {shown} on the board"
             elif not _same(value, have.get(key)):
                 return False, f"{key} is not the requested value on the board"
     wifi = (body or {}).get("wifi")
@@ -302,9 +308,21 @@ def change(s, port, cmd, body=None, wait_restart=False):
 
 
 REDACTED = "<redacted>"
-CONFIG_KEYS = ["mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-               "stock_key", "lat", "lon", "temp_unit", "wind_unit"]
-PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github"]
+CONFIG_KEYS = ["mount", "theme", "brightness", "github_user", "tz_name", "tz_rule", "ticker",
+               "stock_key", "lat", "lon", "temp_unit", "wind_unit", "clock_format"]
+NIGHT_FIELDS = ["enabled", "start", "end", "brightness"]
+
+
+def expected_keys(version):
+    """The keys GET's config has for settings format `version` (1 = firmware 1.2)."""
+    keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
+            "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
+    if version >= 2:
+        keys |= {"stocks", "coins", "clock_format", "night", "brightness"}
+    return keys
+
+
+PAGE_KEYS = ["face", "clock", "date", "weather", "moon", "stock", "github", "coin"]
 
 
 def redact(obj):
@@ -357,16 +375,43 @@ def parse_set_args(args):
             if value.lower() not in ("true", "false"):
                 raise ValueError(f"{key} must be true or false")
             config.setdefault("pages", {})[page] = value.lower() == "true"
+        elif key.startswith("night."):
+            field = key[len("night."):]
+            if field not in NIGHT_FIELDS:
+                raise ValueError(f"unknown night setting '{field}' (use one of: {', '.join(NIGHT_FIELDS)})")
+            if field == "enabled":
+                if value.lower() not in ("true", "false"):
+                    raise ValueError(f"{key} must be true or false")
+                config.setdefault("night", {})[field] = value.lower() == "true"
+            else:
+                try:
+                    config.setdefault("night", {})[field] = int(value)
+                except ValueError:
+                    raise ValueError(f"{key} must be a whole number") from None
         elif key == "theme":
             try:
                 config[key] = int(value)
             except ValueError:
                 raise ValueError("theme must be a whole number (0-4)") from None
+        elif key == "brightness":
+            try:
+                config[key] = int(value)
+            except ValueError:
+                raise ValueError("brightness must be a whole number (8-255)") from None
+        elif key == "stocks":
+            symbols = [v.strip().upper() for v in value.split(",") if v.strip()]
+            if not symbols:
+                raise ValueError("stocks needs at least one ticker (e.g. stocks=AAPL,MSFT)")
+            config["stocks"] = [{"symbol": sym, "on": True} for sym in symbols]
+        elif key == "coins":
+            raise ValueError("coins are records (pair, source, on) and do not fit key=value; "
+                             'use a file: set @file.json with {"config":{"coins":[{"pair":"BTC-USD",'
+                             '"source":"coinbase","on":true}]}}')
         elif key in CONFIG_KEYS:
             config[key] = value
         else:
             raise ValueError(f"unknown setting '{key}' (use one of: "
-                             f"{', '.join(CONFIG_KEYS)}, pages.<name>)")
+                             f"{', '.join(CONFIG_KEYS)}, stocks, pages.<name>, night.<field>; coins via @file)")
     return {"config": config}
 
 
@@ -388,8 +433,7 @@ def selftest(port):
     info = command(s, "INFO", rid=rid)
     check("INFO ok", info.get("ok") is True, info)
     check("INFO echoes cmd and id", info.get("cmd") == "INFO" and info.get("id") == rid, info)
-    check("INFO has fw, cfg_v 1, mac", bool(info.get("fw")) and info.get("cfg_v") == 1
-          and len(info.get("mac", "")) == 17, info)
+    check("INFO has fw and mac", bool(info.get("fw")) and len(info.get("mac", "")) == 17, info)
     check("INFO wifi block", {"saved", "ssid", "connected"} <= set(info.get("wifi", {})), info)
     r = ask(s, "@MB INFO", "INFO")
     check("bare INFO works and the reply has no id", r is not None and r.get("ok") is True, r)
@@ -397,11 +441,11 @@ def selftest(port):
     rid = next_id()
     got = command(s, "GET", rid=rid)
     original = got.get("config", {})
-    keys = {"v", "mount", "theme", "github_user", "tz_name", "tz_rule", "ticker",
-            "stock_key", "lat", "lon", "temp_unit", "wind_unit", "pages"}
+    keys = expected_keys(got.get("v", 1))
     check("GET ok with every key", got.get("ok") is True and set(original) == keys, got)
+    check("INFO cfg_v matches GET v", info.get("cfg_v") == got.get("v"), (info.get("cfg_v"), got.get("v")))
     check("GET echoes cmd and id", got.get("cmd") == "GET" and got.get("id") == rid, got)
-    check("GET 7 pages", len(original.get("pages", {})) == 7, original.get("pages"))
+    check("GET pages", len(original.get("pages", {})) == (8 if original.get("v", 1) >= 2 else 7), original.get("pages"))
     check("GET has a stored flag", isinstance(got.get("stored"), bool), got.get("stored"))
     was_stored = got.get("stored") is True
     if not original:
@@ -513,6 +557,8 @@ def selftest(port):
         s = restart_and_reconnect(s, port)
         after = command(s, "GET")
         expected = dict(original, ticker=new_ticker)
+        if "stocks" in original:   # 1.3: ticker is the first stock
+            expected["stocks"] = [dict(original["stocks"][0], symbol=new_ticker)] + original["stocks"][1:]
         check("partial SET kept the other keys", after.get("config") == expected, after.get("config"))
         check("added empty after a save", after.get("added") == [], after.get("added"))
         check("stored after a save", after.get("stored") is True, after.get("stored"))

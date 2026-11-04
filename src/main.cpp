@@ -5,7 +5,8 @@
 //           stock ticker, GitHub stats.  
 //           5 different themes available,
 //           Enable/Disable pages to customize your Buddy
-//           Touch swipe to change pages, 
+//           Touch swipe to change pages, tap the stock page
+//           to see the next stock,
 //           double tap to stop auto scrolling;
 //           WifiManager creates a Wi-Fi hotspot with a
 //           captive portal so you can set your Wi-Fi up;
@@ -67,9 +68,9 @@
 // ------------------------------------------------------------
 //  HOW TO USE
 // ------------------------------------------------------------
-// To customize Monitor-Buddy to you (GitHub user, timezone, stock
-// ticker + Finnhub API key, weather location, theme, which pages to
-// show): copy  config/config.h.example  to  config/config.h  and edit
+// To customize Monitor-Buddy to you (GitHub user, timezone, stocks (up to
+// five, set in the web flasher) + Finnhub API key, weather location,
+// theme, which pages to show): copy  config/config.h.example  to  config/config.h  and edit
 // the values there. config/config.h is gitignored so your API key
 // never lands on GitHub.
 //
@@ -79,6 +80,7 @@
 // Swipe left/right to move through the different pages
 // Double Tap to disable and enable auto scrolling
 // On the Face Page: single press the screen to switch to different faces
+// Stock page: tap for the next stock
 //
 // Enjoy and have fun with Monitor-Buddy
 //
@@ -100,8 +102,10 @@
 #include <AyresWiFiManager.h>
 #include <esp_mac.h>
 #include "settings.h"
+#include "nightmode.h"
 #include "protocol.h"
 #include "display_fmt.h"
+#include "coin.h"
 
 // Set from the release tag by the release workflow (-DFW_VERSION=\"1.2.0\").
 #ifndef FW_VERSION
@@ -160,6 +164,37 @@ static_assert(sizeof(AP_PASS) == 1 || (sizeof(AP_PASS) >= 9 && sizeof(AP_PASS) <
 static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-26 characters");
 #define AWM_HOSTNAME "Monitor-Buddy"
 
+// ── Personal-build options (config.h) ───────────────────────
+// The defaults for what the web flasher can change on the board.
+// CLOCK_12H       true shows 1-12 with AM/PM instead of 00-23.
+// NIGHT_MODE      true dims the backlight and gives the face a sleepy look
+//                 from NIGHT_START_HOUR until NIGHT_END_HOUR (local time).
+//                 A tap brings the normal brightness back for
+//                 NIGHT_WAKE_MS. Off until the clock has synced over NTP.
+// NIGHT_BRIGHTNESS backlight level at night, 8-255.
+#ifndef CLOCK_12H
+  #define CLOCK_12H false
+#endif
+#ifndef NIGHT_MODE
+  #define NIGHT_MODE false
+#endif
+#ifndef NIGHT_START_HOUR
+  #define NIGHT_START_HOUR 23
+#endif
+#ifndef NIGHT_END_HOUR
+  #define NIGHT_END_HOUR 7
+#endif
+#ifndef NIGHT_BRIGHTNESS
+  #define NIGHT_BRIGHTNESS 26
+#endif
+#ifndef NIGHT_WAKE_MS
+  #define NIGHT_WAKE_MS 30000UL
+#endif
+static_assert(NIGHT_START_HOUR >= 0 && NIGHT_START_HOUR <= 23, "NIGHT_START_HOUR must be 0-23");
+static_assert(NIGHT_END_HOUR >= 0 && NIGHT_END_HOUR <= 23, "NIGHT_END_HOUR must be 0-23");
+static_assert(NIGHT_BRIGHTNESS >= 8 && NIGHT_BRIGHTNESS <= 255, "NIGHT_BRIGHTNESS must be 8-255");
+static_assert(NIGHT_START_HOUR != NIGHT_END_HOUR, "NIGHT_START_HOUR and NIGHT_END_HOUR must differ");
+
 // How long the portal stays open with nobody using it, in seconds.
 // The timer is reset by any connected AP client and by every HTTP
 // request, so it will not close while you are actually using it.
@@ -200,6 +235,9 @@ static_assert(sizeof(AP_SSID) >= 2 && sizeof(AP_SSID) <= 27, "AP_SSID must be 1-
 // One call per minute is well within that, so this configuration will not hit
 // the rate limit. Fetches only happen while the stock page is actually shown.
 #define STOCK_REFRESH_MS  60000UL   // minimum ms between stock API calls (60 s)
+// The coin on screen: its price every minute, its hourly chart every 15 minutes.
+static constexpr uint32_t COIN_REFRESH_MS       = 60000UL;
+static constexpr uint32_t COIN_CHART_REFRESH_MS = 15UL * 60UL * 1000UL;
 
 static constexpr uint8_t BRIGHTNESS_DEFAULT = 180;
 static constexpr uint8_t BRIGHTNESS_MINIMUM = 8;
@@ -299,6 +337,11 @@ void drawPageDots();
 void drawHeader(const char *title);
 void switchApp(int8_t delta);
 void buildPageList();
+void buildStockList();
+void buildCoinList();
+bool coinConfigured();
+bool fetchCoin();
+void drawCoin();
 bool wifiConfigured();
 bool githubConfigured();
 bool stockConfigured();
@@ -331,6 +374,13 @@ void serviceProtocol();
 void saveDisplaySettings();
 void setBrightness(int level);
 void flushBrightnessSave(bool now);
+void writeBacklight(uint8_t level);
+uint8_t backlightTarget();
+bool nightDimming();
+void nightWake();
+void updateNightMode();
+void setNightBrightness(uint8_t level);
+void flushNightSave(bool now);
 
 // V2 additions
 void drawBootMessage(const char *l1, const char *l2, const char *l3);
@@ -586,7 +636,7 @@ bool bsp_touch_get_coordinates(uint16_t *outX, uint16_t *outY) {
 
 static const int SCREEN_W         = 320;
 static const int SCREEN_H         = 172;
-static const uint8_t APP_COUNT    = 7;   // total number of pages defined
+static const uint8_t APP_COUNT    = 8;   // total number of pages defined
 
 // Page identifiers, in fixed display order. These index the render switch in
 // loop(); which are actually shown is decided by settings.pages.
@@ -597,6 +647,7 @@ static constexpr uint8_t PAGE_WEATHER = 3;
 static constexpr uint8_t PAGE_MOON    = 4;
 static constexpr uint8_t PAGE_STOCK   = 5;
 static constexpr uint8_t PAGE_GITHUB  = 6;
+static constexpr uint8_t PAGE_COIN    = 7;
 
 // -- Face expressions (ported from DESKBUDDY-1.0, Edison Science Corner) --
 // 9 moods, cycled by single-tapping the face page. A fast spin of the board
@@ -622,16 +673,20 @@ float   tiltSign       = 1.0f;
 
 // ── Settings ──────────────────────────────────────────────
 // Loaded once in setup() from /config.json, with the config.h values as the
-// defaults. Never changed while running: every save restarts the board, so
-// netTask may read them without a lock.
+// defaults. Only night.brightness changes while running, written from the
+// loop by a night swipe, and netTask never reads it. The rest stays as loaded:
+// every other save restarts the board, so netTask may read them without a lock.
+// settings.brightness is only a copy of brightnessLevel for GET and for the
+// file: /display.json is the one truth, so a swipe never creates /config.json
+// and the copy in the file is ignored at boot. Refresh it before using it.
 static const char *const CONFIG_PATH = "/config.json";
 Settings  settings;
 AddedKeys settingsAdded;   // keys /config.json lacked; reported by GET
-bool settingsStored = false;   // booted from a readable /config.json; GET "stored"
+bool settingsStored = false;   // /config.json was readable at boot, or a self-save wrote it; GET "stored"
 
 static_assert(PAGE_FACE == 0 && PAGE_CLOCK == 1 && PAGE_DATE == 2 &&
               PAGE_WEATHER == 3 && PAGE_MOON == 4 && PAGE_STOCK == 5 &&
-              PAGE_GITHUB == 6, "settings.pages[] is indexed by PAGE_* ids");
+              PAGE_GITHUB == 6 && PAGE_COIN == 7, "settings.pages[] is indexed by PAGE_* ids");
 static_assert(SETTINGS_PAGE_COUNT == APP_COUNT,
               "settings.pages[] needs one entry per page");
 
@@ -671,6 +726,9 @@ uint32_t touchStartMs    = 0;
 uint8_t  touchMissFrames  = 0;
 bool     touchMoved       = false;
 bool     touchSwipeDone   = false;  // page swipe fired; ignore this press until release
+bool     touchDark        = false;  // this press began on a dimmed screen. Decided once,
+                                    // so a window edge can't split a press in two
+bool     touchNightStepped = false; // this press changed the night level, so it doesn't wake
 uint8_t  tapCount        = 0;
 uint32_t lastTapMs        = 0;
 uint32_t autoPageBannerUntil = 0;
@@ -683,6 +741,15 @@ uint32_t brightnessBannerUntil = 0;
 uint8_t  savedBrightness       = BRIGHTNESS_DEFAULT;  // level in /display.json
 bool     brightnessSavePending = false;
 uint32_t brightnessChangedMs   = 0;
+bool     nightActive     = false;   // inside the night window (needs a trusted clock)
+bool     nightWoken      = false;   // a tap at night lifts the dimming...
+uint32_t nightWokenAt    = 0;       // ...for NIGHT_WAKE_MS from this millis()
+uint8_t  backlightOut    = 0;       // level last written to the backlight PWM
+bool     nightBanner      = false;  // the brightness banner shows the night level
+bool     nightSavePending = false;  // a swiped night level is waiting for flushNightSave()
+uint8_t  savedNightBrightness = 0;  // night level in /config.json, or the default if none
+bool     configReplaced   = false;  // a SET or DEFAULTS replaced /config.json: `settings`
+                                    // no longer matches it, so no self-save before a restart
 uint32_t lastSerialMs   = 0;
 uint32_t clockStartMillis   = 0;
 uint32_t clockStartSeconds  = 0;
@@ -708,11 +775,55 @@ float pressPulse   = 0.0f;
 struct WeatherData { bool valid; int temp, humidity, wind, code; bool isDay; uint32_t updatedAt; };
 struct StockData   { bool valid; float price, open, high, low, prevClose; uint32_t updatedAt; };
 struct GithubData  { bool valid; int followers, repos;            uint32_t updatedAt; };
-struct NetData     { WeatherData weather; StockData stock; GithubData github; };
+struct CoinData {
+  bool     valid, notFound;
+  double   price;                 // a float keeps ~7 digits; BTC's cents need more
+  float    open, high, low, ref;  // ref: Coinbase 24 h open, Finnhub previous close
+  uint8_t  chartCount;            // Coinbase only; 0 = no chart yet
+  float    chart[24];             // hourly closes, oldest first
+  uint32_t updatedAt, chartAt;
+};
+// One quote per stock slot (indexed like settings.stocks), so tapping back to
+// a stock shows its last value at once.
+struct NetData     { WeatherData weather; StockData stocks[SETTINGS_STOCK_MAX]; GithubData github; CoinData coins[SETTINGS_COIN_MAX]; };
 
 NetData           netShared = {};
 NetData           netView   = {};
 SemaphoreHandle_t netMutex  = nullptr;
+
+// The stock slots that are on, in slot order, built once in setup(): taps,
+// fetching, the entry dots and drawing use only these.
+uint8_t          stockActive[SETTINGS_STOCK_MAX];
+uint8_t          stockActiveCount = 0;
+volatile uint8_t stockSub         = 0;   // position in stockActive; read by netTask
+uint8_t          stockFetchIdx    = 0;   // the slot fetchStock() asks for (netTask only)
+
+void buildStockList() {
+  stockActiveCount = 0;
+  for (uint8_t i = 0; i < settings.stockCount && i < SETTINGS_STOCK_MAX; i++)
+    if (settings.stocks[i].on) stockActive[stockActiveCount++] = i;
+  if (stockSub >= stockActiveCount) stockSub = 0;
+}
+
+// The slot of the stock on screen.
+static uint8_t shownStock() { return stockActive[stockActiveCount ? stockSub % stockActiveCount : 0]; }
+
+// The coin slots that can be shown: on, and Coinbase or (Finnhub with a key).
+uint8_t          coinActive[SETTINGS_COIN_MAX];
+uint8_t          coinActiveCount = 0;
+volatile uint8_t coinSub         = 0;   // position in coinActive; read by netTask
+uint8_t          coinFetchIdx    = 0;   // the slot fetchCoin() asks for (netTask only)
+
+void buildCoinList() {
+  coinActiveCount = 0;
+  for (uint8_t i = 0; i < settings.coinCount && i < SETTINGS_COIN_MAX; i++) {
+    const Coin &c = settings.coins[i];
+    if (c.on && (c.source == COIN_COINBASE || settings.stockKey[0] != '\0')) coinActive[coinActiveCount++] = i;
+  }
+  if (coinSub >= coinActiveCount) coinSub = 0;
+}
+static uint8_t shownCoin() { return coinActive[coinActiveCount ? coinSub % coinActiveCount : 0]; }
+bool coinConfigured() { return coinActiveCount > 0; }
 
 // Store one fetch result for the UI. The lock covers only this copy.
 template <typename T>
@@ -980,6 +1091,17 @@ void drawPageDots() {
     else
       gfx->drawCircle(startX+i*16, SCREEN_H-12, 2, rgb(90,90,90));
   }
+  // Entry dots on the right edge on a page with several entries (spec D9):
+  // filled = the stock shown, hollow = the others, like the page dots.
+  const uint8_t entries = currentApp == PAGE_STOCK ? stockActiveCount : currentApp == PAGE_COIN ? coinActiveCount : 0;
+  const uint8_t shown   = currentApp == PAGE_STOCK ? stockSub : coinSub;
+  if (entries >= 2) {
+    for (uint8_t i = 0; i < entries; i++) {
+      const int y = subDotY(i, entries, SCREEN_H);
+      if (i == shown % entries) gfx->fillCircle(SCREEN_W - 8, y, 3, FG);
+      else                      gfx->drawCircle(SCREEN_W - 8, y, 2, rgb(90, 90, 90));
+    }
+  }
 }
 
 void drawHeader(const char *title) {
@@ -1008,13 +1130,21 @@ void drawBootMessage(const char *l1, const char *l2, const char *l3) {
 
 // ── App navigation ────────────────────────────────────────
 
+// The order pages are shown in, separate from their storage index (the coin
+// page joins after the stock page in phase 2).
+static const uint8_t PAGE_SHOW_ORDER[] = {PAGE_FACE, PAGE_CLOCK, PAGE_DATE, PAGE_WEATHER,
+                                          PAGE_MOON, PAGE_STOCK, PAGE_COIN, PAGE_GITHUB};
+static_assert(sizeof(PAGE_SHOW_ORDER) == SETTINGS_PAGE_COUNT, "every page has a place in the order");
+
 // Build the list of enabled pages (in fixed order) from settings.pages.
 // Falls back to the Face page if everything is switched off, so the screen is
 // never left blank.
 void buildPageList() {
   pageCount = 0;
-  for (uint8_t i = 0; i < SETTINGS_PAGE_COUNT; i++) {
+  for (uint8_t n = 0; n < SETTINGS_PAGE_COUNT; n++) {
+    const uint8_t i = PAGE_SHOW_ORDER[n];
     if (!settings.pages[i]) continue;
+    if (i == PAGE_COIN && !coinConfigured()) continue;      // nothing to show hides the page
     if (i == PAGE_GITHUB && !githubConfigured()) continue;  // "" hides the page
     if (i == PAGE_STOCK && !stockConfigured()) continue;    // no key hides the page
     pageOrder[pageCount++] = i;
@@ -1042,7 +1172,7 @@ void switchApp(int8_t delta) {
 // non-empty ssid+password were parsed from it at begin().
 bool wifiConfigured() { return wifiManager.tieneCredenciales(); }
 bool githubConfigured() { return settings.githubUser[0] != '\0'; }
-bool stockConfigured() { return settings.stockKey[0] != '\0'; }
+bool stockConfigured() { return settings.stockKey[0] != '\0' && stockActiveCount > 0; }
 
 // Network fetches call this before doing anything. It is a pure status
 // check — AWM owns connecting and reconnecting. It refuses while the captive
@@ -1215,13 +1345,14 @@ bool fetchWeather() {
 
 bool fetchStock() {
   if (!ensureWifi()) return false;
+  const uint8_t slot = stockFetchIdx;
   WiFiClientSecure client;
   client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
   client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  String url = String("https://finnhub.io/api/v1/quote?symbol=") + settings.ticker
+  String url = String("https://finnhub.io/api/v1/quote?symbol=") + settings.stocks[slot].symbol
              + "&token=" + settings.stockKey;
   if (!http.begin(client, url))
     return false;
@@ -1245,7 +1376,93 @@ bool fetchStock() {
   s.prevClose = doc["pc"].as<float>();   // "pc" → previous close (0 if missing)
   s.updatedAt = millis();
   s.valid     = true;
-  publishNetData(netShared.stock, s);
+  publishNetData(netShared.stocks[slot], s);
+  return true;
+}
+
+// ── Coin fetch ────────────────────────────────────────────
+// Coinbase Exchange (no key): /products/<pair>/stats for the price, and
+// /candles?granularity=3600 for the 24 h chart, scanned in place by
+// parseCandleCloses (a response is about 21 KB). Finnhub (key) gives the same
+// quote shape as a stock, for COINBASE:<pair>, but no chart.
+
+// One HTTPS GET into `body`. False on any failure; *status gets the HTTP code
+// (0 if no response), so a 404 can be told apart.
+static bool coinbaseGet(const char *url, String &body, int *status) {
+  *status = 0;
+  WiFiClientSecure client;
+  client.useBuiltinCACertBundle();   // verify the server against the Mozilla roots
+  client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setUserAgent("Monitor-Buddy/" FW_VERSION);   // Coinbase rejects requests without one
+  if (!http.begin(client, url)) return false;
+  *status = http.GET();
+  if (*status != HTTP_CODE_OK) { http.end(); return false; }
+  body = http.getString();
+  http.end();
+  return body.length() > 0;
+}
+
+// The coin on screen (coinFetchIdx), from its source. Unknown pair -> notFound.
+// NOTE: settings.stockKey holds the Finnhub API token. Never log it.
+bool fetchCoin() {
+  if (!ensureWifi()) return false;
+  const uint8_t slot = coinFetchIdx;
+  const Coin &c = settings.coins[slot];
+  CoinData d = netShared.coins[slot];   // netTask is the only writer
+  if (c.source == COIN_FINNHUB) {
+    // Same reply as a stock quote; all zeros for a pair Finnhub doesn't know.
+    WiFiClientSecure client; client.useBuiltinCACertBundle(); client.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+    HTTPClient http; http.setTimeout(HTTP_TIMEOUT_MS); http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+    String url = String("https://finnhub.io/api/v1/quote?symbol=COINBASE:") + c.pair + "&token=" + settings.stockKey;
+    if (!http.begin(client, url)) return false;
+    if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+    JsonDocument doc;
+    const DeserializationError err = deserializeJson(doc, http.getString());
+    http.end();
+    if (err) return false;
+    const double last = doc["c"] | 0.0;
+    if (last <= 0.0) { d.notFound = true; publishNetData(netShared.coins[slot], d); return true; }
+    d.price = last; d.open = doc["o"] | 0.0f; d.high = doc["h"] | 0.0f; d.low = doc["l"] | 0.0f;
+    d.ref = doc["pc"] | 0.0f;
+  } else {
+    char url[96];
+    snprintf(url, sizeof url, "https://api.exchange.coinbase.com/products/%s/stats", c.pair);
+    String body; int status = 0;
+    if (!coinbaseGet(url, body, &status)) {
+      if (status == 404) { d.notFound = true; publishNetData(netShared.coins[slot], d); return true; }
+      return false;
+    }
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) return false;
+    const double last = strtod(doc["last"] | "0", nullptr);
+    if (last <= 0.0) return false;
+    d.price = last;
+    d.open = d.ref = strtof(doc["open"] | "0", nullptr);
+    d.high = strtof(doc["high"] | "0", nullptr);
+    d.low  = strtof(doc["low"]  | "0", nullptr);
+    // The chart changes hourly; it needs the clock for its time range.
+    if (clockTrusted && (d.chartCount == 0 || millis() - d.chartAt >= COIN_CHART_REFRESH_MS)) {
+      char from[24], to[24];
+      const long long now = (long long)time(nullptr);
+      if (formatIsoUtc(now - 24LL * 3600, from, sizeof from) && formatIsoUtc(now, to, sizeof to)) {
+        char curl[192];
+        snprintf(curl, sizeof curl, "https://api.exchange.coinbase.com/products/%s/candles?granularity=3600&start=%s&end=%s", c.pair, from, to);
+        String candles; int cs = 0;
+        if (coinbaseGet(curl, candles, &cs)) {
+          float pts[24];
+          const uint8_t n = parseCandleCloses(candles.c_str(), pts, 24);
+          if (n >= 2) { memcpy(d.chart, pts, n * sizeof(float)); d.chartCount = n; d.chartAt = millis(); }
+          else Serial.println("[net] coin: candles response not understood");
+        }
+      }
+    }
+  }
+  d.updatedAt = millis();
+  d.valid = true;
+  publishNetData(netShared.coins[slot], d);
   return true;
 }
 
@@ -1661,12 +1878,23 @@ void drawDigit(int x, int y, uint8_t digit, int w, int h, int t, uint16_t color)
 
 void drawClock() {
   const LocalNow now = localNow();
-  const uint8_t hh = now.hour, mm = now.min, ss = now.sec;
+  uint8_t hh = now.hour;
+  const uint8_t mm = now.min, ss = now.sec;
+  const bool h12 = settings.clockFormat == CLOCK_12H_FORMAT;
+  const bool pm = hh >= 12;
+  if (h12) hh = hour12(hh);
   gfx->fillScreen(BG);
   const int W = 54, H = 100, T = 10, Y = 18;   // bigger 7-seg digits
   // HH:MM shifted left to make room for the seconds after the minutes.
-  drawDigit(8,   Y, hh/10, W, H, T, COL_TIME);
+  // 12-hour: no leading zero (" 9:41", not "09:41").
+  if (!h12 || hh >= 10) drawDigit(8, Y, hh/10, W, H, T, COL_TIME);
   drawDigit(70,  Y, hh%10, W, H, T, COL_TIME);
+  if (h12) {
+    // AM/PM above the seconds, top-aligned with the digits.
+    gfx->setTextSize(2); gfx->setTextColor(COL_SEC);
+    gfx->setCursor(282, Y + 4);
+    gfx->print(pm ? "PM" : "AM");
+  }
   if ((ss%2)==0) {
     gfx->fillRoundRect(134, Y+28, 11, 11, 5, COL_TIME);
     gfx->fillRoundRect(134, Y+62, 11, 11, 5, COL_TIME);
@@ -1809,7 +2037,9 @@ void drawMoon() {
 void drawStock() {
   gfx->fillScreen(BG);
   if (drawWifiGate()) return;
-  const StockData &s = netView.stock;
+  const uint8_t slot = shownStock();
+  const StockData &s = netView.stocks[slot];
+  const char *symbol = settings.stocks[slot].symbol;
   if (!s.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
   char pbuf[16];
   snprintf(pbuf, sizeof(pbuf), "$%.2f", s.price);
@@ -1822,12 +2052,12 @@ void drawStock() {
   // Ticker symbol on the left. Size 4 (twice the Open/High/Low text) for
   // symbols up to 5 characters; 6+ characters shrink so the text still fits
   // the left column, which must end before the O/H/L block at x=150.
-  int tlen  = (int)strlen(settings.ticker);
+  int tlen  = (int)strlen(symbol);
   int tsize = 4;
   while (tsize > 1 && tlen * 6 * tsize > 132) tsize--;   // ~132 px available
   gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
   gfx->setCursor(14, (ref > 0.0f ? 112 : 124) - 4 * tsize);  // centred, with or without the % line
-  gfx->print(settings.ticker);
+  gfx->print(symbol);
   // Day change in percent under the ticker, e.g. "+0.35%".
   if (ref > 0.0f) {
     char cbuf[12];
@@ -1845,6 +2075,152 @@ void drawStock() {
 }
 
 // ── GitHub page ───────────────────────────────────────────
+
+// 5x7 glyphs the display font lacks, drawn at the font's scale (bit 4 = left).
+static const uint8_t GLYPH_EURO[7]  = {0x07, 0x08, 0x1E, 0x08, 0x1E, 0x08, 0x07};
+static const uint8_t GLYPH_POUND[7] = {0x06, 0x09, 0x08, 0x1C, 0x08, 0x08, 0x1F};
+static void drawGlyph5x7(const uint8_t *rows, int x, int y, uint8_t size, uint16_t color) {
+  for (uint8_t r = 0; r < 7; r++)
+    for (uint8_t c = 0; c < 5; c++)
+      if (rows[r] & (0x10 >> c)) gfx->fillRect(x + c * size, y + r * size, size, size, color);
+}
+// The currency before a price: "$", a drawn £ or €, or "SGD ". Returns its width.
+static int drawCurrencyMark(CurrencyMark m, const char *code, int x, int y, uint8_t size, uint16_t color) {
+  if (m == CUR_EURO)  { drawGlyph5x7(GLYPH_EURO, x, y, size, color);  return 6 * size; }
+  if (m == CUR_POUND) { drawGlyph5x7(GLYPH_POUND, x, y, size, color); return 6 * size; }
+  gfx->setTextSize(size); gfx->setTextColor(color); gfx->setCursor(x, y);
+  if (m == CUR_DOLLAR) { gfx->print('$'); return 6 * size; }
+  gfx->print(code); gfx->print(' ');
+  return (int)(strlen(code) + 1) * 6 * size;
+}
+
+// 24 h line of hourly closes plus the live price, scaled into the box, with a
+// dim line at the reference (24 h open) when it falls inside the range.
+static void drawCoinChart(const CoinData &d, bool haveRef, uint16_t col, int sx, int sy, int sw, int sh) {
+  if (d.chartCount < 2) {
+    gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+    gfx->setCursor(sx + 30, sy + sh / 2 - 4);
+    gfx->print("CHART LOADING");
+    return;
+  }
+  float pts[25];
+  uint8_t n = d.chartCount > 24 ? 24 : d.chartCount;
+  memcpy(pts, d.chart, n * sizeof(float));
+  pts[n++] = (float)d.price;                  // end the line at the live price
+  float lo = pts[0], hi = pts[0];
+  for (uint8_t i = 1; i < n; i++) { lo = fminf(lo, pts[i]); hi = fmaxf(hi, pts[i]); }
+  // Flat market: keep it on screen, padded in proportion to the price.
+  if (hi - lo <= hi * 1e-6f) { const float pad = hi * 5e-4f + 1e-9f; hi += pad; lo -= pad; }
+  if (haveRef && d.ref >= lo && d.ref <= hi) {
+    const int ry = sy + sh - 1 - (int)lroundf((d.ref - lo) / (hi - lo) * (sh - 1));
+    for (int x = sx; x < sx + sw; x += 4) gfx->drawPixel(x, ry, rgb(80, 80, 80));
+  }
+  int px = 0, py = 0;
+  for (uint8_t i = 0; i < n; i++) {
+    const int x = sx + (int)lroundf((float)i * (sw - 1) / (n - 1));
+    const int y = sy + sh - 1 - (int)lroundf((pts[i] - lo) / (hi - lo) * (sh - 1));
+    if (i > 0) {
+      gfx->drawLine(px, py, x, y, col);
+      gfx->drawLine(px, py + 1, x, y + 1, col);   // 2 px thick
+    }
+    px = x; py = y;
+  }
+  gfx->fillCircle(px, py, 3, col);                // the live price
+}
+
+void drawCoin() {
+  gfx->fillScreen(BG);
+  if (drawWifiGate()) return;
+  const uint8_t slot = shownCoin();
+  const Coin &c = settings.coins[slot];
+  const CoinData &d = netView.coins[slot];
+  if (d.notFound) {
+    centeredText("NOT FOUND", 56, 3);
+    centeredText(c.pair, 100, 2);
+    drawPageDots(); return;
+  }
+  if (!d.valid) { centeredText("UPDATING", 74, 3); drawPageDots(); return; }
+
+  // Finnhub measures against the previous close, falling back to the open.
+  const float ref = (c.source == COIN_FINNHUB && d.ref <= 0.0f) ? d.open : d.ref;
+  const bool  haveRef = ref > 0.0f;
+  const bool  up = !haveRef || d.price >= ref;
+  const uint16_t col = up ? COL_PRICE_UP : COL_PRICE_DOWN;
+
+  // Price line: currency mark + number, the largest size that fits [0, 304).
+  char num[24]; formatCoinPrice(d.price, num, sizeof num);
+  char code[8]; const CurrencyMark m = currencyOf(c.pair, code, sizeof code);
+  const int markUnits = (m == CUR_CODE) ? (int)strlen(code) + 1 : 1;
+  const int numLen = (int)strlen(num);
+  uint8_t psize = 6;
+  while (psize > 3 && (markUnits + numLen) * 6 * psize > 304 - 16) psize--;
+  const int lineW = (markUnits + numLen) * 6 * psize;
+  const int py = 18 + (6 - psize) * 4;
+  int x0 = (304 - lineW) / 2; if (x0 < 0) x0 = 0;
+  const int mw = drawCurrencyMark(m, code, x0, py, psize, col);
+  gfx->setTextSize(psize); gfx->setTextColor(col);
+  gfx->setCursor(x0 + mw, py);
+  gfx->print(num);
+
+  // Base code: the part of the pair before '-'.
+  char base[12];
+  { size_t i = 0; while (c.pair[i] && c.pair[i] != '-' && i < sizeof(base) - 1) { base[i] = c.pair[i]; i++; } base[i] = '\0'; }
+
+  char cbuf[12];
+  snprintf(cbuf, sizeof(cbuf), "%+.2f%%", haveRef ? (d.price - ref) / ref * 100.0 : 0.0);
+
+  if (c.source == COIN_COINBASE) {
+    int bsize = 4;
+    while (bsize > 1 && (int)strlen(base) * 6 * bsize > 112) bsize--;   // chart starts at x 132
+    gfx->setTextSize(bsize); gfx->setTextColor(COL_TICKER);
+    gfx->setCursor(14, 82 + (4 - bsize) * 4);
+    gfx->print(base);
+    if (haveRef) {
+      gfx->setTextSize(2); gfx->setTextColor(col);
+      gfx->setCursor(14, 120);
+      gfx->print(cbuf);
+    }
+    if (d.high > 0.0f && d.low > 0.0f) {
+      char hi[16], lo[16], line[40];
+      formatCoinPrice(d.high, hi, sizeof hi);
+      formatCoinPrice(d.low, lo, sizeof lo);
+      snprintf(line, sizeof line, "H %s  L %s", hi, lo);
+      gfx->setTextSize(1); gfx->setTextColor(COL_LABEL);
+      gfx->setCursor(14, 144);
+      gfx->print(line);
+    }
+    const int sx = 132, sy = 82, sw = SCREEN_W - 17 - sx, sh = 58;
+    drawCoinChart(d, haveRef, col, sx, sy, sw, sh);
+  } else {
+    // Finnhub: the stock page's layout. Ref is the previous close, else the open.
+    const float fref = ref;
+    const uint16_t fcol = col;
+    int tsize = 4;
+    while (tsize > 1 && (int)strlen(base) * 6 * tsize > 132) tsize--;
+    gfx->setTextSize(tsize); gfx->setTextColor(COL_TICKER);
+    gfx->setCursor(14, (fref > 0.0f ? 112 : 124) - 4 * tsize);
+    gfx->print(base);
+    if (fref > 0.0f) {
+      snprintf(cbuf, sizeof(cbuf), "%+.2f%%", (d.price - fref) / fref * 100.0);
+      gfx->setTextSize(2); gfx->setTextColor(fcol);
+      gfx->setCursor(14, 132);
+      gfx->print(cbuf);
+    }
+    char vo[16], vh[16], vl[16];
+    formatCoinPrice(d.open, vo, sizeof vo);
+    formatCoinPrice(d.high, vh, sizeof vh);
+    formatCoinPrice(d.low, vl, sizeof vl);
+    size_t mx = strlen(vo); if (strlen(vh) > mx) mx = strlen(vh); if (strlen(vl) > mx) mx = strlen(vl);
+    // Labels of 6 chars ("OPEN  ") plus the value must end before x 306.
+    const uint8_t vsize = ((6 + (int)mx) * 12 <= 306 - 150) ? 2 : 1;
+    gfx->setTextSize(vsize); gfx->setTextColor(COL_VALUE);
+    const int ys[3] = {92, 116, 140};
+    gfx->setCursor(150, ys[0]); gfx->print("OPEN  "); gfx->print(vo);
+    gfx->setCursor(150, ys[1]); gfx->print("HIGH  "); gfx->print(vh);
+    gfx->setCursor(150, ys[2]); gfx->print("LOW   "); gfx->print(vl);
+  }
+  drawPageDots();
+}
 
 void drawGithub() {
   gfx->fillScreen(BG);
@@ -1976,15 +2352,25 @@ Settings defaultsFromConfig() {
   else if (!tzRuleFromOffset(TZ_OFFSET_HOURS, d.tzRule, sizeof(d.tzRule)))
     strlcpy(d.tzRule, "UTC0", sizeof(d.tzRule));
   strlcpy(d.ticker,   TICKER,   sizeof(d.ticker));
+  strlcpy(d.stocks[0].symbol, TICKER, sizeof(d.stocks[0].symbol));   // config.h's ticker is the first stock
+  d.stocks[0].on = true;
+  d.stockCount   = 1;
+  strlcpy(d.coins[0].pair, "BTC-USD", sizeof(d.coins[0].pair));
+  d.coins[0].source = COIN_COINBASE;
+  d.coins[0].on     = true;
+  d.coinCount       = 1;
   // Before 1.2 the template's key was the placeholder "xxxxxxx": no key at all,
   // so it hides the stock page like "" does (the web flasher maps it the same).
   strlcpy(d.stockKey, strcmp(STOCKKEY, "xxxxxxx") == 0 ? "" : STOCKKEY, sizeof(d.stockKey));
   strlcpy(d.lat,      LAT,      sizeof(d.lat));
   strlcpy(d.lon,      LONG,     sizeof(d.lon));
+  d.clockFormat = CLOCK_12H ? CLOCK_12H_FORMAT : CLOCK_24H;
+  d.brightness = BRIGHTNESS_DEFAULT;
+  d.night = {NIGHT_MODE, NIGHT_START_HOUR, NIGHT_END_HOUR, NIGHT_BRIGHTNESS};
   d.tempUnit = TEMP[0] == 'f' ? TEMP_FAHRENHEIT : TEMP_CELSIUS;
   d.windUnit = strcmp(WIND, "mph") == 0 ? WIND_MPH : WIND_KMH;
   const bool pages[SETTINGS_PAGE_COUNT] = {SHOW_FACE, SHOW_CLOCK, SHOW_DATE,
-      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB};
+      SHOW_WEATHER, SHOW_MOON, SHOW_STOCK, SHOW_GITHUB, true};
   memcpy(d.pages, pages, sizeof(pages));
   return d;
 }
@@ -2139,6 +2525,7 @@ void mbGet() {
   JsonDocument doc;
   doc["v"]      = CONFIG_VERSION;
   doc["stored"] = settingsStored;
+  settings.brightness = brightnessLevel;   // it may have been swiped since boot
   settingsToJson(settings, doc["config"].to<JsonObject>());
   JsonArray added = doc["added"].to<JsonArray>();
   for (uint8_t i = 0; i < settingsAdded.count; i++) added.add(settingsAdded.keys[i]);
@@ -2153,6 +2540,7 @@ void mbSet(JsonDocument &req) {
   JsonVariantConst cfg  = req["config"];
   JsonVariantConst wifi = req["wifi"];
 
+  settings.brightness = brightnessLevel;   // a partial SET keeps it
   JsonDocument res;
   JsonObject errors = res["errors"].to<JsonObject>();
   Settings next = settings;
@@ -2166,6 +2554,11 @@ void mbSet(JsonDocument &req) {
     JsonDocument file;
     settingsToJson(next, file.to<JsonObject>());
     if (!writeJsonAtomic(CONFIG_PATH, file)) { mbError("could not save settings"); return; }
+    configReplaced = true;                // `next` went out with the swiped level in it
+    if (next.brightness != brightnessLevel) {   // /display.json holds it, written by the restart's flush
+      brightnessLevel = next.brightness;
+      brightnessSavePending = true;
+    }
   }
   if (!wifi.isNull()) {
     JsonDocument file;                    // AWM's plain format
@@ -2189,6 +2582,7 @@ void mbDefaults() {
     mbError("could not reset settings");
     return;
   }
+  configReplaced = true;
   mbOk();
   Serial.println("settings: reset to config.h values, restarting");
   scheduleRestart();
@@ -2230,6 +2624,7 @@ void serviceProtocol() {
   }
   if (restartAtMs != 0 && (int32_t)(millis() - restartAtMs) >= 0) {
     flushBrightnessSave(true);            // don't lose a just-swiped brightness
+    flushNightSave(true);
     ESP.restart();
   }
 }
@@ -2257,7 +2652,7 @@ void loadDisplaySettings() {
 
 void setBrightness(int level) {
   brightnessLevel = (uint8_t)constrain(level, BRIGHTNESS_MINIMUM, 255);
-  ledcWrite(LCD_BL, brightnessLevel);
+  nightBanner = false;
   brightnessSavePending = true;           // written by flushBrightnessSave()
   brightnessChangedMs   = millis();
   brightnessBannerUntil = (millis() + 1200) | 1;   // 0 means no banner
@@ -2301,9 +2696,16 @@ void triggerFaceTap() {
     tapCount = 1;
   }
   lastTapMs = now;
-  // Single-tap behaviour
-  if (currentApp == 0) {
-    faceMood = (faceMood+1) % FACE_MOOD_COUNT;
+  // Single tap: the next entry on a page that has several (face moods, the
+  // stocks that are on), else the next page (spec stocks-and-coins §5.1).
+  if (currentApp == PAGE_FACE) {
+    faceMood = (faceMood + 1) % FACE_MOOD_COUNT;
+    pressPulse = 1.0f;
+  } else if (currentApp == PAGE_STOCK && stockActiveCount >= 2) {
+    stockSub = (stockSub + 1) % stockActiveCount;
+    pressPulse = 1.0f;
+  } else if (currentApp == PAGE_COIN && coinActiveCount >= 2) {
+    coinSub = (coinSub + 1) % coinActiveCount;
     pressPulse = 1.0f;
   } else {
     switchApp(1);
@@ -2335,6 +2737,8 @@ void readTouch() {
   bsp_touch_read();
   if (bsp_touch_get_coordinates(&x, &y)) {
     uint32_t now = millis();
+    const bool dimming = nightDimming();  // first: this retires a wake that has run out
+    if (nightWoken) nightWokenAt = now;   // still in use: keep the night wake going
     touchLastX = x; touchLastY = y;
     touchMissFrames = 0;
     if (!touchWasDown) {
@@ -2342,7 +2746,9 @@ void readTouch() {
       touchMoved = false;
       touchSwipeDone = false;
       touchWasDown = true;
-      touchPortalArmed = true;   // this press is eligible to open the portal
+      touchDark = dimming;
+      touchNightStepped = false;
+      touchPortalArmed = !dimming;   // this press is eligible to open the portal
       return;
     }
     // A page swipe already fired for this press: the rest of the contact is
@@ -2354,7 +2760,7 @@ void readTouch() {
 
     // Touch-and-hold (still, ~2.5 s) → open the Wi-Fi setup portal.
     // Fires once per press; a swipe cancels it.
-    if (touchPortalArmed && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
+    if (touchPortalArmed && !dimming && !touchMoved && (now - touchStartMs) > TOUCH_PORTAL_HOLD_MS) {
       touchPortalArmed = false;
       openSetupPortal("touch hold");
       return;
@@ -2364,12 +2770,21 @@ void readTouch() {
     // moved, so holding still afterwards can't open the portal and lifting
     // can't count as a tap. The press ends only when the finger lifts.
     if (abs(dx) > 55 && abs(dx) > abs(dy)+18) {
-      switchApp(dx < 0 ? 1 : -1);
+      if (touchDark) nightWake();                 // the dark: wake, don't flip the page
+      else switchApp(dx < 0 ? 1 : -1);
       touchSwipeDone = true;     // one page per swipe
       touchMoved = true;
       touchPortalArmed = false;
     } else if (abs(dy) > 55 && abs(dy) > abs(dx)+18) {
-      setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      if (settings.night.enabled && nightActive) {
+        // The whole night window, woken or not: back to the night level, so
+        // the swipe shows what it changes.
+        nightWoken = false;
+        setNightBrightness(nightStep(settings.night.brightness, dy < 0));
+        touchNightStepped = true;
+      } else {
+        setBrightness((int)brightnessLevel + (dy < 0 ? 24 : -24));
+      }
       // Re-base so a continued drag steps brightness again every 55 px.
       touchStartX = x; touchStartY = y;
       touchMoved = true;
@@ -2383,7 +2798,17 @@ void readTouch() {
     uint32_t pressMs = millis() - touchStartMs;
     int16_t dx = (int16_t)touchLastX-(int16_t)touchStartX;
     int16_t dy = (int16_t)touchLastY-(int16_t)touchStartY;
-    if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
+    if (touchDark) {
+      // The dark: a press wakes, however long, and never counts as half a
+      // double tap. A short up or down drag doesn't: it was a swipe that fell
+      // short of a step, not a request to wake.
+      const bool shortDrag = touchMoved && abs(dy) > abs(dx);
+      if (pressMs >= 35 && !touchSwipeDone && !touchNightStepped && !shortDrag) {
+        nightWake();
+        tapCount = 0;
+        lastTapMs = 0;
+      }
+    } else if (pressMs >= 35 && pressMs <= 650 && !touchMoved && abs(dx) < 35 && abs(dy) < 35) {
       triggerFaceTap();
     }
     touchWasDown = false;
@@ -2392,6 +2817,78 @@ void readTouch() {
     touchSwipeDone = false;
     touchPortalArmed = false;
   }
+}
+
+// ── Night mode ────────────────────────────────────────────
+// The only place that writes the backlight, so backlightOut stays true.
+void writeBacklight(uint8_t level) {
+  if (level == backlightOut) return;
+  ledcWrite(LCD_BL, level);
+  backlightOut = level;
+}
+
+// True while night mode has the screen dimmed. A tap lifts it for NIGHT_WAKE_MS.
+bool nightDimming() {
+  if (nightWoken && millis() - nightWokenAt >= NIGHT_WAKE_MS) nightWoken = false;
+  return settings.night.enabled && nightActive && !nightWoken;
+}
+
+// The backlight level right now: the night level as the user set it (it may be
+// above the day brightness), or the day brightness.
+uint8_t backlightTarget() {
+  return nightDimming() ? settings.night.brightness : brightnessLevel;
+}
+
+void nightWake() {
+  if (!settings.night.enabled || !nightActive) return;
+  nightWoken   = true;
+  nightWokenAt = millis();
+}
+
+// A swipe at night: changes the level now, saved once the swipes settle.
+void setNightBrightness(uint8_t level) {
+  settings.night.brightness = level;
+  nightSavePending = true;
+  brightnessChangedMs = millis();
+  brightnessBannerUntil = (millis() + 1200) | 1;
+  nightBanner = true;
+  Serial.printf("Night brightness: %u/255\n", (unsigned)level);
+}
+
+// Writes a pending night level once the swipes have settled: one write, never
+// one per swipe, and none while the finger is down. Skips the write when the
+// level ended where it started. settingsToJson writes every setting, so unknown
+// keys in the file are dropped, as by a SET.
+void flushNightSave(bool now) {
+  if (!now && touchWasDown) return;
+  if (!nightSavePending) return;
+  if (configReplaced) { nightSavePending = false; return; }
+  if (!now && millis() - brightnessChangedMs < BRIGHTNESS_SAVE_DELAY_MS) return;
+  nightSavePending = false;
+  if (settings.night.brightness == savedNightBrightness) return;
+  settings.brightness = brightnessLevel;
+  JsonDocument file;
+  settingsToJson(settings, file.to<JsonObject>());
+  if (file.overflowed()) { Serial.println("night: could not save"); return; }
+  if (!writeJsonAtomic(CONFIG_PATH, file)) { Serial.println("night: could not save"); return; }
+  savedNightBrightness = settings.night.brightness;
+  settingsStored = true;                  // a source build now has a file
+  settingsAdded.count = 0;                // the file has every key now
+  Serial.printf("Night brightness saved: %u/255\n", (unsigned)settings.night.brightness);
+}
+
+void updateNightMode() {
+  if (settings.night.enabled && clockTrusted) {
+    const bool inWindow = inNightWindow(currentClockHour(), settings.night.start, settings.night.end);
+    if (inWindow != nightActive) {
+      nightActive = inWindow;
+      nightWoken  = false;                                  // a wake ends with its night
+      if (inWindow) faceMood = MOOD_SLEEPY;                 // a tap still changes it
+      else if (faceMood == MOOD_SLEEPY) faceMood = MOOD_NORMAL;
+      Serial.printf("Night mode: %s\n", inWindow ? "on" : "off");
+    }
+  }
+  writeBacklight(backlightTarget());
 }
 
 void updateFaceTimers() {
@@ -2421,7 +2918,7 @@ static uint8_t currentClockHour() {
 
 // ── Background fetch task ────────────────────────────────
 // Owns the fetch schedule so loop() never waits on the network:
-//   stock   every STOCK_REFRESH_MS, only while the stock page is shown
+//   stock   the stock on screen, when its quote is STOCK_REFRESH_MS old
 //   weather prefetched every WEATHER_REFRESH_INTERVAL_MS
 //   GitHub  prefetched every GITHUB_REFRESH_INTERVAL_MS
 // A failed fetch backs off 10 s, 20 s, 40 s, ... (see FETCH_RETRY_MIN_MS). At
@@ -2469,7 +2966,7 @@ static void logNetHealth() {
 }
 
 void netTask(void *) {
-  FetchPacer weatherPacer, stockPacer, githubPacer;
+  FetchPacer weatherPacer, stockPacer, githubPacer, finnhubCoinPacer, coinbasePacer;
   uint32_t lastHealthLogMs = millis();
   bool tlsHealthLogged = false;
 
@@ -2479,10 +2976,25 @@ void netTask(void *) {
     // This task is netShared's only writer, so it may read it without the lock.
     const uint32_t now = millis();
     bool ran = false, usedTls = false;
-    // Weather and GitHub are paced by data age after a success (okWaitMs 0),
-    // stock by STOCK_REFRESH_MS; all three back off after a failure.
-    if (settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK && stockPacer.ready(now)) {
-      runFetch("stock", fetchStock, stockPacer, now, STOCK_REFRESH_MS, FETCH_RETRY_MS);
+    // Stock is paced by each stock's own age (okWaitMs 0), weather and GitHub by data age; all back off after a failure.
+    // The stock on screen, when its own quote is a minute old (or missing).
+    const uint8_t slot = shownStock();
+    const StockData &shownQuote = netShared.stocks[slot];
+    const bool stockDue = settings.pages[PAGE_STOCK] && stockConfigured() && currentApp == PAGE_STOCK
+        && (!shownQuote.valid || now - shownQuote.updatedAt >= STOCK_REFRESH_MS) && stockPacer.ready(now);
+    const uint8_t cslot = shownCoin();
+    const CoinData &cq = netShared.coins[cslot];
+    const bool coinFinnhub = settings.coins[cslot].source == COIN_FINNHUB;
+    FetchPacer &coinPacer = coinFinnhub ? finnhubCoinPacer : coinbasePacer;
+    const bool coinDue = settings.pages[PAGE_COIN] && coinConfigured() && currentApp == PAGE_COIN
+        && !cq.notFound && (!cq.valid || now - cq.updatedAt >= COIN_REFRESH_MS) && coinPacer.ready(now);
+    if (coinDue) {
+      coinFetchIdx = cslot;
+      runFetch("coin", fetchCoin, coinPacer, now, 0, FETCH_RETRY_MS);
+      ran = usedTls = true;
+    } else if (stockDue) {
+      stockFetchIdx = slot;
+      runFetch("stock", fetchStock, stockPacer, now, 0, FETCH_RETRY_MS);
       ran = usedTls = true;
     } else if (settings.pages[PAGE_WEATHER]
         && (!netShared.weather.valid || now - netShared.weather.updatedAt >= WEATHER_REFRESH_INTERVAL_MS)
@@ -2548,6 +3060,7 @@ void setup() {
   // begin() mounts LittleFS again later; that is a no-op once mounted.
   if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed - using config.h values");
   loadSettings();
+  savedNightBrightness = settings.night.brightness;
   screenRotation = settings.mount == MOUNT_RIGHT ? 3 : 1;
   tiltSign       = settings.mount == MOUNT_RIGHT ? -1.0f : 1.0f;
   setenv("TZ", settings.tzRule, 1);
@@ -2558,7 +3071,7 @@ void setup() {
   lcdRegInit();
   display->setRotation(screenRotation);
   ledcAttach(LCD_BL, 5000, 8);
-  ledcWrite(LCD_BL, brightnessLevel);
+  writeBacklight(brightnessLevel);
   gfx->fillScreen(BG);
   gfx->flush();
 
@@ -2581,6 +3094,8 @@ void setup() {
   rightEye.init(FACE_RIGHT_CX, FACE_EYES_CY, 90, 90);
 
   // Build the enabled-page list from settings.pages.
+  buildStockList();
+  buildCoinList();
   buildPageList();
   // Seed the clock from the compile time as a safe fallback. syncNTP()
   // replaces it with the real time once Wi-Fi is up.
@@ -2628,7 +3143,8 @@ void setup() {
   wifiManager.begin();   // mounts LittleFS, loads stored credentials
   loadDisplaySettings();
   savedBrightness = brightnessLevel;
-  ledcWrite(LCD_BL, brightnessLevel);
+  settings.brightness = brightnessLevel;
+  writeBacklight(brightnessLevel);
 
   // Firmware up to 1.0.2 uploaded its own English-only setup pages to
   // LittleFS. AWM serves those in preference to its built-in, multilingual
@@ -2681,6 +3197,8 @@ void loop() {
     // Save now, long before anyone can press "erase" in the portal, so a
     // factory reset still removes /display.json.
     flushBrightnessSave(true);
+    flushNightSave(true);
+    writeBacklight(brightnessLevel);      // never run setup at night brightness
     servicePortal();
     return;
   }
@@ -2693,12 +3211,14 @@ void loop() {
   readSensors();
   readTouch();
   flushBrightnessSave(false);
+  flushNightSave(false);
 
   // A touch-hold inside readTouch() may have just opened the portal.
   if (wifiManager.isPortalActive()) return;
 
   updateAutoPage();
   updateFaceTimers();
+  updateNightMode();
 
   // Retry NTP if Wi-Fi came up after boot, and resync every 6 h to
   // correct drift and to undo any UTC-only resync done by AWM.
@@ -2723,7 +3243,9 @@ void loop() {
     case 3: drawWeather();    break;
     case 4: drawMoon();       break;
     case 5: drawStock();      break;
-    default: drawGithub();    break;
+    case 6: drawGithub();     break;  // PAGE_GITHUB
+    case 7: drawCoin();       break;  // PAGE_COIN
+    default: drawFace(tx, ty); break;
   }
   // Brightness or auto-advance feedback banner — shown briefly after a gesture.
   // A deadline is cleared once it passes, so it never goes stale long enough
@@ -2732,7 +3254,8 @@ void loop() {
   if (autoPageBannerUntil && timeReached(millis(), autoPageBannerUntil)) autoPageBannerUntil = 0;
   if (brightnessBannerUntil) {
     char msg[20];
-    snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)(brightnessLevel * 100UL / 255UL));
+    if (nightBanner) snprintf(msg, sizeof(msg), "NIGHT %u%%", (unsigned)levelPercent(settings.night.brightness));
+    else             snprintf(msg, sizeof(msg), "BRIGHTNESS %u%%", (unsigned)levelPercent(brightnessLevel));
     uint16_t bannerColor = rgb(0,200,255);
     gfx->setTextSize(1);
     gfx->setTextColor(bannerColor);

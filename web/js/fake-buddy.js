@@ -8,13 +8,16 @@
 //   cancel           the port picker is cancelled
 //   busy             opening the port fails as if another program held it
 //   boot             the Buddy prints boot lines for a few seconds before it answers
+//   stalled          the Buddy answers nothing until the board check restarts it
+//   gap=2500         after the board check the port won't open for this long, ms (the USB gap)
+//   twin=1           after the board check, this many INFOs come from another Buddy (two on one computer)
 //   flashfail=connect|erase|write   the first flash fails at that stage
 //   noreturn=SET|DEFAULTS   after that command the Buddy doesn't come back on the first reconnect
 //   added=key,key    keys the new firmware reports in GET's "added"
 //   lost=SET         the reply to SET is lost (change() then verifies)
 //   seterror=key     SET refuses with an error on that key
 //   nowifi           the board has no saved Wi-Fi
-//   keys=1.2.0       the board knows only 1.2.0's settings (GET reports only those, SET skips the rest)
+//   keys=1.2.0       the board knows only 1.2.0's settings (GET reports only those, SET skips the rest; cfg_v reports 1)
 //   missing=a,b      the board lacks these paths until it is flashed (then it knows everything)
 //   fw=1.1.9         the firmware version INFO reports (to see the update ribbon)
 // A Wi-Fi password of "wrongpass" never connects.
@@ -32,15 +35,16 @@ export function fakeDevice(params) {
   const refusal = kind === "c" ? new NotABuddy("parts", "motion sensor at 0x6b: no answer")
     : kind === "d" ? new NotABuddy("chip", "the chip is ESP32-S3, not ESP32-C6") : null;
   const board = {
-    answers,
+    answers: answers && !params.has("stalled"),
     fw: answers ? params.get("fw") || "1.2.0-rc1" : null,
-    cfg_v: 1,
-    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755" }),
+    cfg_v: params.get("keys") === "1.2.0" ? 1 : 2,
+    config: mergeConfig(DEFAULTS, { github_user: "octocat", tz_name: "Europe/Berlin", tz_rule: "CET-1CEST,M3.5.0,M10.5.0/3", lat: "48.1374", lon: "11.5755", stocks: [{ symbol: "AAPL", on: true }, { symbol: "MSFT", on: false }], coins: [{ pair: "BTC-USD", source: "coinbase", on: true }, { pair: "SOL-EUR", source: "finnhub", on: false }], pages: { coin: true } }),
     stored: true,
     added: [],
     wifi: params.has("nowifi") ? { saved: false, ssid: "", password: "" } : { saved: true, ssid: "HomeNet", password: "secret123" },
     restarting: false,
     booting: params.has("boot"),
+    banner: false, // the next open prints the banner (set by the board check on ?stalled)
   };
   // The paths the firmware on the fake board knows (spec §5.3, C3, C6b).
   const everything = () => supportedPaths(DEFAULTS);
@@ -51,9 +55,13 @@ export function fakeDevice(params) {
   const loseOnce = new Set(params.get("lost") ? [params.get("lost")] : []);
   const noReturn = new Set(params.get("noreturn") ? [params.get("noreturn")] : []);
   let stayAway = false;
+  let gapUntil = 0;
+  let checked = false;
+  let twins = Number(params.get("twin") || 0);
+  const twinNow = () => checked && twins > 0 && twins-- > 0;
 
   const info = () => ({
-    ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: "b0:a6:04:00:00:01",
+    ok: true, cmd: "INFO", fw: board.fw, cfg_v: board.cfg_v, mac: twinNow() ? "58:8c:81:00:00:02" : "b0:a6:04:00:00:01",
     wifi: {
       saved: board.wifi.saved, ssid: board.wifi.ssid,
       connected: board.wifi.saved && board.wifi.password !== "wrongpass",
@@ -81,6 +89,7 @@ export function fakeDevice(params) {
     async open() {
       if (this.isOpen) return;
       await sleep(150);
+      if (Date.now() < gapUntil) throw new DOMException("Failed to open serial port.", "NetworkError");
       if (params.has("busy")) throw new DOMException("Failed to open serial port.", "NetworkError");
       this.isOpen = true;
       if (board.booting) {
@@ -93,6 +102,11 @@ export function fakeDevice(params) {
         board.awake = false;
       } else {
         board.awake = true;
+        // A Buddy that restarts prints its banner, which is what the second look waits for.
+        if (board.banner) {
+          board.banner = false;
+          setTimeout(() => this._emit(`ESP32-C6 Monitor-Buddy ${board.fw} starting`, "rx"), 300);
+        }
       }
     }
     async close() { this.isOpen = false; }
@@ -181,6 +195,9 @@ export function fakeDevice(params) {
     if (refusal) { say(`Board check: ${refusal.message}`); throw new FlashError("connect", refusal); }
     say("Board check: motion sensor and touch controller found");
     say("Restarting the board");
+    if (params.has("stalled")) { board.answers = true; board.banner = board.fw !== null; }
+    checked = true;
+    gapUntil = Date.now() + Number(params.get("gap") || 0);
     return { mac: "b0:a6:04:00:00:01" };
   }
 
@@ -224,7 +241,7 @@ export function fakeDevice(params) {
     board.fw = params.get("newfw") || "1.2.0-rc1";
     knows = everything();
     board.added = (params.get("added") || "").split(",").filter(Boolean);
-    if (board.added.length) board.cfg_v = 2;
+    board.cfg_v = 2;
     await sleep(300);
   }
 

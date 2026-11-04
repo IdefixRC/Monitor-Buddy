@@ -17,3 +17,7 @@ void formatCount(long n, char *out, size_t len);
 // Text size for the big follower number: 5 for exactly 5 characters (5 digits
 // at size 6 would be 180 px and run off the 320 px screen from x=150), else 6.
 uint8_t followerTextSize(const char *formatted);
+
+// The centre y of entry dot `index` in the right-edge column (stock and coin
+// pages): `count` dots 14 px apart, centred on the screen's middle.
+int subDotY(uint8_t index, uint8_t count, int screenH);

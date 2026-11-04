@@ -1009,6 +1009,14 @@ main > :not(.form-layout) {
   margin: 0;
 }
 
+.section__title--sub {
+  font-size: 1rem;
+}
+
+.pages-block {
+  margin-top: 1.25rem;
+}
+
 .tools {
   margin: 0 0 1rem;
 }
@@ -1127,6 +1135,10 @@ fieldset.field > legend {
 
 .input--upper {
   text-transform: uppercase;
+}
+
+.input--upper::placeholder {
+  text-transform: none;
 }
 
 select.input {
@@ -1332,6 +1344,11 @@ select.input {
   transform: translateX(1.25rem);
 }
 
+.switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .pages__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1346,6 +1363,12 @@ select.input {
 
 .pages__grid .switch-row .field__head {
   font-weight: 500;
+}
+
+/* A greyed page switch: the release that has the page, under the row. */
+.switch-row__note {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 @media (max-width: 520px) {
@@ -1663,6 +1686,272 @@ select.input {
 .check__result[data-state="ok"] { color: var(--ok); }
 .check__result[data-state="bad"] { color: var(--danger); }
 
+/* The stock and coin slots: one compact row each (On, the pick, then Check
+   and Move up and down at the right end), its hints, error and Check result
+   under it. Slots 2-5 sit in a fold-out (.slots__more, Location's .advanced),
+   as plain rows with a rule between them rather than boxes in a box. */
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.slot {
+  padding: 0.5rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-2);
+  min-width: 0;
+}
+
+.slots__more {
+  margin: 0;
+}
+
+.slots__more > .advanced__body {
+  gap: 0;
+  padding: 0 0.6rem 0.3rem;
+}
+
+.slots__more .slot {
+  padding: 0.55rem 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.slots__more .slot + .slot {
+  border-top: 1px solid var(--border);
+}
+
+.slot__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.4rem;
+}
+
+/* The pick takes the free space on the line (grow 999); when the tools wrap
+   onto their own line, they take that whole line (grow 1). It may wrap inside
+   itself only when even its own line is too narrow (no sideways scroll). */
+.slot__pick {
+  flex: 999 1 8rem;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.slot--coin .slot__pick {
+  flex-basis: 20.75rem;
+}
+
+.slot .input {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.6rem;
+}
+
+.slot__input {
+  flex: 1 1 6rem;
+}
+
+/* Check from the left, the arrows at the right end. */
+.slot__tools {
+  flex: 1 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.slot__moves {
+  display: flex;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.btn--compact {
+  min-height: 2.5rem;
+  padding: 0.35rem 0.6rem;
+}
+
+.btn--icon {
+  width: 2.25rem;
+  min-height: 2.5rem;
+  padding: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* A missing tool keeps its place, so the rows' tools line up. */
+.slot__gap--up,
+.slot__gap--down {
+  width: 2.25rem;
+}
+
+.slot__on {
+  flex: none;
+  width: 3.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 2.5rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.slot__on input {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--btn);
+}
+
+.slot__on:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.slot .field__head {
+  margin-bottom: 0.3rem;
+}
+
+.slot .field__hint,
+.slot .field__error,
+.slot .check__result {
+  margin-top: 0.35rem;
+}
+
+.coin-note {
+  margin: 0;
+}
+
+/* The coin's source: Coinbase | Finnhub as one segmented control. The radios
+   stay in the page (focus, arrow keys), stretched invisibly over their label.
+   The chosen one is filled (white on the button green, 5:1 or better), also
+   when it is disabled (a stored Finnhub coin without a key); an unchosen
+   disabled one is dimmed. */
+.segmented {
+  flex: none;
+  display: inline-flex;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.segmented__item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0 0.5rem;
+  background: var(--input);
+  color: var(--fg);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segmented__item + .segmented__item {
+  border-left: 1px solid var(--border-strong);
+}
+
+.segmented__item input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.segmented__item:has(input:checked) {
+  background: var(--btn);
+  color: var(--btn-fg);
+  font-weight: 700;
+}
+
+.segmented__item:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.segmented__item:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.segmented__item:has(input:disabled:not(:checked)) {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* Greyed (the firmware has no coins yet): the whole control fades. */
+.segmented:not(:has(input:enabled)) {
+  opacity: 0.6;
+}
+
+/* The coin code takes what the line leaves, its currency beside it. */
+.coin-pick {
+  flex: 1 1 7rem;
+  min-width: 0;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.coin-input {
+  flex: 1 1 auto;
+  width: 4.5rem;
+  min-width: 4.5rem;
+}
+
+/* The search box's clear button would take half of a phone-width box. */
+.coin-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.coin-currency {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+}
+
+.coin-manual {
+  flex: 1 1 auto;
+  width: 7rem;
+  min-width: 6rem;
+}
+
+/* Wide screens: a little more room for the form, so a coin row fits one line.
+   The header and footer follow, so their edges line up with the form. */
+@media (min-width: 1000px) {
+  .page, .top__inner {
+    max-width: 66rem;
+  }
+}
+
+/* A phone: a row is two lines, On and the pick, then Check and the arrows. */
+@media (max-width: 520px) {
+  .slot {
+    padding: 0.45rem;
+  }
+  .slots__more > .advanced__body {
+    padding: 0 0.5rem 0.25rem;
+  }
+  .segmented__item {
+    padding: 0 0.45rem;
+  }
+  .slot--coin .slot__pick {
+    flex-basis: 100%;
+  }
+  .coin-input {
+    min-width: 3.25rem;
+  }
+}
+
 /* The buttons stay in reach at the bottom of a long form. */
 .form-foot {
   position: sticky;
@@ -1830,4 +2119,26 @@ select.input {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* Look and pages box: the brightness sliders (day here, night in Clock). */
+.level__range {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.4rem 0 0;
+  accent-color: var(--accent, currentColor);
+}
+
+.level__value {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+.level--off .field__head,
+.level--off .level__range {
+  opacity: 0.5;
+}
+
+.night .switch-row:first-child {
+  margin-top: 0.6rem;
 }

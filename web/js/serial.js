@@ -168,9 +168,10 @@ export class BuddyPort {
   // flash) Chrome hands out a new SerialPort and the old one never opens
   // again, so anything that opens the port itself (esptool-js) asks here
   // first. Keeps the current port when it is still listed or no Buddy is.
-  async refind() {
+  // avoid: ports that answered as another board, which never count as listed.
+  async refind({ avoid = [] } = {}) {
     let port = null;
-    try { port = await this._findPort(); } catch { /* keep the current one */ }
+    try { port = await this._findPort(avoid); } catch { /* keep the current one */ }
     if (port) this.port = port;
     return this.port;
   }
@@ -244,8 +245,8 @@ export class BuddyPort {
   // without a MAC: with one board in a USB gap, the only one listed can be
   // another (COM7 and COM12, 2026-10-17). With a MAC, INFO (reconnect) and
   // esptool (WrongBoard) prove the switch before anything is written.
-  async _findPort() {
-    const ports = (await navigator.serial.getPorts()).filter(isBuddy);
+  async _findPort(avoid = []) {
+    const ports = (await navigator.serial.getPorts()).filter((p) => isBuddy(p) && !avoid.includes(p));
     if (ports.includes(this.port)) return this.port;
     return this.mac && ports.length === 1 ? ports[0] : null;
   }
@@ -304,7 +305,9 @@ export class BuddyPort {
 // (review, 2026-10-13). The C6's USB input buffer holds 64 bytes and an INFO
 // line is about 27, so a board that never reads USB keeps two; a third would
 // stick in the port, which Chrome then can't close until a replug. Waveshare's
-// factory demo is such a board: its USB console is output only.
+// factory demo is such a board: its USB console is output only. The second look
+// after the board check goes further and writes nothing before a line only
+// firmware 1.2+ prints has been heard (heardBuddy, LOOK_PROOF_MS).
 export const PROBE_WRITES = 2;
 export const PROBE_MAX_MS = 25000;
 
@@ -342,6 +345,71 @@ export async function probe(bp, rx, {
     if (!booting || Date.now() - start > maxMs) return null;
     if (!told) { onBooting(); told = true; }
     if (r) await sleep(pauseMs);
+  }
+}
+
+// The second look, after the board check restarted the board. It drops off USB
+// for a moment and may come back as a new port, so this waits as change() does,
+// then tries the port for a while, writing nothing until it opens. The board
+// can also lose that race to a second Buddy on the same computer: refind() may
+// land on the only one listed. An answer with another MAC proves that board
+// reads, so the port is closed and passed over, and the look goes on. Silence
+// always ends the look: asking a board that doesn't read again would overfill
+// it (PROBE_WRITES). listen() resolves the trouble seen before writing, or null;
+// ask() is probe(). proof() resolves whether the board has printed a line only
+// firmware 1.2+ prints (heardBuddy): without it nothing is written at all, since
+// a board that never reads USB (Waveshare's factory demo, a 1.1 Buddy) would
+// keep those bytes and jam the port until a replug. proof() gets up to
+// LOOK_PROOF_MS to say yes. bp ends closed unless the result is { info } or { trouble }.
+// -> { info } | { trouble } | { unproven } | { silent, error? } | { otherBoard } | { gone, error }
+export const LOOK_FIRST_WAIT_MS = 4000;
+export const LOOK_PROOF_MS = 4000;
+export async function lookAfterCheck(bp, { listen, ask, proof = async () => false, settleMs = 1500, windowMs = 5000, retryMs = 500 }) {
+  await sleep(settleMs);
+  const end = Date.now() + windowMs;
+  const start = bp.port;
+  const others = [];
+  let error = null;
+  for (;;) {
+    bp.port = start; // refind() keeps a port that is listed, so never leave it on another board's
+    let opened = false;
+    try {
+      await bp.refind({ avoid: others });
+      await bp.open();
+      opened = true;
+    } catch (e) {
+      error = e;
+    }
+    if (opened) {
+      error = null;
+      const trouble = await listen();
+      if (trouble) return { trouble };
+      if (bp.isOpen && !bp.lost) {
+        if (!(await proof())) {
+          if (bp.isOpen && !bp.lost) {
+            try { await bp.close(); } catch { /* already gone */ }
+            return { unproven: true };
+          }
+        }
+      }
+      if (bp.isOpen && !bp.lost) {
+        let info;
+        try {
+          info = await ask();
+        } catch (e) {
+          return { silent: true, error: e };
+        }
+        if (!info) return { silent: true };
+        if (!bp.mac || !info.mac || sameMac(info.mac, bp.mac)) return { info };
+        others.push(bp.port);
+      }
+      try { await bp.close(); } catch { /* already gone */ }
+    }
+    if (Date.now() >= end) {
+      bp.port = start;
+      return others.length ? { otherBoard: true } : { gone: true, error };
+    }
+    await sleep(retryMs);
   }
 }
 

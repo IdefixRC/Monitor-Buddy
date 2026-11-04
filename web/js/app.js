@@ -2,28 +2,38 @@
 // The Buddy's face guides each step; on the settings screen it becomes the
 // live preview. Nothing is stored in the browser.
 import { S } from "./strings.js";
-import { BuddyPort, change, probe } from "./serial.js";
-import { sameMac, watchForTrouble } from "./protocol.js";
+import { BuddyPort, change, probe, lookAfterCheck, LOOK_FIRST_WAIT_MS, LOOK_PROOF_MS } from "./serial.js";
+import { sameMac, watchForTrouble, heardBuddy } from "./protocol.js";
 import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABuddy, WrongBoard } from "./flasher.js";
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
-import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, newlyOffered } from "./settings.js";
+import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, pathsForCfg, installablePaths } from "./settings.js";
 import { parseConfigH } from "./configh.js";
 import { ruleForZone } from "./tz.js";
 import { searchCity } from "./geocode.js";
-import { checkStock, checkGithub } from "./checks.js";
+import { checkStock, checkGithub, checkCoin } from "./checks.js";
+import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair, coinPriceKey } from "./coins.js";
 import { createFace } from "./face.js";
-import { createPreview, THEMES } from "./preview.js";
+import { createPreview, THEMES, SHOWN_ORDER, formatCoinPrice } from "./preview.js";
 import {
-  DEFAULTS, FLOWS, newFormState, offered, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
+  DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor, locationSummary, locationMissing, afterRecovery,
+  previewPageFor, previewConfig, locationSummary, locationMissing, afterRecovery,
+  moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
+  remapStockErrors, dropSlotErrors, backupConfig, rederiveSlots, applyAfterFlash,
+  applyCoinSlots, coinIndexOfSlot, COIN_SLOTS, COIN_SOURCES, coinListId, coinRowState,
+  hourLabel, levelToPercent, percentToLevel,
 } from "./form.js";
 
 const params = new URLSearchParams(location.search);
 const BETA = params.has("beta");
 const SITE_ROOT = new URL("./", location.href);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// The coin lists' fetch. ?coinlist=fail makes it reject, to see the fallback
+// (a plain pair field) in the browser (Clarification 3). Checks use window.fetch.
+const fetchForCoins = params.has("coinlist") && params.get("coinlist") === "fail"
+  ? () => Promise.reject(new TypeError("coin list off (?coinlist=fail)"))
+  : window.fetch.bind(window);
 
 // The hardware, or the pretend Buddy for checking the screens (?fake=a|b|c|d).
 let dev = { BuddyPort, flashImage, checkBuddy };
@@ -40,9 +50,11 @@ const app = {
   info: null,        // the last INFO reply; null on path B
   form: null,        // the form, kept across screens so a retry finds it intact
   live: {},          // results of successful checks, for the preview
+  coinLists: new Map(), // coin lists that loaded, by loadCoinList's cache id (source|key)
   expectDrop: false, // a flash or restart is under way: the port going away is expected
   rx: { last: 0, status: false, recent: [] }, // recent: the latest lines, for romTrouble
   trouble: null,     // romTrouble() at connect: the firmware isn't running (path B, recovery)
+  silentAfterCheck: false, // the second look's INFOs went unanswered, so they may still fill the board's buffer
 };
 // How long connect listens before it writes anything (E2): a boot loop prints
 // every ~40 ms, a running Buddy gets its INFO half a second later.
@@ -127,6 +139,8 @@ let cleanups = [];
 let firstScreen = true;
 let G = null; // the current screen's guide (face and bubble)
 
+// build() may return an element to focus instead of the heading (the form
+// after a Move, say). It must come after the heading's focus, or it is lost.
 function screen(title, build) {
   closeTip();
   while (cleanups.length) {
@@ -137,10 +151,12 @@ function screen(title, build) {
   app.screen = title;
   const heading = h("h1", { class: "sr-only", tabindex: "-1" }, title);
   main.replaceChildren(heading);
-  build(main);
+  const wanted = build(main);
   if (firstScreen) { firstScreen = false; return; }
   window.scrollTo(0, 0);
-  heading.focus({ preventScroll: true });
+  const can = wanted && typeof wanted.focus === "function";
+  if (can) wanted.focus();
+  if (!can || document.activeElement !== wanted) heading.focus({ preventScroll: true });
 }
 
 // The Buddy's face with a speech bubble. g.say() replaces what it says,
@@ -220,6 +236,7 @@ async function startOver() {
   app.info = null;
   app.form = null;
   app.live = {};
+  app.silentAfterCheck = false;
   showStart();
 }
 
@@ -271,15 +288,24 @@ async function connect() {
 
 // Opens the port and asks INFO: an answer is path A, none is path B.
 let probing = false;
-async function probeAndRoute() {
+async function oneAtATime(fn) {
   if (probing) return;
   probing = true;
   try {
-    await probeAndRouteOnce();
+    await fn();
   } finally {
     probing = false;
   }
 }
+const probeAndRoute = () => oneAtATime(probeAndRouteOnce);
+
+// Path B's "Check again". After a second look nobody answered, a board that
+// doesn't read still holds those INFOs, and a first look's would overfill it
+// (PROBE_WRITES). The board check resets it, so that comes first. The second
+// look writes only after proof of a 1.2+ Buddy, so it leaves nothing behind
+// when it finds none (unproven); silentAfterCheck is for a Buddy that proved
+// itself and still did not answer.
+const checkAgain = () => oneAtATime(() => (app.silentAfterCheck ? checkThenPathB({ askAgain: true }) : probeAndRouteOnce()));
 
 async function probeAndRouteOnce() {
   const bp = app.bp;
@@ -316,35 +342,106 @@ async function probeAndRouteOnce() {
   // answer means the port lookup found the wrong one.
   if (info && bp.mac && info.mac && !sameMac(info.mac, bp.mac)) return showProblem(S.flash.wrongBoard, null, { retry: probeAndRoute });
   app.info = info;
-  if (info) bp.mac = info.mac || ""; // from now on, only this board is accepted
+  if (info) {
+    bp.mac = info.mac || ""; // from now on, only this board is accepted
+    app.silentAfterCheck = false;
+  }
   if (info) showHome();
-  else await checkThenPathB();
+  else await checkThenPathB({ askAgain: true });
+}
+
+// The second look, once the board check has restarted the board (the caller
+// keeps app.expectDrop on: the board drops off USB here). Nothing but an INFO
+// answer from this board leads home. Every other end is path B, where "Check
+// again" is: another Buddy that kept answering is safe there too, because the
+// flash passes this board's MAC and refuses any other (WrongBoard).
+async function secondLook() {
+  const bp = app.bp;
+  let g;
+  screen(S.titles.connecting, (m) => {
+    g = guide(m, { mood: "curious", say: S.connecting.say });
+    m.append(spinner());
+  });
+  const seen = await lookAfterCheck(bp, {
+    listen: async () => {
+      app.rx.recent = [];
+      app.trouble = await watchForTrouble(app.rx.recent, LISTEN_MS);
+      return app.trouble;
+    },
+    // Writes only after a line that only firmware 1.2+ prints. listen() filled
+    // app.rx.recent (kept to the last 100 lines, so the banner is still there),
+    // and a board still booting may print it a moment later.
+    proof: async () => {
+      const end = Date.now() + LOOK_PROOF_MS;
+      for (;;) {
+        if (heardBuddy(app.rx.recent)) return true;
+        if (Date.now() >= end || !bp.isOpen || bp.lost) return false;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    },
+    ask: () => {
+      app.rx.status = false;
+      return probe(bp, app.rx, { firstWaitMs: LOOK_FIRST_WAIT_MS, onBooting: () => g.say(S.connecting.booting) });
+    },
+  });
+  report(seen.error);
+  app.info = seen.info || null;
+  app.silentAfterCheck = !!seen.silent; // a look that wrote nothing leaves the buffer empty
+  if (seen.info) {
+    bp.mac = seen.info.mac || bp.mac;
+    return showHome();
+  }
+  if (seen.unproven) log("no line from a Buddy that reads USB: nothing sent", "* ");
+  if (seen.trouble) log(`no firmware running (${seen.trouble}): nothing sent`, "* ");
+  if (seen.otherBoard) log("only another board answered: path B, where a flash still refuses it", "* ");
+  await closeThenPathB();
+}
+
+async function closeThenPathB() {
+  try { await app.bp.close(); } catch { /* already closed */ }
+  showPathB();
 }
 
 // Path B: nothing answered INFO, so nothing yet says this is a Buddy. Check
 // the board (boardcheck.js) before offering to install, so nobody fills in
 // the form for a board that will be refused. The board restarts once.
-async function checkThenPathB() {
+// askAgain: a Buddy left running for a long time can miss the first INFO, and
+// the restart clears that, so a working Buddy isn't called new or older: ask
+// once more first, but only a board that proved it reads USB (secondLook) (Eric, COM12 and COM4, 2026-11-04).
+async function checkThenPathB({ askAgain = false } = {}) {
   screen(S.titles.connecting, (m) => {
     guide(m, { mood: "curious", say: S.connecting.checking });
     m.append(spinner());
   });
   app.expectDrop = true;
-  try { await app.bp.close(); } catch { /* already closed */ }
-  // No MAC is known yet, so this is the port that was picked: refind() never
-  // swaps it for another board's. If it died (a boot loop drops off USB),
-  // only picking it again can tell which board it is.
-  const port = await app.bp.refind();
   try {
-    const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
-    app.bp.mac = mac || ""; // from now on, only this board is accepted
-  } catch (e) {
+    try { await app.bp.close(); } catch { /* already closed */ }
+    // The first time no MAC is known, so this is the port that was picked:
+    // refind() never swaps it for another board's. If it died (a boot loop drops
+    // off USB), only picking it again can tell which board it is. Check again
+    // comes here with the MAC known, and in a USB gap refind() can land on
+    // another Buddy, so a different MAC is refused, never adopted.
+    const known = app.bp.mac;
+    const picked = app.bp.port;
+    const port = await app.bp.refind();
+    try {
+      const { mac } = await dev.checkBuddy(port, { log: (t) => log(String(t).replace(/\s+$/, ""), "[esptool] ") });
+      if (known && mac && !sameMac(mac, known)) {
+        app.bp.port = picked; // refind() keeps a port that is listed: don't stay on the other board's
+        log("the board check reached another board: nothing written", "* ");
+        return showProblem(S.flash.wrongBoard, null, { retry: checkAgain });
+      }
+      app.bp.mac = mac || known; // from now on, only this board is accepted
+    } catch (e) {
+      report(e);
+      if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
+      return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
+    }
+    app.silentAfterCheck = false; // the restart emptied its buffer
+    if (askAgain) return await secondLook();
+  } finally {
     app.expectDrop = false;
-    report(e);
-    if (e instanceof FlashError && e.cause instanceof NotABuddy) return showNotBuddy(e.cause.kind);
-    return showProblem(S.connecting.checkFailed, null, { retry: connect, retryLabel: S.connecting.pickAgain });
   }
-  app.expectDrop = false;
   showPathB();
 }
 
@@ -425,15 +522,14 @@ async function startChange() {
 async function startFlashFlow(flow) {
   let config = DEFAULTS;
   let added = [];
-  let supported;
   if (app.info) {
     const got = await readGet();
     if (!got) return;
     config = fromBoard(got.config);
     added = got.added || [];
-    supported = supportedPaths(got.config);
   }
-  app.form = newFormState(config, { flow, info: app.info, added, supported });
+  // The release about to go on decides what the form offers, not the running board.
+  app.form = newFormState(config, { flow, info: app.info, added, supported: pathsForCfg(app.releases[0].cfg_v) });
   app.form.version = app.releases[0].version;
   showForm();
 }
@@ -450,7 +546,7 @@ async function startRecovery() {
 async function startBackup() {
   const got = await readGet();
   if (!got) return;
-  const name = downloadBackup(fromBoard(got.config));
+  const name = downloadBackup(backupConfig(got.config));
   showHome();
   G.add(S.backup.saved(escapeRich(name)));
 }
@@ -497,11 +593,11 @@ async function startFresh() {
   if (!got) return;
   showBackupOffer({
     say: S.backup.freshSay,
-    config: fromBoard(got.config),
+    config: backupConfig(got.config),
     choice: true,
     next: (empty) => {
       app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
-        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got), supported: supportedPaths(got.config) });
+        { flow: "fresh", info: app.info, location: empty ? [] : boardLocation(got), supported: pathsForCfg(app.releases[0].cfg_v) });
       app.form.version = app.releases[0].version;
       showForm();
     },
@@ -511,7 +607,7 @@ async function startFresh() {
 async function startReset() {
   const got = await readGet();
   if (!got) return;
-  showBackupOffer({ say: S.backup.resetSay, config: fromBoard(got.config), choice: false, next: showResetConfirm });
+  showBackupOffer({ say: S.backup.resetSay, config: backupConfig(got.config), choice: false, next: showResetConfirm });
 }
 
 function showResetConfirm() {
@@ -583,7 +679,7 @@ function showPathB() {
         () => (recover ? startRecovery() : startFlashFlow("upgrade")), { primary: true, disabled: !installable() }),
       actionCard(S.pathB.fresh, S.pathB.freshHint, () => startFlashFlow("install"), { disabled: !installable() })));
     m.append(h("div", { class: "actions actions--small" },
-      btn(S.pathB.retry, probeAndRoute, { kind: "link" }),
+      btn(S.pathB.retry, checkAgain, { kind: "link" }),
       btn(S.home.disconnect, startOver, { kind: "link" })));
   });
 }
@@ -686,31 +782,72 @@ window.addEventListener("scroll", placeTip, { passive: true, capture: true });
 
 // ── The settings form ─────────────────────────────────────
 
+// A coin price as the Buddy shows it: 2 decimals from 1.00 up, 4 significant
+// digits below (0.00001234).
+// The number is the device's (formatCoinPrice); the message names the pair, so
+// the currency is already there.
+const coinPrice = formatCoinPrice;
+
+// A stock Check's numbers, so the preview draws the real page.
+function keepStockQuote(symbol, { price, open, high, low, ref }) {
+  app.live = {
+    ...app.live,
+    prices: { ...(app.live.prices || {}), [symbol]: price },
+    stockStats: { ...(app.live.stockStats || {}), [symbol]: { open, high, low, ref } },
+  };
+}
+
+// checkCoin's result as a sentence.
+function coinMessage(res, pair) {
+  if (res.status === "ok") return S.check.coin.ok(pair, coinPrice(res.price));
+  return S.check.coin[res.status] || S.check.coin.network;
+}
+
+// The first of `els` that can take focus: in the page, not disabled, not inside a hidden box.
+const focusable = (els) => els.find((el) => el && el.isConnected && !el.disabled && !el.closest("[hidden]")) || null;
+
 // The single-column layout, where the preview becomes a compact strip. KEEP
 // IN SYNC with the max-width of the form-layout media query in app.css.
 const NARROW = "(max-width: 900px)";
 
-function showForm({ say: message = "", tone = "", focus } = {}) {
+// focus: "wifi", "stockslot.N" or "coinslot.N" (after a Move; moved is its direction).
+function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
   const f = app.form;
+  f.teaser = installablePaths(app.releases);
   const flow = FLOWS[f.flow];
   const choices = wifiChoices(app.info, f.flow);
   if (!choices.some((c) => c.value === f.wifi.choice)) f.wifi.choice = choices[0].value;
   f.touched = f.touched || new Set();
   f.serverErrors = f.serverErrors || {};
   f.submitted = !!f.submitted;
+  // The "More stocks" / "More coins" fold-outs, open or closed (kept across
+  // redraws). Focus sent into one (after a Move) opens it.
+  f.folds = f.folds || {};
+  const into = /^(stock|coin)slot\.([1-9]\d*)$/.exec(focus || "");
+  if (into) f.folds[into[1]] = true;
 
-  const slots = new Map();   // error key -> { error, inputs }
+  const slots = new Map();   // error key (or an alias: a second box for the same setting) -> { error, inputs, key }
   const badgeSlots = [];     // [key, element]
   const refreshers = [];     // run on every change
   let currentErrors = {};
   let preview;
   let bubble;
+  const focusTargets = {}; // focus key -> () => the elements to try, in order
+  // The oldest installable release that has `path` (the greyed note names it).
+  const firstWith = (path) => app.releases.slice().reverse().find((e) => pathsForCfg(e.cfg_v).includes(path));
+  // Only a flow that flashes has a release to pick at the bottom of the form.
+  const newerNote = (version) => (flow.flash ? S.form.needsNewer(version) : S.form.needsUpdate(version));
   // False once this drawing of the form is gone (redrawn or left), so a check
   // or an import that finishes late doesn't touch a destroyed preview.
   let alive = true;
   f.location = f.location || [];
 
-  const touch = (key) => { f.touched.add(key); delete f.serverErrors[key]; };
+  const touch = (key) => {
+    f.touched.add(key);
+    delete f.serverErrors[key];
+    const at = /^(stock|coin)slot\.(\d+)$/.exec(key);
+    if (at) dropSlotErrors(f, f.serverErrors, Number(at[2]), at[1]);
+  };
   const gave = (...keys) => { f.location = [...new Set([...f.location, ...keys])]; touch("location"); };
   // The preview jumps to the page a changed setting affects and holds it there
   // (previewPageFor; the hold and resume live in preview.js).
@@ -727,14 +864,16 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     return h("div", { class: "field__head" }, labelEl, helpKey ? helpButton(helpKey, labelText) : null, badges);
   }
 
-  function errorSlot(key, inputs) {
+  // alias: the slot's own name when a second box shows the same setting
+  // (the Finnhub key in Stock and in Coins), so neither replaces the other.
+  function errorSlot(key, inputs, alias = key) {
     const error = h("p", { class: "field__error", id: uid("err"), hidden: true });
-    slots.set(key, { error, inputs });
+    slots.set(alias, { error, inputs, key });
     for (const i of inputs) i.setAttribute("aria-describedby", [i.getAttribute("aria-describedby"), error.id].filter(Boolean).join(" "));
     return error;
   }
 
-  function textField({ key, label, help, value, hint, set, type = "text", attrs = {}, extra = null }) {
+  function textField({ key, label, help, value, hint, set, type = "text", attrs = {}, extra = null, alias = key }) {
     const id = uid("f");
     const hintEl = hint ? h("p", { class: "field__hint", id: uid("hint") }, rich(hint)) : null;
     const input = h("input", {
@@ -743,7 +882,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     });
     input.value = value ?? ""; // a property: the password and the key never land in the DOM's attributes
     input.addEventListener("input", () => { set(input.value, input); changed(key); });
-    const error = errorSlot(key, [input]);
+    const error = errorSlot(key, [input], alias);
     const control = extra ? h("div", { class: "input-row" }, input, extra) : input;
     return { input, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, help, key), control, hintEl, error) };
   }
@@ -771,8 +910,69 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     return { input, el: h("div", { class: "switch-row" }, head(h("label", { for: id }, label), label, help, badgeKey), input, error) };
   }
 
+  // A brightness slider: percent on screen, 8-255 on the board. `set` runs only
+  // on the slider's own input, so drawing the form never rounds a stored level.
+  function levelSlider({ key, label, level, hint, set, help = null }) {
+    const id = uid("f");
+    const hintEl = h("p", { class: "field__hint", id: uid("hint") }, hint);
+    const input = h("input", { id, type: "range", class: "level__range", min: "3", max: "100", step: "1", "aria-describedby": hintEl.id });
+    const value = h("span", { class: "level__value", "aria-hidden": "true" });
+    const show = () => {
+      value.textContent = S.form.nightLevel(Number(input.value));
+      input.setAttribute("aria-valuetext", value.textContent);
+    };
+    input.value = String(levelToPercent(level));
+    show();
+    input.addEventListener("input", () => { set(percentToLevel(Number(input.value))); show(); changed(key); });
+    const error = errorSlot(key, [input]);
+    const top = head(h("label", { for: id }, label), label, help, key);
+    top.append(value);
+    return { input, hintEl, error, el: h("div", { class: "field level" }, top, input, hintEl, error) };
+  }
+
   const section = (title, ...kids) => h("section", { class: "section" }, h("h2", { class: "section__title" }, title), kids);
   const note = (text, cls = "") => h("p", { class: `note ${cls}` }, rich(text));
+
+  // ── The compact slot rows (stock and coin) ──
+  // The On tickbox of slots 2-5; its label names the slot for screen readers.
+  function tickBox(name, checked, set) {
+    const input = h("input", { type: "checkbox", checked });
+    input.addEventListener("change", () => { set(input.checked); changed(); });
+    return { input, el: h("label", { class: "slot__on" }, input, h("span", {}, S.form.slotOn), h("span", { class: "sr-only" }, `, ${name}`)) };
+  }
+  // ↑ / ↓, named "Move up, Stock 2".
+  function moveButton(dir, name, onclick) {
+    const text = dir < 0 ? S.form.moveUp : S.form.moveDown;
+    return btn(dir < 0 ? "↑" : "↓", onclick, { class: "btn btn--secondary btn--icon", "aria-label": `${text}, ${name}`, title: text });
+  }
+  // The row's tools: Check, then ↑ ↓ at the right end (also when the row
+  // wraps onto a second line). A missing arrow (slot 1 has no ↑,
+  // slot 5 no ↓) leaves its gap, so the columns line up. On comes first in the row: it enables the rest.
+  const gap = (kind) => h("span", { class: `slot__gap slot__gap--${kind}`, "aria-hidden": "true" });
+  const slotTools = (check, up, down) => h("div", { class: "slot__tools" },
+    check, h("span", { class: "slot__moves" }, up || gap("up"), down || gap("down")));
+  // Slots 2-5 in a fold-out like Location's "Advanced settings". Closed, its
+  // title lists what's inside. It opens by itself while a slot inside shows an
+  // error, and its open/closed state lives in the form state (f.folds), so a
+  // redraw keeps it.
+  function foldOut(name, rows, label, summaryOf, errorKeys, hint = null) {
+    const title = h("span", { class: "advanced__title" }, label);
+    const fold = h("details", { class: "advanced slots__more", open: !!f.folds[name] },
+      h("summary", { class: "advanced__summary" }, title, hint),
+      h("div", { class: "advanced__body slots" }, rows));
+    const hasError = () => errorKeys.some((k) => slots.get(k) && !slots.get(k).error.hidden);
+    const retitle = () => { title.textContent = (!fold.open && summaryOf()) || label; };
+    fold.addEventListener("toggle", () => {
+      if (!fold.open && hasError()) fold.open = true; // keep the error in sight
+      f.folds[name] = fold.open;
+      retitle();
+    });
+    refreshers.push(() => {
+      if (hasError() && !fold.open) { fold.open = true; f.folds[name] = true; }
+      retitle();
+    });
+    return fold;
+  }
 
   screen(S.titles.form, (m) => {
     // The side column: the live preview and the Buddy's bubble.
@@ -858,7 +1058,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const offSaved = !flow.erase && (app.info ? !!(app.info.wifi && app.info.wifi.saved) : f.flow === "upgrade");
     const offNote = note(offSaved ? S.form.offKeep : S.form.offHotspot);
     const onBox = h("div", { class: "wifi-on" }, choiceGroup, creds);
-    form.append(section(S.form.sections.wifi, configure.el, onBox, offNote));
+    const wifiSection = section(S.form.sections.wifi, configure.el, onBox, offNote);
     refreshers.push(() => {
       onBox.hidden = !f.wifi.configure;
       offNote.hidden = f.wifi.configure;
@@ -946,7 +1146,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     advanced.addEventListener("toggle", () => {
       if (!advanced.open && advancedError()) advanced.open = true; // keep the error in sight
     });
-    form.append(section(S.form.sections.location, cityField, summaryLine, advanced));
+    const locationSection = section(S.form.sections.location, cityField, summaryLine, advanced);
     refreshers.push(() => {
       // While a fresh install still needs a place, the built-in one must not
       // look chosen, so the line stays empty until the user gives one.
@@ -956,82 +1156,512 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       if (advancedError()) advanced.open = true;
     });
 
-    // 3. Units.
-    form.append(section(S.form.sections.units, h("div", { class: "grid-2" },
+    // 3. Clock: the 12/24-hour format and night mode (both new in 1.3). Below
+    // 1.3 only the heading and the note show, as in Coins.
+    const clockFormat = radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
+      options: [["24h", S.form.hours24], ["12h", S.form.hours12]], set: (v) => { f.config.clock_format = v; } });
+    const nightSwitch = switchRow({ label: S.form.nightOn, checked: f.config.night.enabled === true, help: "night",
+      set: (v) => { f.config.night.enabled = v; jumpFor("night.enabled"); } });
+    const hourSelect = (label, field) => {
+      const id = uid("f");
+      const select = h("select", { id, class: "input" }, Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) })));
+      select.value = String(f.config.night[field]);
+      select.addEventListener("change", () => { f.config.night[field] = Number(select.value); changed("night"); });
+      return { select, el: h("div", { class: "field" }, head(h("label", { for: id }, label), label, null, null), select) };
+    };
+    const nightStart = hourSelect(S.form.nightStart, "start");
+    const nightEnd = hourSelect(S.form.nightEnd, "end");
+    const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
+    // The night brightness (new in 1.3) sits back under From and Until.
+    const nightLevel = levelSlider({ key: "night.brightness", label: S.form.nightBrightness, hint: S.form.nightAboveDay,
+      level: f.config.night?.brightness ?? DEFAULTS.night.brightness, set: (l) => { f.config.night.brightness = l; } });
+    const nightRows = [
+      nightSwitch.el,
+      h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
+      nightLevel.el,
+    ];
+    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night", "night.start", "night.end", "night.enabled", "night.brightness"],
+      h("span", { class: "advanced__hint" }, S.form.nightHint));
+    nightFold.classList.add("night");
+    const clockNote = note("", "note--info");
+    const clockFields = h("div", {}, clockFormat, nightFold);
+    const clockSection = section(S.form.sections.clock, clockFields, clockNote);
+    refreshers.push(() => {
+      const st = fieldState(f, "clock_format");
+      const first = firstWith("clock_format");
+      clockSection.hidden = st === "hidden";
+      clockFields.hidden = st !== "on"; // new in 1.3: an older target shows only the note
+      clockNote.hidden = st !== "greyed";
+      clockNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+      for (const sel of [nightStart.select, nightEnd.select]) {
+        [...sel.options].forEach((o, i) => { o.textContent = hourLabel(i, f.config.clock_format); });
+      }
+      const off = st !== "on" || !f.config.night.enabled;
+      const broken = !nightError.hidden; // keep the hours reachable so the error can be fixed
+      nightStart.select.disabled = off && !broken;
+      nightEnd.select.disabled = off && !broken;
+      nightSwitch.input.disabled = st !== "on";
+      // The level's value stays, ready for when night mode is on. Keep the
+      // slider reachable while its own error shows, as for the hours.
+      nightLevel.input.disabled = off && nightLevel.error.hidden;
+      nightLevel.el.classList.toggle("level--off", off);
+    });
+
+    // 3b. Units.
+    const unitsSection = section(S.form.sections.units, h("div", { class: "grid-2" },
       radioGroup({ key: "temp_unit", legend: S.form.temp, help: "temp_unit", value: f.config.temp_unit,
         options: [["celsius", S.form.celsius], ["fahrenheit", S.form.fahrenheit]], set: (v) => { f.config.temp_unit = v; } }),
       radioGroup({ key: "wind_unit", legend: S.form.wind, help: "wind_unit", value: f.config.wind_unit,
-        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } }))));
+        options: [["kmh", S.form.kmh], ["mph", S.form.mph]], set: (v) => { f.config.wind_unit = v; } })));
 
     // 4. Pages.
-    const pageRows = PAGE_KEYS.filter((p) => offered(f, `pages.${p}`)).map((p) => switchRow({
-      label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
-      set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
-    }));
+    // Every switch is built; the refresher hides or greys each one for the
+    // firmware the form is for, so the version picker can bring one in.
+    const pageRows = SHOWN_ORDER.map((p) => {
+      const row = switchRow({
+        label: S.pageNames[p], checked: !!(f.config.pages && f.config.pages[p]), badgeKey: `pages.${p}`, errorKey: `pages.${p}`,
+        set: (v) => { f.config.pages = { ...f.config.pages, [p]: v }; },
+      });
+      // Greyed (only a newer release has the page): which release.
+      const newer = h("p", { class: "field__hint switch-row__note", id: uid("hint"), hidden: true });
+      row.input.setAttribute("aria-describedby", [row.input.getAttribute("aria-describedby"), newer.id].filter(Boolean).join(" "));
+      row.el.append(newer);
+      return { p, newer, ...row };
+    });
     const allOff = note(S.form.allOff, "note--info");
     const stockHidden = note(S.form.stockHidden, "note--info");
     const githubHidden = note(S.form.githubHidden, "note--info");
     // The legend is the section's title, so the help button sits next to it.
-    form.append(h("section", { class: "section" },
+    // It goes into the Look and pages box, below the day brightness.
+    const pagesBlock = h("div", { class: "pages-block" },
       h("fieldset", { class: "field pages" },
-        h("legend", { class: "section__legend" }, head(h("h2", { class: "section__title" }, S.form.pages), S.form.pages, "pages", "pages")),
+        h("legend", { class: "section__legend" }, head(h("h3", { class: "section__title section__title--sub" }, S.form.pages), S.form.pages, "pages", "pages")),
         h("div", { class: "pages__grid" }, pageRows.map((r) => r.el)),
         errorSlot("pages", [])),
-      allOff, stockHidden, githubHidden));
+      allOff, stockHidden, githubHidden);
     refreshers.push(() => {
+      for (const { p, el, input, newer } of pageRows) {
+        const st = fieldState(f, `pages.${p}`);
+        el.hidden = st === "hidden";
+        input.disabled = st === "greyed";
+        const release = st === "greyed" ? firstWith(`pages.${p}`) : null;
+        newer.hidden = !release;
+        newer.textContent = release ? newerNote(release.version) : "";
+      }
       const pages = f.config.pages || {};
-      allOff.hidden = PAGE_KEYS.some((p) => pages[p]);
+      // A page counts when it is on and the firmware has it; the coin page also
+      // needs a coin to show and the stock page a Finnhub key (the Buddy hides
+      // them otherwise and falls back to the face).
+      const coinToShow = fieldState(f, "coins") === "on" && f.coinSlots.some((s, i) => (i === 0 || s.on) && s.pair);
+      const shows = (p) => pages[p] && fieldState(f, `pages.${p}`) === "on"
+        && (p !== "coin" || coinToShow) && (p !== "stock" || !!f.config.stock_key);
+      allOff.hidden = PAGE_KEYS.some(shows);
       stockHidden.hidden = !(pages.stock && !f.config.stock_key);
       githubHidden.hidden = !(pages.github && !f.config.github_user);
     });
 
-    // 5. Stock.
-    const stockResult = h("p", { class: "check__result", "aria-live": "polite" });
-    const stockCheck = btn(S.form.check, async () => {
-      stockResult.textContent = S.check.checking;
-      stockResult.dataset.state = "";
-      stockCheck.disabled = true;
-      jumpFor("check.stock"); // show the stock page while it checks
+    // 5. Stock: five slots on firmware that has them, today's single ticker
+    // otherwise; slots greyed with a note when only a newer release has them.
+    const upper = (v, input) => {
+      const up = v.toUpperCase().trim();
+      if (input.value !== up) {
+        const at = input.selectionStart;
+        input.value = up;
+        try { input.setSelectionRange(at, at); } catch { /* not every input type allows it */ }
+      }
+      return up;
+    };
+    // The Check results, made before the key's setter so a key change can clear them all.
+    const tickerResult = h("p", { class: "check__result", "aria-live": "polite" });
+    const slotResults = f.stockSlots.map(() => h("p", { class: "check__result", "aria-live": "polite" }));
+    const coinResults = []; // the coin slots' Check results (filled by the coin section)
+    const clearChecks = () => {
+      for (const el of [tickerResult, ...slotResults]) { el.textContent = ""; el.dataset.state = ""; }
+      // Finnhub coin checks used the old key too.
+      coinResults.forEach((el, k) => {
+        if (f.coinSlots[k].source !== "finnhub") return;
+        el.textContent = "";
+        el.dataset.state = "";
+      });
+      const prices = Object.fromEntries(Object.entries(app.live.coinPrices || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      const states = Object.fromEntries(Object.entries(app.live.coinStates || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      const stats = Object.fromEntries(Object.entries(app.live.coinStats || {})
+        .filter(([k]) => !k.startsWith(coinPriceKey("finnhub", ""))));
+      app.live = { ...app.live, coinPrices: prices, coinStates: states, coinStats: stats };
+    };
+    // The Finnhub key has two boxes, here and in Coins: typing in one sets the
+    // key and mirrors it into the other (never into the box being typed in).
+    const keyBoxes = [];
+    const setKey = (v, from) => {
+      f.config.stock_key = v.trim();
+      app.live = { ...app.live, prices: {}, stockStats: {} };
+      clearChecks();
+      for (const box of keyBoxes) if (box !== from) box.value = v;
+    };
+    const stockKey = textField({
+      key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
+      set: (v) => setKey(v, stockKey.input),
+    });
+    keyBoxes.push(stockKey.input);
+    const tickerCheck = btn(S.form.check, async () => {
+      tickerResult.textContent = S.check.checking;
+      tickerResult.dataset.state = "";
+      tickerCheck.disabled = true;
+      preview.showEntry("stock", 0);
       const asked = [f.config.ticker, f.config.stock_key];
       const res = await checkStock(window.fetch.bind(window), ...asked);
       // Gone, or the ticker or key changed while it ran: the answer is stale.
       if (!alive || asked[0] !== f.config.ticker || asked[1] !== f.config.stock_key) return;
-      stockCheck.disabled = false;
-      stockResult.textContent = stockMessage(res, f.config.ticker);
-      stockResult.dataset.state = res.status === "ok" ? "ok" : "bad";
-      if (res.status === "ok") app.live = { ...app.live, price: res.price };
+      tickerCheck.disabled = false;
+      tickerResult.textContent = stockMessage(res, f.config.ticker);
+      tickerResult.dataset.state = res.status === "ok" ? "ok" : "bad";
+      if (res.status === "ok") keepStockQuote(asked[0], res);
       refresh();
-      jumpFor("check.stock"); // a fresh result: hold the page again, with the live price on it
+      preview.showEntry("stock", 0);
     });
-    const stockOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
-    const clearStock = () => { delete app.live.price; stockResult.textContent = ""; };
+    const tickerOff = h("p", { class: "field__hint" }, S.form.stockCheckOff);
     const ticker = textField({
       key: "ticker", label: S.form.ticker, help: "ticker", value: f.config.ticker,
       attrs: { autocapitalize: "characters", class: "input input--upper" },
       set: (v, input) => {
-        const up = v.toUpperCase().trim();
-        if (input.value !== up) {
-          const at = input.selectionStart;
-          input.value = up;
-          try { input.setSelectionRange(at, at); } catch { /* not every input type allows it */ }
-        }
-        f.config.ticker = up;
-        clearStock();
+        f.config.ticker = upper(v, input);
+        f.stockSlots[0] = { ...f.stockSlots[0], symbol: f.config.ticker };
+        applySlots(f);
+        tickerResult.textContent = "";
       },
     });
-    const stockKey = textField({
-      key: "stock_key", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key, hint: S.form.stockEmpty,
-      set: (v) => { f.config.stock_key = v.trim(); clearStock(); },
+    const slotRows = f.stockSlots.map((_, i) => {
+      const key = `stockslot.${i}`;
+      const name = S.form.stockSlot(i + 1);
+      const result = slotResults[i];
+      // One row: On, the ticker, Check, Move up and down. Slot 1 (always on, no
+      // Move up) has the visible label with the help and badges; the rest are
+      // named by aria-label (and placeholder).
+      const id = uid("f");
+      const input = h("input", {
+        id, type: "text", class: "input input--upper slot__input", autocomplete: "off", spellcheck: "false",
+        autocapitalize: "characters", "aria-label": name, placeholder: i === 0 ? null : name,
+      });
+      input.value = f.stockSlots[i].symbol;
+      input.addEventListener("input", () => {
+        f.stockSlots[i] = { ...f.stockSlots[i], symbol: upper(input.value, input) };
+        applySlots(f);
+        result.textContent = "";
+        changed(key);
+      });
+      const error = errorSlot(key, [input]);
+      const onBox = i === 0 ? null : tickBox(name, f.stockSlots[i].on, (v) => { f.stockSlots[i] = { ...f.stockSlots[i], on: v }; applySlots(f); });
+      const move = (dir) => { f.stockSlots = moveSlot(f.stockSlots, i, dir); applySlots(f); showForm({ focus: `stockslot.${i + dir}`, moved: dir }); };
+      const up = moveButton(-1, name, () => move(-1));
+      const down = moveButton(1, name, () => move(1));
+      const check = btn(S.form.check, async () => {
+        const sym = f.stockSlots[i].symbol;
+        result.textContent = S.check.checking;
+        result.dataset.state = "";
+        check.disabled = true;
+        { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
+        const res = await checkStock(window.fetch.bind(window), sym, f.config.stock_key);
+        if (!alive || sym !== f.stockSlots[i].symbol) return;
+        check.disabled = false;
+        result.textContent = stockMessage(res, sym);
+        result.dataset.state = res.status === "ok" ? "ok" : "bad";
+        if (res.status === "ok") keepStockQuote(sym, res);
+        refresh();
+        { const at = stockIndexOfSlot(f, i); if (at >= 0) preview.showEntry("stock", at); }
+      }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${name}` });
+      const el = h("div", { class: "slot" },
+        i === 0 ? head(h("label", { for: id }, name), name, "stocks", "stocks") : null,
+        h("div", { class: "slot__row" },
+          h("div", { class: "slot__pick" }, onBox && onBox.el, input),
+          slotTools(check, i > 0 ? up : null, i < STOCK_SLOTS - 1 ? down : null)),
+        error, result);
+      // After a Move: the ticker, or (an off slot's is disabled) Move again, then the other way.
+      focusTargets[key] = () => [input, ...(moved > 0 ? [down, up] : [up, down]), check];
+      return { el, input, onBox, up, down, check, i };
     });
-    form.append(section(S.form.sections.stock, h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el),
-      h("div", { class: "check" }, stockCheck, stockOff, stockResult)));
+    // In the fold-out's title, so it shows closed and says what it is about: slots 2-5.
+    const slotsNote = h("span", { class: "advanced__hint" });
+    const moreStocks = foldOut("stock", slotRows.slice(1).map((r) => r.el), S.form.moreStocks, () => {
+      const filled = f.stockSlots.slice(1).filter((s) => s.symbol);
+      return filled.length ? S.form.moreStocksList(filled.map((s) => s.symbol), filled.filter((s) => !s.on).length) : "";
+    }, slotRows.slice(1).map((r) => `stockslot.${r.i}`), slotsNote);
+    const tickerGrid = h("div", { class: "grid-2 grid-2--narrow-first" }, ticker.el, stockKey.el);
+    const tickerBlock = h("div", {}, tickerGrid, h("div", { class: "check" }, tickerCheck, tickerOff, tickerResult));
+    const slotsBlock = h("div", { class: "slots" }, slotRows[0].el, moreStocks);
+    const stockSection = section(S.form.sections.stock, tickerBlock, slotsBlock);
     refreshers.push(() => {
-      const off = !f.config.ticker || !f.config.stock_key;
-      stockCheck.disabled = off;
-      stockOff.hidden = !off;
+      const st = fieldState(f, "stocks");
+      const firstStocks = firstWith("stocks");
+      // "on": the slots replace the single ticker field, and the key moves above them.
+      if (st === "on" && stockKey.el.parentNode !== slotsBlock) slotsBlock.prepend(stockKey.el);
+      if (st !== "on" && stockKey.el.parentNode !== tickerGrid) tickerGrid.append(stockKey.el);
+      tickerBlock.hidden = st === "on";
+      const tickerNone = !f.config.ticker || !f.config.stock_key;
+      tickerCheck.disabled = tickerNone;
+      tickerOff.hidden = !tickerNone;
+      slotsBlock.hidden = st === "hidden";
+      slotsNote.hidden = st !== "greyed";
+      slotsNote.textContent = st === "greyed" && firstStocks ? newerNote(firstStocks.version) : "";
+      for (const r of slotRows) {
+        const greyed = st === "greyed";
+        r.el.hidden = greyed && r.i === 0;   // slot 1 is the ticker field while greyed
+        const off = r.i > 0 && !f.stockSlots[r.i].on;
+        r.input.disabled = greyed || off;
+        if (r.onBox) r.onBox.input.disabled = greyed;
+        r.up.disabled = r.down.disabled = greyed;
+        r.check.disabled = greyed || off || !f.stockSlots[r.i].symbol || !f.config.stock_key;
+      }
     });
 
-    // 6. GitHub.
+    // 6. Coins: five slots like the stock ones, each with its own source. The
+    // picker offers only the pairs that source has: its coin list, loaded once
+    // per source and key (loadCoinList) and kept in app.coinLists across
+    // redraws. A list that failed is asked for again on the next drawing.
+    const SOURCES = [["coinbase", S.form.sourceCoinbase], ["finnhub", S.form.sourceFinnhub]];
+    let coinKey = f.config.stock_key; // the key the Finnhub lists use (follows the key field when it is left)
+    const failedLists = new Set();
+    const loadingLists = new Set();
+    function requestList(id, source) {
+      if (app.coinLists.has(id) || failedLists.has(id) || loadingLists.has(id)) return;
+      loadingLists.add(id);
+      loadCoinList(fetchForCoins, source, coinKey)
+        .then((list) => { app.coinLists.set(id, list); }, (e) => { report(e); failedLists.add(id); })
+        .finally(() => { loadingLists.delete(id); refresh(); }); // refresh() does nothing once the form is gone
+    }
+
+    // The Finnhub key again, at the top: the same setting as Stock's box (two
+    // inputs, one value; setKey mirrors each into the other as you type).
+    const coinKeyField = textField({
+      key: "stock_key", alias: "stock_key@coins", label: S.form.stockKey, help: "stock_key", value: f.config.stock_key,
+      hint: S.form.coinKeyHint, set: (v) => setKey(v, coinKeyField.input),
+    });
+    keyBoxes.push(coinKeyField.input);
+    // The Finnhub coin lists use the key once a box is left ("change"), not on
+    // every keystroke: each partial key would be a refused request.
+    for (const box of keyBoxes) box.addEventListener("change", () => { coinKey = f.config.stock_key; refresh(); });
+    // Said once for every currency select (each points at it).
+    const curNote = h("p", { class: "field__hint coin-note", id: uid("hint") }, S.form.coinCurrencyNote);
+    // Why Finnhub can't be picked yet (no key): the source group points at it.
+    const needKey = h("p", { class: "sr-only", id: uid("hint") }, S.form.finnhubNeedsKey);
+
+    const coinRows = f.coinSlots.map((_, i) => {
+      const key = `coinslot.${i}`;
+      const slotName = S.form.coinSlot(i + 1);
+      const forSlot = (t) => `${t}, ${slotName}`;
+      const result = h("p", { class: "check__result", "aria-live": "polite" });
+      coinResults[i] = result;
+      const clearResult = () => { result.textContent = ""; result.dataset.state = ""; };
+      // After a source change the slot waits (slot.verify, in the form state, so
+      // a Move or a redraw keeps it) for the new list: keep what it has, clear
+      // what it doesn't. It waits through "no key yet"; a failed list ends it.
+      const setVerify = (on) => { f.coinSlots[i] = { ...f.coinSlots[i], verify: on }; };
+      let shown = "";     // the list id and state the picker was last drawn for
+
+      // The source, a two-way segmented control. A stored source this flasher
+      // doesn't know gets a third option, so the slot's error makes sense; it
+      // goes once another is picked.
+      const stored = f.coinSlots[i].source;
+      const options = COIN_SOURCES.includes(stored) ? SOURCES : [...SOURCES, [stored, stored]];
+      const srcName = uid("src");
+      const srcInputs = options.map(([v]) => h("input", { type: "radio", name: srcName, value: v, checked: v === stored }));
+      const srcLabels = srcInputs.map((input, k) => h("label", { class: "segmented__item" }, input, h("span", {}, options[k][1])));
+      for (const input of srcInputs) {
+        input.addEventListener("change", () => {
+          if (!input.checked) return;
+          f.coinSlots[i] = { ...f.coinSlots[i], source: input.value, verify: true };
+          applyCoinSlots(f);
+          clearResult();
+          changed(key);
+        });
+      }
+      const finnhubInput = srcInputs[1];
+      const srcGroup = h("fieldset", { class: "segmented" },
+        h("legend", { class: "sr-only" }, forSlot(S.form.coinSource)), srcLabels);
+
+      // The picker: a code search and the currencies that coin has on this source.
+      const coinId = uid("coin");
+      const datalist = h("datalist", { id: uid("coins") });
+      const loadingHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListLoading);
+      const coinInput = h("input", {
+        id: coinId, type: "search", class: "input input--upper coin-input", list: datalist.id, placeholder: S.form.coinSearch,
+        autocomplete: "off", spellcheck: "false", autocapitalize: "characters", "aria-label": slotName,
+      });
+      const currency = h("select", { class: "input coin-currency", "aria-label": forSlot(S.form.coinCurrency), "aria-describedby": curNote.id });
+      // Without the list: the pair as text, in the same place.
+      const failedHint = h("p", { class: "field__hint", id: uid("hint") }, S.form.coinListFailed);
+      const manual = h("input", {
+        type: "text", class: "input input--upper coin-manual", autocomplete: "off", spellcheck: "false", autocapitalize: "characters",
+        placeholder: S.form.coinPairManual, "aria-label": forSlot(S.form.coinPairManual),
+      });
+      const error = errorSlot(key, [coinInput, manual]);
+
+      const listNow = () => app.coinLists.get(coinListId(f.coinSlots[i].source, coinKey)) || null;
+      const setPair = (pair) => {
+        if (pair === f.coinSlots[i].pair) return;
+        f.coinSlots[i] = { ...f.coinSlots[i], pair };
+        applyCoinSlots(f);
+        clearResult();
+      };
+      // ask: no currency chosen yet (a placeholder first, selected).
+      const fillCurrency = (list, base, quote, ask = false) => {
+        const quotes = [...quotesFor(list, base)];
+        if (quote && !quotes.includes(quote) && !ask) quotes.unshift(quote); // a stored pair the list lacks stays visible
+        currency.replaceChildren(
+          ...(ask ? [h("option", { value: "", disabled: true }, S.form.coinCurrency)] : []),
+          ...quotes.map((q) => h("option", { value: q }, q)));
+        currency.value = ask ? "" : quote || defaultQuote(quotes);
+      };
+      coinInput.addEventListener("input", () => {
+        const base = upper(coinInput.value, coinInput);
+        const list = listNow();
+        if (!list) return;
+        datalist.replaceChildren(...searchCoins(list, base).map((b) => h("option", { value: b })));
+        if (list.has(base)) {
+          fillCurrency(list, base, defaultQuote(quotesFor(list, base)));
+          setPair(`${base}-${currency.value}`);
+        } else {
+          currency.replaceChildren();
+          setPair("");
+        }
+        changed(key);
+      });
+      currency.addEventListener("change", () => {
+        const base = upper(coinInput.value, coinInput);
+        setPair(base && currency.value ? `${base}-${currency.value}` : "");
+        changed(key);
+      });
+      manual.addEventListener("input", () => { setPair(upper(manual.value, manual)); changed(key); });
+
+      // A hint describes its input only while it shows; the error's id stays.
+      const describedBy = (input, hint) => {
+        const rest = input.getAttribute("aria-describedby").split(" ").filter((id) => id !== hint.id);
+        input.setAttribute("aria-describedby", (hint.hidden ? rest : [hint.id, ...rest]).join(" "));
+      };
+
+      // state: as coinRowState's.
+      function draw(state, list) {
+        let { base = "", quote = "" } = f.coinSlots[i].pair ? splitPair(f.coinSlots[i].pair) : {};
+        let ask = false;
+        if (state === "ok" && f.coinSlots[i].verify && f.coinSlots[i].pair) {
+          if (!list.has(base)) { setPair(""); base = ""; quote = ""; }
+          else if (!quotesFor(list, base).includes(quote)) { setPair(""); quote = ""; ask = true; }
+          // This runs inside refresh(), after the errors were worked out from the
+          // old pair: refresh again so the slot's error and the notes follow.
+          if (!f.coinSlots[i].pair) queueMicrotask(refresh);
+        }
+        if ((state === "ok" || state === "failed") && f.coinSlots[i].verify) setVerify(false);
+        const text = state === "failed" || state === "none";
+        pickBox.hidden = text;
+        manual.hidden = !text;
+        failedHint.hidden = state !== "failed";
+        loadingHint.hidden = state !== "loading";
+        describedBy(coinInput, loadingHint);
+        describedBy(manual, failedHint);
+        manual.value = f.coinSlots[i].pair;
+        coinInput.value = base;
+        if (state === "ok") {
+          datalist.replaceChildren(...searchCoins(list, base).map((b) => h("option", { value: b })));
+          if (base) fillCurrency(list, base, quote, ask);
+          else currency.replaceChildren();
+        } else {
+          currency.replaceChildren(...(quote ? [h("option", { value: quote }, quote)] : []));
+        }
+      }
+
+      const onBox = i === 0 ? null : tickBox(slotName, f.coinSlots[i].on, (v) => { f.coinSlots[i] = { ...f.coinSlots[i], on: v }; applyCoinSlots(f); });
+      const move = (dir) => { f.coinSlots = moveSlot(f.coinSlots, i, dir); applyCoinSlots(f); showForm({ focus: `coinslot.${i + dir}`, moved: dir }); };
+      const up = moveButton(-1, slotName, () => move(-1));
+      const down = moveButton(1, slotName, () => move(1));
+      const check = btn(S.form.check, async () => {
+        const s = f.coinSlots[i];
+        const asked = [s.pair, s.source, f.config.stock_key];
+        result.textContent = S.check.checking;
+        result.dataset.state = "";
+        check.disabled = true;
+        { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
+        const res = await checkCoin(window.fetch.bind(window), s.source, s.pair, f.config.stock_key);
+        // Gone, or the pair, source or key changed while it ran: the answer is stale.
+        const now = f.coinSlots[i];
+        if (!alive || asked[0] !== now.pair || asked[1] !== now.source || asked[2] !== f.config.stock_key) return;
+        check.disabled = false;
+        result.textContent = coinMessage(res, asked[0]);
+        result.dataset.state = res.status === "ok" ? "ok" : "bad";
+        const askedKey = coinPriceKey(asked[1], asked[0]);
+        const states = { ...(app.live.coinStates || {}) };
+        if (res.status === "not_found") states[askedKey] = "notfound"; else delete states[askedKey];
+        app.live = { ...app.live, coinStates: states };
+        if (res.status === "ok") {
+          app.live = {
+            ...app.live,
+            coinPrices: { ...(app.live.coinPrices || {}), [askedKey]: res.price },
+            coinStats: { ...(app.live.coinStats || {}), [askedKey]: { open: res.open, high: res.high, low: res.low, ref: res.ref } },
+          };
+        }
+        refresh();
+        { const at = coinIndexOfSlot(f, i); if (at >= 0) preview.showEntry("coin", at); }
+      }, { class: "btn btn--secondary btn--compact", "aria-label": `${S.form.check}, ${slotName}` });
+
+      // One row: On, source, coin, currency (or the typed pair), then Check, ↑ ↓.
+      // The hints, the error and the Check result sit under it.
+      const pickBox = h("div", { class: "coin-pick" }, coinInput, datalist, currency);
+      const el = h("div", { class: "slot slot--coin" },
+        i === 0 ? head(h("label", { for: coinId }, slotName), slotName, "coins", "coins") : null,
+        h("div", { class: "slot__row" },
+          h("div", { class: "slot__pick" }, onBox && onBox.el, srcGroup, pickBox, manual),
+          slotTools(check, i > 0 ? up : null, i < COIN_SLOTS - 1 ? down : null)),
+        loadingHint, failedHint, error, result);
+
+      function sync(st) {
+        const s = f.coinSlots[i];
+        const row = coinRowState(st, s, f.config.stock_key, { listKey: coinKey, loaded: app.coinLists, failed: failedLists });
+        if (row.id) requestList(row.id, s.source);
+        const sig = `${row.id}|${row.state}`;
+        if (sig !== shown) { shown = sig; draw(row.state, app.coinLists.get(row.id) || null); }
+        for (const input of srcInputs) {
+          input.checked = input.value === s.source;
+          input.disabled = input === finnhubInput ? row.finnhubDisabled : row.greyed;
+        }
+        if (row.keyless) {
+          srcGroup.setAttribute("aria-describedby", needKey.id);
+          srcLabels[1].title = S.form.finnhubNeedsKey;
+        } else {
+          srcGroup.removeAttribute("aria-describedby");
+          srcLabels[1].removeAttribute("title");
+        }
+        if (srcLabels[2]) srcLabels[2].hidden = s.source !== stored;
+        coinInput.disabled = row.pickDisabled;
+        currency.disabled = row.pickDisabled || !currency.options.length;
+        manual.disabled = row.manualDisabled;
+        if (onBox) onBox.input.disabled = row.greyed;
+        up.disabled = down.disabled = row.greyed;
+        check.disabled = row.checkDisabled;
+      }
+      // After a Move: the coin (or the pair), else the source, then Move again.
+      focusTargets[key] = () => [coinInput, manual, srcInputs.find((r) => r.checked), ...(moved > 0 ? [down, up] : [up, down]), check];
+      return { el, sync, i };
+    });
+    const moreCoins = foldOut("coin", coinRows.slice(1).map((r) => r.el), S.form.moreCoins, () => {
+      const filled = f.coinSlots.slice(1).filter((s) => s.pair);
+      return filled.length ? S.form.moreCoinsList(filled.map((s) => s.pair), filled.filter((s) => !s.on).length) : "";
+    }, coinRows.slice(1).map((r) => `coinslot.${r.i}`));
+    const coinsNote = note("", "note--info");
+    const coinFields = h("div", {}, coinKeyField.el,
+      h("div", { class: "slots" }, curNote, coinRows[0].el, moreCoins), needKey);
+    const coinSection = section(S.form.sections.coin, coinFields, coinsNote);
+    refreshers.push(() => {
+      const st = fieldState(f, "coins");
+      const firstCoins = firstWith("coins");
+      coinSection.hidden = st === "hidden"; // not drawn: neither this firmware nor an installable one has coins
+      coinFields.hidden = st !== "on"; // all new in 1.3: an older target shows only the note (Eric)
+      coinsNote.hidden = st !== "greyed";
+      coinsNote.textContent = st === "greyed" && firstCoins ? newerNote(firstCoins.version) : "";
+      coinKeyField.input.disabled = st !== "on";
+      for (const r of coinRows) r.sync(st);
+    });
+
+    // 7. GitHub.
     const ghResult = h("p", { class: "check__result", "aria-live": "polite" });
     const ghCheck = btn(S.form.check, async () => {
       ghResult.textContent = S.check.checking;
@@ -1058,13 +1688,13 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         ghResult.textContent = "";
       },
     });
-    form.append(section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult)));
+    const githubSection = section(S.form.sections.github, github.el, h("div", { class: "check" }, ghCheck, ghOff, ghResult));
     refreshers.push(() => {
       ghCheck.disabled = !f.config.github_user;
       ghOff.hidden = !!f.config.github_user;
     });
 
-    // 7. Look.
+    // 8. Look and pages.
     const swatch = (i) => {
       const t = THEMES[i];
       const dots = [...new Set([t.sec, t.temp, t.priceUp, t.priceDown, t.ghNum])].slice(0, 4);
@@ -1073,12 +1703,30 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         h("span", { class: "swatch__dots" }, dots.map((c) => h("i", { style: `background:${c}` }))));
     };
     const mountIcon = (side) => h("span", { class: `mount-icon mount-icon--${side}`, "aria-hidden": "true" }, h("i"), h("b"));
-    form.append(section(S.form.sections.look,
+    const lookSection = section(S.form.sections.look,
       radioGroup({ key: "theme", legend: S.form.theme, help: "theme", value: f.config.theme, cls: "radios--swatches",
         options: S.themeNames.map((name, i) => [i, name, swatch(i)]), set: (v) => { f.config.theme = v; } }),
       radioGroup({ key: "mount", legend: S.form.mount, help: "mount", value: f.config.mount, cls: "radios--mount",
         options: [["left", S.form.left, mountIcon("left")], ["right", S.form.right, mountIcon("right")]],
-        set: (v) => { f.config.mount = v; } })));
+        set: (v) => { f.config.mount = v; } }));
+    // The day brightness (new in 1.3). Below 1.3 a note stands in for it; the night level lives in Clock.
+    const dayLevel = levelSlider({ key: "brightness", label: S.form.dayBrightness, help: "brightness", hint: S.form.dayBrightnessHint,
+      level: f.config.brightness ?? DEFAULTS.brightness, set: (l) => { f.config.brightness = l; } });
+    const levelRows = h("div", {}, dayLevel.el);
+    const levelNote = note("", "note--info");
+    lookSection.append(levelRows, levelNote, pagesBlock);
+    refreshers.push(() => {
+      const st = fieldState(f, "brightness");
+      const first = firstWith("brightness");
+      levelRows.hidden = st !== "on";
+      levelNote.hidden = st !== "greyed";
+      levelNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
+    });
+
+    // The boxes go in on the page in the setup flow's order. They were built
+    // in the order above, since they share the Finnhub key boxes, the
+    // refreshers and the pages notes that read the stock state.
+    form.append(wifiSection, lookSection, unitsSection, locationSection, clockSection, stockSection, coinSection, githubSection);
 
     // Firmware version, for the flows that flash.
     let cfgNote = null;
@@ -1091,9 +1739,10 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       const syncVersion = () => {
         const entry = app.releases.find((e) => e.version === f.version) || app.releases[0];
         if (entry && entry.notes) { notesLink.href = entry.notes; notesLink.hidden = false; } else notesLink.hidden = true;
+        f.supported = new Set(pathsForCfg(entry.cfg_v));   // the firmware about to go on decides (spec §6.4)
         cfgNote.hidden = !addsSettings(entry, app.info);
       };
-      select.addEventListener("change", () => { f.version = select.value; syncVersion(); });
+      select.addEventListener("change", () => { f.version = select.value; syncVersion(); refresh(); });
       form.append(section(S.form.sections.firmware,
         h("div", { class: "field" }, h("div", { class: "field__head" }, h("label", { for: id }, S.form.version)),
           h("div", { class: "input-row" }, select, notesLink)),
@@ -1137,7 +1786,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       refresh();
       if (Object.keys(currentErrors).length) {
         say(currentErrors.location ? S.form.needLocation : S.form.invalid, "error");
-        const first = [...form.querySelectorAll('[aria-invalid="true"]')][0];
+        const first = focusable([...form.querySelectorAll('[aria-invalid="true"]')]); // a hidden or disabled one can't take focus
         if (first) first.focus();
         return;
       }
@@ -1147,15 +1796,19 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     }
 
     refresh();
-    if (focus === "wifi") (f.wifi.choice === "new" ? ssid.input : configure.input).focus();
+    // Returned to screen(), which focuses it after its heading (and keeps the
+    // heading when nothing here can take focus).
+    focusTargets.wifi = () => [f.wifi.choice === "new" ? ssid.input : configure.input];
+    return focus && focusTargets[focus] ? focusable(focusTargets[focus]()) : null;
   });
 
   function refresh() {
     if (!alive) return;
     const errs = formErrors(f, app.zones);
-    for (const [k, raw] of Object.entries(f.serverErrors)) errs[k] = fieldMessage(k, raw);
+    for (const [k, raw] of Object.entries(remapStockErrors(f, f.serverErrors))) errs[k] = fieldMessage(k, raw);
     currentErrors = errs;
-    for (const [key, slot] of slots) {
+    for (const slot of slots.values()) {
+      const { key } = slot;
       const msg = errs[key];
       const shown = !!msg && (f.submitted || f.touched.has(key) || Object.hasOwn(f.serverErrors, key));
       slot.error.hidden = !shown;
@@ -1167,7 +1820,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
         h("span", { class: `badge badge--${b}` }, b === "new" ? S.form.badgeNew : S.form.badgeImported)));
     }
     for (const fn of refreshers) fn();
-    if (preview) preview.update(f.config, app.live);
+    if (preview) preview.update(previewConfig(f), app.live);
   }
 
   // Imports re-draw the form with the new values and say what happened.
@@ -1184,6 +1837,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
       return showForm({ say: S.form.badFile, tone: "error" });
     }
     f.config = mergeConfig(f.config, res.config);
+    rederiveSlots(f);
     markImported(Object.keys(res.config));
     const label = (k) => S.keyLabels[k] || k;
     const lines = [S.form.configImported(res.imported.length)];
@@ -1207,6 +1861,7 @@ function showForm({ say: message = "", tone = "", focus } = {}) {
     const left = unsupportedKeys(cfg, f.supported);
     cfg = filterSupported(cfg, f.supported);
     f.config = mergeConfig(f.config, cfg);
+    rederiveSlots(f);
     markImported(Object.keys(cfg));
     showForm({ say: left.length
       ? S.form.backupPartly(Object.keys(cfg).length, left)
@@ -1247,7 +1902,7 @@ async function saveSettings() {
   if (!res.ok) {
     app.expectDrop = false;
     if (res.reply && res.reply.errors) {
-      f.serverErrors = res.reply.errors;
+      f.serverErrors = remapStockErrors(f, res.reply.errors);
       f.submitted = true;
       return showForm({ say: S.form.setErrors, tone: "error" });
     }
@@ -1462,10 +2117,7 @@ async function afterFlash(entry, ui) {
   // What the new firmware understands decides what is sent; anything it has
   // that the form didn't offer goes to the review form first (on a fresh
   // install "added" is empty, so this is the only way the user sees it).
-  const now = supportedPaths(got.config);
-  const fresh = newlyOffered(f.supported, now);
-  f.supported = now;
-  f.config = filterSupported(mergeConfig(fromBoard(got.config), f.config), now);
+  const fresh = applyAfterFlash(f, got.config, supportedPaths(got.config));
   f.installed = info.fw;
   app.expectDrop = false;
   const added = [...new Set([...(got.added || []), ...fresh])];
@@ -1487,7 +2139,6 @@ function showResult(kind, { ssid = "", installed = null } = {}) {
       const g = guide(m, { mood: "love", say: S.result.connected(escapeRich(ssid)) });
       if (installed) g.add(S.result.installed(escapeRich(installed)));
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
-      confetti();
     } else if (kind === "wifiFailed") {
       const g = guide(m, { mood: "sad", say: installed ? S.result.installed(escapeRich(installed)) : S.result.wifiFailed(escapeRich(ssid)) });
       if (installed) g.add(S.result.wifiFailed(escapeRich(ssid)), "error");
@@ -1505,6 +2156,7 @@ function showResult(kind, { ssid = "", installed = null } = {}) {
       guide(m, { mood: "happy", say: installed ? S.result.installed(escapeRich(installed)) : S.result.saved });
       m.append(actions(done, btn(S.result.change, () => busy(startChange), { kind: "link" })));
     }
+    if (kind === "connected" || (installed && kind !== "wifiFailed")) confetti();
   });
 }
 
@@ -1521,7 +2173,7 @@ function showProblem(text, err, { retry, retryLabel, back } = {}) {
   });
 }
 
-// ── Confetti, for a Buddy that made it onto the Wi-Fi ─────
+// ── Confetti, for a finished flash or a Buddy that made it onto the Wi-Fi ─────
 
 function confetti() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;

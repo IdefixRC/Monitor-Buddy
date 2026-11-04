@@ -20,3 +20,9 @@ void formatCount(long n, char *out, size_t len) {
 uint8_t followerTextSize(const char *formatted) {
   return (formatted && strlen(formatted) == 5) ? 5 : 6;
 }
+
+// The centre y of entry dot `index` in the right-edge column (stock and coin
+// pages): `count` dots 14 px apart, centred on the screen's middle.
+int subDotY(uint8_t index, uint8_t count, int screenH) {
+  return screenH / 2 - ((count - 1) * 14) / 2 + index * 14;
+}
