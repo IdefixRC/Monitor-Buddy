@@ -17,8 +17,9 @@
     python tools/mb_serial.py COM4 selftest    protocol checks; restarts the
                                                Buddy five times
 
-set takes key=value pairs (theme becomes a number; true/false become
-booleans for pages.*; everything else is text), a JSON body, or @file.json.
+set takes key=value pairs (theme, brightness and the night hours and
+level become numbers; true/false become booleans for pages.* and
+night.enabled; everything else is text), a JSON body, or @file.json.
 Prefer key=value in PowerShell and cmd, which strip the quotes from JSON.
 
 wifi asks for the password with getpass, which can hang in Git Bash (mintty).
@@ -240,10 +241,14 @@ def verify_change(s, cmd, body):
             return False, "GET did not answer"
         have = got.get("config") or {}
         for key, value in want.items():
-            if key == "pages" and isinstance(value, dict):
-                for page, on in value.items():
-                    if (have.get("pages") or {}).get(page) is not on:
-                        return False, f"pages.{page} is not {str(on).lower()} on the board"
+            if isinstance(value, dict):   # pages, night: field by field
+                sub = have.get(key)
+                sub = sub if isinstance(sub, dict) else {}
+                for field, want_field in value.items():
+                    ok = sub.get(field) is want_field if isinstance(want_field, bool) else _same(want_field, sub.get(field))
+                    if not ok:
+                        shown = str(want_field).lower() if isinstance(want_field, bool) else want_field
+                        return False, f"{key}.{field} is not {shown} on the board"
             elif not _same(value, have.get(key)):
                 return False, f"{key} is not the requested value on the board"
     wifi = (body or {}).get("wifi")

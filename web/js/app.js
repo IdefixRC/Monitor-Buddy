@@ -20,7 +20,7 @@ import {
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
   previewPageFor, previewConfig, locationSummary, locationMissing, afterRecovery,
   moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
-  remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
+  remapStockErrors, dropSlotErrors, backupConfig, rederiveSlots, applyAfterFlash,
   applyCoinSlots, coinIndexOfSlot, COIN_SLOTS, COIN_SOURCES, coinListId, coinRowState,
   hourLabel, levelToPercent, percentToLevel,
 } from "./form.js";
@@ -531,7 +531,7 @@ async function startRecovery() {
 async function startBackup() {
   const got = await readGet();
   if (!got) return;
-  const name = downloadBackup(fromBoard(got.config));
+  const name = downloadBackup(backupConfig(got.config));
   showHome();
   G.add(S.backup.saved(escapeRich(name)));
 }
@@ -578,7 +578,7 @@ async function startFresh() {
   if (!got) return;
   showBackupOffer({
     say: S.backup.freshSay,
-    config: fromBoard(got.config),
+    config: backupConfig(got.config),
     choice: true,
     next: (empty) => {
       app.form = newFormState(empty ? DEFAULTS : fromBoard(got.config),
@@ -592,7 +592,7 @@ async function startFresh() {
 async function startReset() {
   const got = await readGet();
   if (!got) return;
-  showBackupOffer({ say: S.backup.resetSay, config: fromBoard(got.config), choice: false, next: showResetConfirm });
+  showBackupOffer({ say: S.backup.resetSay, config: backupConfig(got.config), choice: false, next: showResetConfirm });
 }
 
 function showResetConfirm() {
@@ -903,7 +903,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const error = errorSlot(key, [input]);
     const top = head(h("label", { for: id }, label), label, help, key);
     top.append(value);
-    return { input, hintEl, el: h("div", { class: "field level" }, top, input, hintEl, error) };
+    return { input, hintEl, error, el: h("div", { class: "field level" }, top, input, hintEl, error) };
   }
 
   const section = (title, ...kids) => h("section", { class: "section" }, h("h2", { class: "section__title" }, title), kids);
@@ -1152,7 +1152,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       nightSwitch.el,
       h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
     ];
-    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night"],
+    const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night", "night.start", "night.end", "night.enabled"],
       h("span", { class: "advanced__hint" }, S.form.nightHint));
     nightFold.classList.add("night");
     const clockNote = note("", "note--info");
@@ -1686,7 +1686,8 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       levelNote.hidden = st !== "greyed";
       levelNote.textContent = st === "greyed" && first ? newerNote(first.version) : "";
       const off = !f.config.night?.enabled;   // its value stays, ready for when night mode is on
-      nightLevel.input.disabled = off;
+      // Keep the slider reachable while its own error shows, as for the hours.
+      nightLevel.input.disabled = off && nightLevel.error.hidden;
       nightLevel.el.classList.toggle("level--off", off);
       nightLevel.hintEl.textContent = off ? S.form.nightNeedsSwitch : S.form.nightAboveDay;
     });

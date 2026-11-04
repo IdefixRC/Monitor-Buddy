@@ -61,3 +61,12 @@ test("values, comments and oddities", () => {
 test("the placeholder Finnhub key counts as empty", () => {
   assert.equal(parseConfigH('#define STOCKKEY "xxxxxxx"\n', table).config.stock_key, "");
 });
+
+test("the night mode and clock defines map onto clock_format and night.*", () => {
+  const text = "#define CLOCK_12H true\n#define NIGHT_MODE true\n#define NIGHT_START_HOUR 22\n#define NIGHT_END_HOUR 6\n#define NIGHT_BRIGHTNESS 40\n";
+  const r = parseConfigH(text, table);
+  assert.equal(r.config.clock_format, "12h");
+  assert.deepEqual(r.config.night, { enabled: true, start: 22, end: 6, brightness: 40 });
+  assert.deepEqual(r.skipped, []);
+  assert.equal(parseConfigH("#define CLOCK_12H false\n", table).config.clock_format, "24h");
+});

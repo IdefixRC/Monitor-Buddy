@@ -80,6 +80,14 @@ export function fromBoard(config) {
   return out;
 }
 
+// A board's GET config as a backup keeps it. fromBoard seeds the brightness of
+// a board too old to report one; a backup must not carry that made-up value.
+export function backupConfig(boardConfig) {
+  const out = fromBoard(boardConfig);
+  if (!boardConfig || !Object.hasOwn(boardConfig, "brightness")) delete out.brightness;
+  return out;
+}
+
 // The Wi-Fi choices for a flow (spec §4). "keep" only when the board reports
 // saved Wi-Fi and the flow doesn't erase it, or on path B for upgrades, where
 // there is no INFO to ask. The first choice is the default.
@@ -311,6 +319,8 @@ export function applyAfterFlash(f, boardConfig, now) {
   const fresh = newlyOffered(f.supported, now);
   f.supported = now;
   f.config = filterSupported(mergeConfig(fromBoard(boardConfig), f.config), now);
+  // The Clock box reads night even where it only shows its note; formToRequest strips it.
+  if (!f.config.night) f.config.night = { ...DEFAULTS.night };
   // A flash that doesn't erase keeps /display.json, and a board too old to report
   // its level left only fromBoard's default in the form: the Buddy's own level
   // stands unless the user chose one. After an erase the form's value is the
@@ -504,13 +514,6 @@ export function locationSummary(config, placeLabel = "") {
 // them (Eric, 2026-10-12): the face never uses the theme.
 export const THEMED_PAGES = Object.freeze(["clock", "date", "weather", "moon", "stock", "github"]);
 
-// The preview page a changed setting belongs to, so the preview can jump
-// there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
-// page without jumping), or null (no jump and no hold: Wi-Fi, or a page
-// switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
-// the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
-// shown (an empty key or user hides stock and GitHub), or stays when there is
-// none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 // Night mode's hours are stored 0-23; the labels follow the clock format.
 export const hourLabel = (h, format) => {
   if (format !== "12h") return `${String(h).padStart(2, "0")}:00`;
@@ -520,6 +523,13 @@ export const hourLabel = (h, format) => {
 export const levelToPercent = (l) => Math.round((l * 100) / 255);
 export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
 
+// The preview page a changed setting belongs to, so the preview can jump
+// there (GUI review, Eric 2026-10-12): a page key, "stay" (hold the current
+// page without jumping), or null (no jump and no hold: Wi-Fi, or a page
+// switched off). "check.stock", "check.coin" and "check.github" are the Check buttons: on
+// the press and again when a fresh result arrives. A theme change goes to the first themed page that is on and
+// shown (an empty key or user hides stock and GitHub), or stays when there is
+// none. "coinslot.N" (a coin slot) goes to the coin page. For the other keys, whether the page is shown is the preview's call.
 export function previewPageFor(key, config) {
   switch (key) {
     case "temp_unit": case "wind_unit": case "lat": case "lon": case "city": return "weather";

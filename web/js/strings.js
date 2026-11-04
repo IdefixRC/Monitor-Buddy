@@ -270,7 +270,7 @@ export const S = {
     nightStart: "From",
     nightEnd: "Until",
     dayBrightness: "Brightness",
-    dayBrightnessHint: "A swipe up or down on the Buddy sets it too.",
+    dayBrightnessHint: "A swipe up or down on the Buddy outside night hours sets it too.",
     nightBrightness: "Night brightness",
     nightLevel: (p) => `${p} %`,
     nightAboveDay: "Can be set brighter than your daytime level. A swipe up or down on the Buddy at night sets it too.",

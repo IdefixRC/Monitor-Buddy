@@ -15,5 +15,5 @@ uint8_t nightStep(uint8_t level, bool up) {
 }
 
 uint8_t levelPercent(uint8_t level) {
-  return (uint8_t)(level * 100UL / 255UL);
+  return (uint8_t)((level * 100UL + 127UL) / 255UL);
 }

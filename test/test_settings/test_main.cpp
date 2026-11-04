@@ -388,7 +388,7 @@ static void test_merge_takes_a_new_brightness() {
 // maximum, five stocks and five coins. A key missing from a file holds its
 // short default, so "every field at max" and "every path added" cannot happen
 // together; after a 1.2 -> 1.3 update only the new keys are reported, which
-// are "clock_format", "night", "coins" and "pages.coin" (the paths #24 added
+// are "brightness", "clock_format", "night", "coins" and "pages.coin" (the paths #24 added
 // are in the line, with no reserve). The line must fit the 2,048-byte reply
 // buffer with a quarter to spare.
 static void test_largest_get_reply_fits_with_room() {
@@ -426,17 +426,22 @@ static void test_largest_get_reply_fits_with_room() {
 // The largest SET line the flasher sends: the whole config plus Wi-Fi.
 static void test_largest_set_line_fits_with_room() {
   Settings s = makeDefaults();
+  s.mount = MOUNT_RIGHT; s.theme = 4;
   memset(s.githubUser, 'a', 39); s.githubUser[39] = '\0';
   memset(s.tzName, 'a', 64);     s.tzName[64] = '\0';
   memset(s.tzRule, 'A', 64);     s.tzRule[64] = '\0';
   for (uint8_t i = 0; i < SETTINGS_STOCK_MAX; i++) { memset(s.stocks[i].symbol, 'A', 10); s.stocks[i].symbol[10] = '\0'; s.stocks[i].on = true; }
   s.stockCount = SETTINGS_STOCK_MAX;
+  memset(s.ticker, 'A', 10);     s.ticker[10] = ' ';
   memset(s.stockKey, 'k', 64);   s.stockKey[64] = '\0';
   for (uint8_t i = 0; i < SETTINGS_COIN_MAX; i++) {
     memset(s.coins[i].pair, 'A', 10); s.coins[i].pair[10] = '-'; memset(s.coins[i].pair + 11, 'B', 10); s.coins[i].pair[21] = '\0';
-    s.coins[i].source = COIN_FINNHUB; s.coins[i].on = true;
+    s.coins[i].source = COIN_COINBASE; s.coins[i].on = true;   // the longer word
   }
   s.coinCount = SETTINGS_COIN_MAX;
+  strcpy(s.lat, "-12.34567890123");
+  strcpy(s.lon, "-123.4567890123");
+  s.tempUnit = TEMP_FAHRENHEIT;
   s.clockFormat = CLOCK_12H_FORMAT;
   s.brightness = 255;
   s.night = {false, 23, 22, 255};

@@ -33,6 +33,7 @@ static void test_night_step_clamps() {
 }
 static void test_level_percent() {
   TEST_ASSERT_EQUAL(3, levelPercent(8));
+  TEST_ASSERT_EQUAL(13, levelPercent(32));   // rounds like the flasher's Math.round
   TEST_ASSERT_EQUAL(100, levelPercent(255));
 }
 

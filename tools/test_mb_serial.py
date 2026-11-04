@@ -56,5 +56,26 @@ class ParseSetArgs(unittest.TestCase):
         self.assertEqual(mb_serial.parse_set_args(["pages.coin=false"]), {"config": {"pages": {"coin": False}}})
 
 
+class VerifyChange(unittest.TestCase):
+    def verify(self, want, have):
+        from unittest import mock
+        with mock.patch.object(mb_serial, "_read_ok", return_value={"config": have}):
+            return mb_serial.verify_change(None, "SET", {"config": want})
+
+    def test_night_fields_are_compared_one_by_one(self):
+        have = {"night": {"enabled": False, "start": 22, "end": 7, "brightness": 40}}
+        self.assertEqual(self.verify({"night": {"start": 22}}, have)[0], True)
+        self.assertEqual(self.verify({"night": {"start": 22, "enabled": False}}, have)[0], True)
+        ok, detail = self.verify({"night": {"start": 21}}, have)
+        self.assertFalse(ok)
+        self.assertIn("night.start", detail)
+        self.assertFalse(self.verify({"night": {"enabled": True}}, have)[0])
+        self.assertFalse(self.verify({"night": {"start": 22}}, {})[0])
+
+    def test_pages_still_compared_one_by_one(self):
+        self.assertTrue(self.verify({"pages": {"coin": False}}, {"pages": {"coin": False, "moon": True}})[0])
+        self.assertFalse(self.verify({"pages": {"coin": True}}, {"pages": {"coin": False}})[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ import {
   stockSlots, slotsToStocks, moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors,
   COIN_SLOTS, coinSlots, slotsToCoins, applyCoinSlots, coinIndexOfSlot, previewPageFor,
-  applyAfterFlash, rederiveSlots, coinListId, coinRowState, hourLabel, percentToLevel, levelToPercent,
+  applyAfterFlash, rederiveSlots, coinListId, coinRowState, hourLabel, percentToLevel, levelToPercent, backupConfig,
 } from "../web/js/form.js";
 import { KEYS, mergeConfig, BASELINE_PATHS, PATHS_BY_CFG, filterSupported, supportedPaths, validateConfig } from "../web/js/settings.js";
 import { parseConfigH } from "../web/js/configh.js";
@@ -1136,7 +1136,7 @@ test("the Look box draws both sliders; the night one follows night mode", () => 
   const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
   assert.ok(src.indexOf("S.form.sections.look") < src.indexOf("S.form.dayBrightness"));
   assert.doesNotMatch(src, /nightRows = \[[^\]]*nightLevel/);
-  assert.match(src, /nightLevel\.input\.disabled = off;/);
+  assert.match(src, /nightLevel\.input\.disabled = off && nightLevel\.error\.hidden;/);
   assert.match(src, /newerNote\(first\.version\)/);
 });
 
@@ -1154,4 +1154,20 @@ test("every night percent 3-100 survives a reload, and an untouched slider keeps
   // drawing the form (which shows the rounded percent) never changes it.
   const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
   assert.equal((src.match(/night\.brightness = /g) || []).length, 1);
+});
+
+test("after a flash to a 1.2 target the form still has night (the Clock box reads it)", () => {
+  const f = newFormState(DEFAULTS, { flow: "change", supported: BASELINE_PATHS });
+  applyAfterFlash(f, mergeConfig(DEFAULTS, {}), new Set(BASELINE_PATHS));
+  assert.ok(f.config.night);
+  assert.equal(f.config.night.enabled, false);
+  const req = formToRequest(f);
+  assert.equal("night" in req.config, false);
+  assert.equal("brightness" in req.config, false);
+});
+
+test("a backup of a board that reports no brightness carries none", () => {
+  assert.equal("brightness" in backupConfig({ mount: "left" }), false);
+  assert.equal(backupConfig({ mount: "left", brightness: 90 }).brightness, 90);
+  assert.ok(backupConfig({ mount: "left" }).night);
 });
