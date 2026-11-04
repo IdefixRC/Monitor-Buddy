@@ -110,6 +110,10 @@ export function newFormState(config, { flow, info = null, added = [], imported =
   return state;
 }
 
+// What the preview draws: only what the target firmware has, so a target
+// without coins shows no Coin page.
+export const previewConfig = (state) => filterSupported(state.config, state.supported);
+
 // The form shows a setting only if the Buddy it will be sent to understands
 // it (spec §5.3): the running board's GET for Change settings; the firmware
 // picked at the bottom for flash flows; 1.2.0's set when neither is known.

@@ -2,7 +2,8 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { THEMES, themeColors, pageList, textWidth, moonPhase, moonLabel, PageCycle, HOLD_MS, CYCLE_MS, formatCount, followerTextSize, subDotY, formatCoinPrice, currencyOf, clickStep, coinPriceSize, usableCoins, drawCoin, textPath, SHOWN_ORDER, GLYPHS } from "../web/js/preview.js";
-import { previewPageFor } from "../web/js/form.js";
+import { previewPageFor, previewConfig, newFormState, DEFAULTS } from "../web/js/form.js";
+import { BASELINE_PATHS, PATHS_BY_CFG } from "../web/js/settings.js";
 
 const main = readFileSync(new URL("../src/main.cpp", import.meta.url), "utf8");
 const all = { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true };
@@ -218,6 +219,16 @@ test("subDotY mirrors the firmware", () => {
 });
 
 // ── The coin page (Task 8) ────────────────────────────────
+
+test("the preview shows a Coin page only for a target with coins", () => {
+  const cfg = { ...DEFAULTS, pages: { ...DEFAULTS.pages }, stock_key: "k", github_user: "octocat" };
+  const old = newFormState(cfg, { flow: "update", supported: BASELINE_PATHS });
+  assert.ok(old.config.pages.coin, "the form still holds the coin page and the coin");
+  assert.equal(pageList(previewConfig(old)).includes("coin"), false);
+  assert.ok(pageList(previewConfig(old)).includes("stock"), "the single ticker still shows");
+  const next = newFormState(cfg, { flow: "update", supported: PATHS_BY_CFG[2] });
+  assert.equal(pageList(previewConfig(next)).includes("coin"), true);
+});
 
 test("pageList follows the device's shown order (coin after stock)", () => {
   const cfg = { pages: { face: true, clock: true, date: true, weather: true, moon: true, stock: true, github: true, coin: true }, stock_key: "k", github_user: "u", coins: [{ pair: "BTC-USD", source: "coinbase", on: true }] };

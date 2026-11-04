@@ -18,7 +18,7 @@ import {
   DEFAULTS, FLOWS, newFormState, formToRequest, badgesFor, helpFor, wifiChoices, formErrors,
   fieldMessage, fromBoard, redactLog, stockMessage, githubMessage, addsSettings,
   LOCATION_KEYS, boardLocation, escapeRich, parseRich, joinedWifi, resultKind, WIFI_WAIT_MS,
-  previewPageFor, locationSummary, locationMissing, afterRecovery,
+  previewPageFor, previewConfig, locationSummary, locationMissing, afterRecovery,
   moveSlot, applySlots, stockIndexOfSlot, fieldState, STOCK_SLOTS,
   remapStockErrors, dropSlotErrors, rederiveSlots, applyAfterFlash,
   applyCoinSlots, coinIndexOfSlot, COIN_SLOTS,
@@ -1703,7 +1703,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         h("span", { class: `badge badge--${b}` }, b === "new" ? S.form.badgeNew : S.form.badgeImported)));
     }
     for (const fn of refreshers) fn();
-    if (preview) preview.update(f.config, app.live);
+    if (preview) preview.update(previewConfig(f), app.live);
   }
 
   // Imports re-draw the form with the new values and say what happened.
