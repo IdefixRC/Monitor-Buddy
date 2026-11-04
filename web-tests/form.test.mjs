@@ -1062,3 +1062,22 @@ test("the Clock box sits between Location and Units; below 1.3 only its note sho
   assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED }), "clock_format"), "hidden");
   assert.equal(fieldState(newFormState(DEFAULTS, { flow: "change", info: INFO_SAVED, supported: [...PATHS_BY_CFG[2]] }), "clock_format"), "on");
 });
+
+test("night errors only count where night mode is offered", () => {
+  const bad = { ...DEFAULTS, night: { ...DEFAULTS.night, start: 5, end: 5 } };
+  const old = newFormState(bad, { flow: "update", supported: [...BASELINE_PATHS] });
+  const e120 = formErrors(old, zones);
+  assert.deepEqual(Object.keys(e120).filter((k) => k === "night" || k.startsWith("night.") || k === "clock_format"), []);
+  const now = newFormState(bad, { flow: "update", supported: [...PATHS_BY_CFG[2]] });
+  assert.ok(formErrors(now, zones).night);
+});
+
+test("every night percent 3-100 survives a reload, and an untouched slider keeps the level", () => {
+  for (let p = 3; p <= 100; p++) assert.equal(levelToPercent(percentToLevel(p)), p, String(p));
+  assert.equal(levelToPercent(8), 3);
+  assert.equal(levelToPercent(255), 100);
+  // The stored level is written only by the slider's own input handler, so
+  // drawing the form (which shows the rounded percent) never changes it.
+  const src = readFileSync(new URL("../web/js/app.js", import.meta.url), "utf8");
+  assert.equal((src.match(/night\.brightness = /g) || []).length, 1);
+});

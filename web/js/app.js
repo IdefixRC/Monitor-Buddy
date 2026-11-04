@@ -1117,7 +1117,7 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const clockFormat = radioGroup({ key: "clock_format", legend: S.form.clockFormat, help: "clock_format", value: f.config.clock_format,
       options: [["24h", S.form.hours24], ["12h", S.form.hours12]], set: (v) => { f.config.clock_format = v; } });
     const nightSwitch = switchRow({ label: S.form.nightOn, checked: f.config.night.enabled === true, help: "night",
-      set: (v) => { f.config.night.enabled = v; } });
+      set: (v) => { f.config.night.enabled = v; jumpFor("night.enabled"); } });
     const hourSelect = (label, field) => {
       const id = uid("f");
       const select = h("select", { id, class: "input" }, Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) })));
@@ -1129,8 +1129,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
     const nightEnd = hourSelect(S.form.nightEnd, "end");
     const nightError = errorSlot("night", [nightStart.select, nightEnd.select]);
     const levelId = uid("f");
+    const aboveId = uid("hint");
     const levelValue = h("span", { class: "night__value", "aria-hidden": "true" });
-    const nightLevel = h("input", { id: levelId, type: "range", class: "night__range", min: "3", max: "100", step: "1" });
+    const nightLevel = h("input", { id: levelId, type: "range", class: "night__range", min: "3", max: "100", step: "1", "aria-describedby": aboveId });
     nightLevel.value = String(levelToPercent(f.config.night.brightness));
     nightLevel.setAttribute("aria-valuetext", S.form.nightLevel(Number(nightLevel.value)));
     const showLevel = () => {
@@ -1143,10 +1144,11 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
       h("div", { class: "grid-2" }, nightStart.el, nightEnd.el), nightError,
       h("div", { class: "field" },
         h("div", { class: "field__head" }, h("label", { for: levelId }, S.form.nightBrightness), levelValue), nightLevel),
-      h("p", { class: "field__hint" }, S.form.nightAboveDay),
+      h("p", { class: "field__hint", id: aboveId }, S.form.nightAboveDay),
     ];
     const nightFold = foldOut("night", nightRows, S.form.nightMode, () => "", ["night"],
       h("span", { class: "advanced__hint" }, S.form.nightHint));
+    nightFold.classList.add("night");
     const clockNote = note("", "note--info");
     const clockFields = h("div", {}, clockFormat, nightFold);
     const clockSection = section(S.form.sections.clock, clockFields, clockNote);
@@ -1162,8 +1164,9 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         [...sel.options].forEach((o, i) => { o.textContent = hourLabel(i, f.config.clock_format); });
       }
       const off = st !== "on" || !f.config.night.enabled;
-      nightStart.select.disabled = off;
-      nightEnd.select.disabled = off;
+      const broken = !nightError.hidden; // keep the hours reachable so the error can be fixed
+      nightStart.select.disabled = off && !broken;
+      nightEnd.select.disabled = off && !broken;
       nightLevel.disabled = off;
       nightSwitch.input.disabled = st !== "on";
       showLevel();

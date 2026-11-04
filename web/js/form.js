@@ -436,6 +436,12 @@ export function formErrors(state, zones) {
     out.tz_name = S.errors.tzUnknown;
   }
   if (locationMissing(state)) out.location = S.errors.location;
+  // Not offered by the deciding firmware: the Clock box is hidden, so its errors must not block Save.
+  if (fieldState(state, "night.enabled") !== "on") {
+    for (const key of Object.keys(out)) {
+      if (key === "night" || key.startsWith("night.") || key === "clock_format") delete out[key];
+    }
+  }
   const w = state.wifi;
   if (w && w.configure && w.choice === "new") {
     for (const [key, raw] of Object.entries(validateWifi({ ssid: w.ssid, password: w.password }).errors)) {
@@ -498,7 +504,7 @@ export const hourLabel = (h, format) => {
   return `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
 };
 // The night slider shows percent; the board stores 8-255.
-export const levelToPercent = (l) => Math.floor((l * 100) / 255);
+export const levelToPercent = (l) => Math.round((l * 100) / 255);
 export const percentToLevel = (p) => Math.max(8, Math.min(255, Math.round((p * 255) / 100)));
 
 export function previewPageFor(key, config) {
