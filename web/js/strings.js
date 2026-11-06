@@ -69,6 +69,8 @@ export const S = {
     privacy: "Your settings go straight to the Buddy. Nothing is stored in this browser, and the only outside requests are the coin lists, the city search and the checks you press.",
     project: "Project on GitHub",
     projectUrl: "https://github.com/IdefixRC/Monitor-Buddy",
+    manual: "Manual (PDF)",
+    manualUrl: "https://github.com/IdefixRC/Monitor-Buddy/raw/main/docs/Monitor-Buddy-Manual.pdf",
     guide: "Build guide",
     guideUrl: "https://github.com/IdefixRC/Monitor-Buddy#readme",
     issue: "Report a problem",
