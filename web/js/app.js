@@ -8,7 +8,7 @@ import { checkBuddy, fetchImage, flashImage, FlashError, ImageMismatch, NotABudd
 import { parseManifest, offered as offeredReleases, updateFor } from "./releases.js";
 import { PAGE_KEYS, mergeConfig, makeBackup, readBackup, backupFileName, BadBackup, supportedPaths, filterSupported, unsupportedKeys, pathsForCfg, installablePaths } from "./settings.js";
 import { parseConfigH } from "./configh.js";
-import { ruleForZone } from "./tz.js";
+import { ruleForZone, ruleUpdate } from "./tz.js";
 import { searchCity } from "./geocode.js";
 import { checkStock, checkGithub, checkCoin } from "./checks.js";
 import { loadCoinList, searchCoins, quotesFor, defaultQuote, splitPair, coinPriceKey } from "./coins.js";
@@ -1019,6 +1019,25 @@ function showForm({ say: message = "", tone = "", focus, moved = 0 } = {}) {
         btn(S.form.importBackup, () => fileBackup.click()),
         btn(S.form.exportBackup, () => { status.replaceChildren(...rich(S.backup.saved(escapeRich(downloadBackup(f.config))))); })),
       fileConfig, fileBackup, status));
+
+    // The time zone rules changed since this rule was saved: offer the new one,
+    // and only offer. Nobody's hand-typed rule gets replaced without asking.
+    const savedRule = f.config.tz_rule;
+    const newRule = f.touched.has("tz_rule") ? null : ruleUpdate(app.zones || {}, f.config.tz_name, savedRule);
+    if (newRule) {
+      const tzOffer = h("section", { class: "tools tools--callout" },
+        h("p", { class: "tools__callout" }, S.form.tzUpdate(f.config.tz_name)),
+        h("div", { class: "tools__buttons" },
+          btn(S.form.tzApply, () => {
+            f.config.tz_rule = newRule;
+            tzRule.input.value = newRule;
+            changed("tz_rule");
+            say(S.form.tzApplied);
+          }, { kind: "primary" }),
+          btn(S.form.tzKeep, () => changed("tz_rule"))));
+      refreshers.push(() => { tzOffer.hidden = f.touched.has("tz_rule") || f.config.tz_rule !== savedRule; });
+      form.append(tzOffer);
+    }
 
     // 1. Wi-Fi.
     const configure = switchRow({

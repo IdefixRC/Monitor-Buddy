@@ -314,7 +314,7 @@ Monitor-Buddy builds on the work of others:
 - **[EDISON-SCIENCE-CORNER / DESKBUDDY-1.0](https://github.com/EDISON-SCIENCE-CORNER/DESKBUDDY-1.0)** for additional face designs.
 - **[AyresWiFiManager](https://github.com/ayresnet/AyresWiFiManager)** for the captive-portal Wi-Fi setup. Monitor-Buddy uses the [IdefixRC fork](https://github.com/IdefixRC/AyresWiFiManager), which adds Arduino core 3.x support, the multilingual setup page and a time sync that never blocks.
 - **[esptool-js](https://github.com/espressif/esptool-js)** by Espressif (Apache-2.0), which the web flasher uses to write the firmware from the browser.
-- **[posix_tz_db](https://github.com/nayarsystems/posix_tz_db)** (MIT) for the time zone rules, daylight saving included.
+- **[posix_tz_db](https://github.com/nayarsystems/posix_tz_db)** (MIT) for the time zone table, with its rules kept up to date from the [IANA time zone database](https://www.iana.org/time-zones).
 - **[Open-Meteo](https://open-meteo.com/)** for the weather and the web flasher's city search.
 
 Contributors:

@@ -214,6 +214,10 @@ export const S = {
     about: (label) => `About ${label}`,
     badgeNew: "New",
     badgeImported: "Imported",
+    tzUpdate: (zone) => `Oh, I found a time zone update for ${zone}. My clock may be off without it. Want me to apply it?`,
+    tzApply: "Apply the update",
+    tzKeep: "Keep my current rule",
+    tzApplied: "Got it. Save and my clock is right again.",
     upgradeCallout: "Have your old config.h? Import it and I'll fill in the form from it. Nothing is uploaded.",
 
     tools: "Import and export",
