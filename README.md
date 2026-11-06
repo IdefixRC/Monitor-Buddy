@@ -36,7 +36,7 @@ It is also genuinely useful when you swipe past the face:
 - **Left or right side** of your monitor: one setting turns the screen, touch and eye movement around for a right-side mount
 - **Swipe** left and right to move between pages, up and down to adjust brightness (remembered across restarts, and also a slider in the web flasher), **double-tap** to stop the auto-scroll, **tap the face** to change expression (all controls in [4.10](#410-everyday-controls))
 - **Stays smooth on bad Wi-Fi**: weather, stock, coin and GitHub data load in the background, so the face and touch never wait for the network
-- **Set up from your browser**: the [web flasher](https://idefixrc.github.io/Monitor-Buddy/) installs the firmware over USB and writes your settings straight onto the board, with a live preview of your Buddy. No software to install, no code to edit.
+- **Set up from your browser**: the [web flasher](https://monitor-buddy.com/) installs the firmware over USB and writes your settings straight onto the board, with a live preview of your Buddy. No software to install, no code to edit.
 - **Wi-Fi setup with no code**: Monitor-Buddy runs its own hotspot with a captive portal. Join it from your phone, pick your network, done. The setup page follows your phone's language (English, Spanish or German).
 
 The whole thing is a **cheap Waveshare ESP32-C6 touchscreen** and **one 3D-printed clip**. **No soldering**, no breadboard, and no wiring required. You print the holder, slide the board in, and plug in a USB-C cable and Monitor-Buddy is ready to rock.
@@ -82,7 +82,7 @@ The Waveshare board slides straight into the printed part and is held by frictio
 
 ### c) Flash the board
 
-Open the [web flasher](https://idefixrc.github.io/Monitor-Buddy/) and follow [chapter 4](#4-flashing-the-board) below. You only do this once.
+Open the [web flasher](https://monitor-buddy.com/) and follow [chapter 4](#4-flashing-the-board) below. You only do this once.
 
 ### d) Apply power and enjoy your new monitor friend
 
@@ -100,12 +100,12 @@ There are two ways to get the firmware onto your Buddy. The **web flasher** does
 
 ![Monitor-Buddy web flasher](docs/images/web-flasher.png)
 
-The **[Monitor-Buddy web flasher](https://idefixrc.github.io/Monitor-Buddy/)** installs the firmware over USB and writes your settings straight onto the board. No VS Code, no `config.h`, nothing to install.
+The **[Monitor-Buddy web flasher](https://monitor-buddy.com/)** installs the firmware over USB and writes your settings straight onto the board. No VS Code, no `config.h`, nothing to install.
 
 You need **Chrome or Edge on a computer** (Windows, macOS, Linux or ChromeOS). The page talks to the board through Web Serial, which Firefox, Safari and phone browsers don't have.
 
 1. Plug the Buddy into the computer with a USB-C cable that carries data.
-2. Open <https://idefixrc.github.io/Monitor-Buddy/>, click **Connect your Buddy** and pick the Buddy from the list (on Windows it has a COM port number).
+2. Open <https://monitor-buddy.com/>, click **Connect your Buddy** and pick the Buddy from the list (on Windows it has a COM port number).
 3. Choose what to do:
    - **A new Buddy:** **Fresh install**. Tell it where it is with the city search, which fills in the latitude, longitude and time zone (daylight saving included). Add your Wi-Fi, pick the pages, the theme, the brightness and the mounting side, then **Install**.
    - **A Buddy you built yourself with 1.1.0 or older:** **Upgrade from 1.1 or older**, then **Import config.h** to bring your old settings across. Your Wi-Fi stays as it is.
