@@ -2222,6 +2222,7 @@ function chrome() {
     h("p", {}, S.about.privacy),
     h("ul", { class: "links" },
       h("li", {}, h("a", { href: S.about.projectUrl, target: "_blank", rel: "noopener" }, S.about.project)),
+      h("li", {}, h("a", { href: S.about.manualUrl, target: "_blank", rel: "noopener" }, S.about.manual)),
       h("li", {}, h("a", { href: S.about.guideUrl, target: "_blank", rel: "noopener" }, S.about.guide)),
       h("li", {}, h("a", { href: S.about.issueUrl, target: "_blank", rel: "noopener" }, S.about.issue))),
     h("p", { class: "about__credit" }, `${S.about.copyright} `,

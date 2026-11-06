@@ -7,8 +7,6 @@
 
 **A tiny friend for the side of your monitor.** It pulls faces at you, follows your movements with its eyes, and in its spare time tells you the weather, the date, the moon phase, your stocks, your crypto coins, and your GitHub stats.
 
-<!-- SHOT: hero.jpg - Monitor-Buddy clipped to the right edge of a monitor, screen showing the animated face, taken slightly from the side so you can see the printed holder -->
-
 ![Monitor-Buddy mounted on a monitor](docs/images/hero.jpg)
 
 ---
@@ -18,6 +16,8 @@
 Your monitor has a bezel. That bezel is doing nothing. Monitor-Buddy fixes that.
 
 It is a small touchscreen that clips onto the edge of your screen and keeps you company while you work. Most of the time it just shows a face: it blinks, it glances around, and when you pick it up or tilt it, its eyes roll with the motion. Poke the face and it changes expression. It is pointless and you will love it.
+
+**New here?** Grab the four-page illustrated [Monitor Buddy manual (PDF)](docs/Monitor-Buddy-Manual.pdf): what it can do, a quick start, and every setting explained.
 
 **New in 1.3:** up to five stocks, a coin page with up to five crypto pairs and a 24-hour chart, a 12-hour clock, night mode, and day and night brightness sliders in the web flasher. Already have a Buddy? [Update it from your browser](#the-web-flasher-recommended): your settings stay.
 
