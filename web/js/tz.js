@@ -5,6 +5,14 @@ export function ruleForZone(table, name) {
   return Object.hasOwn(table, name) ? table[name] : null;
 }
 
+// The zone's rule from the table when the saved one differs: the rules changed
+// after this was saved, or someone typed their own. Null when there is nothing
+// to offer: an unknown zone, no rule saved, or the two already match.
+export function ruleUpdate(table, name, saved) {
+  const rule = ruleForZone(table, name);
+  return rule && saved && rule !== saved ? rule : null;
+}
+
 // POSIX rule for a fixed UTC offset in hours, rounded to 15 minutes.
 // Port of tzRuleFromOffset in lib/settings/settings.cpp (keep in sync):
 // +8 -> "<+08>-8", -5 -> "<-05>5", 5.5 -> "<+0530>-5:30", 0 -> "UTC0".
